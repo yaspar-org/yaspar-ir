@@ -1,0 +1,39 @@
+[package]
+name = "yaspar-ir"
+version = "2.7.0"
+edition = "2024"
+readme = "README.md"
+license = "Apache-2.0"
+description = "This crate provides a few representations of SMT scripts and other functionalities."
+authors = ["the Amazon Trusted Solver team"]
+keywords = ["SMT", "solver", "logic"]
+categories = ["science"]
+homepage = "https://github.com/yaspar-org/yaspar-ir"
+repository = "https://github.com/yaspar-org/yaspar-ir"
+
+[features]
+default = ["none"]
+all = ["cnf", "implicant-generation"]
+cnf = ["dep:sat-interface", "cache"]
+implicant-generation = ["cnf"]
+cache = []
+none = []
+
+[dependencies]
+yaspar = { version = "2.7", path = "../yaspar" }
+sat-interface = { version = "0.1", path = "../sat-interface", optional = true }
+dashu = { version = "0.4.2", features = ["serde", "num-traits", "num-order"] }
+hashconsing = "1.6"
+paste = "1"
+lazy_static = "1.5.0"
+regex = "1.11"
+serde = { version = "1", features = ["derive"] }
+lalrpop-util = "0.22"
+either = "1.15"
+num-traits = "0.2.19"
+num-order = "1.2.0"
+
+[lib]
+name = "yaspar_ir"
+path = "src/lib.rs"
+crate-type = ["lib"]
