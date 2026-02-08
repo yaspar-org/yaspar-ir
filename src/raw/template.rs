@@ -11,6 +11,8 @@ macro_rules! instantiate_ast {
 
         pub type Identifier = $crate::raw::alg::Identifier<Str>;
 
+        pub type IdentifierKind = $crate::raw::alg::IdentifierKind<Str>;
+
         pub type Attribute = $crate::raw::alg::Attribute<Str, Term>;
 
         pub type Sort = $Wrapper<RSort>;
