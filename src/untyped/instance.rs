@@ -1,7 +1,6 @@
 //! This module instantiates untyped AST
 
 use crate::allocator::StrAllocator;
-use crate::ast::alg::IdentifierKind;
 use crate::ast::{alg, ACommand, AConstant, AIndex, ATerm, HasArenaAlt};
 use crate::instantiate_ast;
 use crate::meta::WithMeta;

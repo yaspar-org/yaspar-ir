@@ -109,7 +109,7 @@ pub struct Identifier<Str> {
 
 /// Describe pre-defined kinds for identifiers
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum IdentifierKind {
+pub enum IdentifierKind<Str> {
     // Core
     And,
     Or,
@@ -234,9 +234,12 @@ pub enum IdentifierKind {
     BvSle,
     BvSgt,
     BvSge,
+
+    // datatypes
+    Is(Str),
 }
 
-impl IdentifierKind {
+impl<Str> IdentifierKind<Str> {
     pub fn name(&self) -> &'static str {
         match self {
             IdentifierKind::And => "and",
@@ -349,6 +352,7 @@ impl IdentifierKind {
             IdentifierKind::BvSle => "bvsle",
             IdentifierKind::BvSgt => "bvsgt",
             IdentifierKind::BvSge => "bvsge",
+            IdentifierKind::Is(_) => "is",
         }
     }
 }
@@ -358,7 +362,7 @@ pub trait CheckIdentifier<Str>
 where
     Str: Contains<T = String>,
 {
-    fn get_kind(&self) -> Option<IdentifierKind>;
+    fn get_kind(&self) -> Option<IdentifierKind<Str>>;
 }
 
 impl<Str> Identifier<Str> {
@@ -382,9 +386,9 @@ where
 
 impl<Str> CheckIdentifier<Str> for Identifier<Str>
 where
-    Str: Contains<T = String>,
+    Str: Contains<T = String> + Clone,
 {
-    fn get_kind(&self) -> Option<IdentifierKind> {
+    fn get_kind(&self) -> Option<IdentifierKind<Str>> {
         match self.indices.as_slice() {
             [] => match self.symbol.inner().as_str() {
                 "and" => Some(IdentifierKind::And),
@@ -501,6 +505,10 @@ where
                 "sign_extend" => Some(IdentifierKind::SignExtend(n.clone())),
                 "rotate_left" => Some(IdentifierKind::RotateLeft(n.clone())),
                 "rotate_right" => Some(IdentifierKind::RotateRight(n.clone())),
+                _ => None,
+            },
+            [Index::Symbol(sym)] => match self.symbol.inner().as_str() {
+                "is" => Some(IdentifierKind::Is(sym.clone())),
                 _ => None,
             },
             [Index::Numeral(l), Index::Numeral(h)] => match self.symbol.inner().as_str() {
@@ -844,9 +852,9 @@ impl<Str, So> QualifiedIdentifier<Str, So> {
 
 impl<Str, So> CheckIdentifier<Str> for QualifiedIdentifier<Str, So>
 where
-    Str: Contains<T = String>,
+    Str: Contains<T = String> + Clone,
 {
-    fn get_kind(&self) -> Option<IdentifierKind> {
+    fn get_kind(&self) -> Option<IdentifierKind<Str>> {
         self.0.get_kind()
     }
 }

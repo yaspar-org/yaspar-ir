@@ -108,7 +108,7 @@ However, since these APIs are low-level and thus efficient, advanced users could
 provided that they are responsible for maintaining the invariants.
 
 Instead, we could write the following snippet, which relies on checked APIs to maintain the invariants; hence users are
-released from the responsibility.
+relieved from the responsibility.
 
 ```rust
 fn test_add_2() -> TC<()> {

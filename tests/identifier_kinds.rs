@@ -1,9 +1,9 @@
-use yaspar::tokens::Token;
-use yaspar_ir::ast::alg::{CheckIdentifier, IdentifierKind};
-use yaspar_ir::ast::{
-    Context, HasArena, Identifier, Index, QualifiedIdentifier, StrAllocator,
-};
 use dashu::integer::UBig;
+use yaspar::tokens::Token;
+use yaspar_ir::ast::alg::CheckIdentifier;
+use yaspar_ir::ast::{
+    Context, HasArena, Identifier, IdentifierKind, Index, QualifiedIdentifier, StrAllocator,
+};
 
 fn test_simple_kind<T>(context: &mut T, kind: IdentifierKind)
 where
@@ -182,6 +182,16 @@ fn test_identifier_kinds() {
     let identifier: QualifiedIdentifier = Identifier {
         symbol,
         indices: vec![Index::Hexadecimal(bytes, len)],
+    }
+    .into();
+    assert_eq!(identifier.get_kind(), Some(kind));
+
+    let foo = context.allocate_symbol("foo");
+    let kind = IdentifierKind::Is(foo.clone());
+    let symbol = context.arena().allocate_symbol(kind.name());
+    let identifier: QualifiedIdentifier = Identifier {
+        symbol,
+        indices: vec![Index::Symbol(foo)],
     }
     .into();
     assert_eq!(identifier.get_kind(), Some(kind));
