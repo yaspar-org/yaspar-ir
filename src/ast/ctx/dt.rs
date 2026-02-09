@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::allocator::{CommandAllocator, ObjectAllocatorExt, SortAllocator, StrAllocator};
 use crate::ast::alg::{SigIndex, VarBinding};
 use crate::ast::ctx::checked::ScopedSortApi;

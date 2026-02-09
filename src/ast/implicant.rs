@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! This module implements the implicant computation algorithm
 //!
 //! It computes an iteration of implicant based on the boolean skeleton of a term.

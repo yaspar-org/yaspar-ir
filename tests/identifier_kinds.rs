@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use dashu::integer::UBig;
 use yaspar::tokens::Token;
 use yaspar_ir::ast::alg::CheckIdentifier;

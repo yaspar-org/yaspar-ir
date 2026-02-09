@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! This module handles expansions of global definitions
 //!
 //! In principle, a global substitution operation expands global definitions, invoking [Substitute::subst]

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! # Algebra of Abstract Syntax Trees (ASTs)
 //!
 //! This module models ASTs as their respective (polynomial) algebras. The idea is to use

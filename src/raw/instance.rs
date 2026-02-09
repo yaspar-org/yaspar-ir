@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! This module instantiates typed AST
 //!
 //! A typed AST is hashconsed AST. It is managed by a memory Arena. There are a number of advantages
