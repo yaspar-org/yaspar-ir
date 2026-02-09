@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Let-elimination
 //!
 //! Let-elimination expands all local variables with their bodies if they are introduced by let-bindings.

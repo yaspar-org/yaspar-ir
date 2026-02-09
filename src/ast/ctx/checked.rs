@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::allocator::{CommandAllocator, ObjectAllocatorExt, StrAllocator, TermAllocator};
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::ds::DefSortContext;

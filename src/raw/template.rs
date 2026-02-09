@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 #[macro_export]
 macro_rules! instantiate_ast {
     ($Wrapper: ident) => {

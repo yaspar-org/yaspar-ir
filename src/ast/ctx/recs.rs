@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Module for APIs for defining recursive functions
 
 use crate::allocator::{CommandAllocator, LocalVarAllocator};

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Allocator traits for an arena
 //!
 //! These traits expose unchecked APIs. They are responsible for object allocations **only**.
