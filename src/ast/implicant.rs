@@ -30,7 +30,7 @@ pub trait Model {
 ///
 /// An implicant for a formula phi is a formula that implies phi.
 ///
-/// assume let-eliminated and nnf
+/// Assume let-eliminated and nnf.
 trait FindImplicantImpl<Env, Model> {
     fn find_one_implicant_impl(&self, env: Env, model: &mut Model, block: bool) -> Self;
 }
@@ -127,15 +127,15 @@ where
     }
 }
 
-/// find one implicant of [self], assuming [self] is in NNF and let-eliminated.
+/// Find one implicant of `self`, assuming `self` is in NNF and let-eliminated.
 pub trait FindImplicant<Env, Solver>
 where
     Self: Sized,
     Solver: SatSolver,
 {
-    /// when result is None, it means there is no more implicant.
-    /// when result is an error, it means the sat solver cannot produce an implicant.
-    /// otherwise, we obtain one implicant.
+    /// When result is None, it means there is no more implicant.
+    /// When result is an error, it means the sat solver cannot produce an implicant.
+    /// Otherwise, we obtain one implicant.
     fn find_one_implicant(&self, env: Env, solver: &mut Solver)
     -> Option<crate::ast::Result<Self>>;
 }
@@ -173,9 +173,9 @@ where
     }
 }
 
-/// an iterator that iterates over the implements of [T]
+/// An iterator that iterates over the implements of `T`
 pub trait ImplicantIterator<T>: Iterator<Item = crate::ast::Result<T>> {
-    /// block [item] in the implicants. useful when [item] is an unsat core.
+    /// Block `item` in the implicants. Useful when `item` is an unsat core.
     fn block(&mut self, item: &T);
 }
 

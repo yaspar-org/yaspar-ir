@@ -22,7 +22,7 @@ pub use crate::ast::implicant::ImplicantIterator;
 pub use crate::ast::implicant::{FindImplicant, Model};
 pub use crate::raw::alg;
 pub use crate::raw::letelim::*;
-pub use crate::raw::tc::{TCEnv, Typecheck, TC};
+pub use crate::raw::tc::{TC, TCEnv, Typecheck};
 pub use crate::untyped as u;
 pub use gsubst::{GlobalSubstInplace, GlobalSubstPreproc};
 pub use subst::{Substitute, Substitution};

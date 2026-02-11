@@ -558,7 +558,7 @@ pub enum Attribute<Str, T> {
     Constant(Keyword, Constant<Str>),
     /// A keyword attribute with a symbol value
     Symbol(Keyword, Str),
-    /// Special attribute :named <symbol>
+    /// Special attribute :named symbol
     Named(Str),
     /// Special attribute :pattern (term+)
     Pattern(Vec<T>),

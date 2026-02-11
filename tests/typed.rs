@@ -1,13 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use dashu::integer::{IBig, UBig};
 use yaspar_ir::ast::alg::QualifiedIdentifier;
 use yaspar_ir::ast::{
     Context, FetchSort, ObjectAllocatorExt, ScopedSortApi, SortAllocator, StrAllocator, Typecheck,
     TypedApi,
 };
 use yaspar_ir::untyped::UntypedAst;
-use dashu::integer::{IBig, UBig};
 
 #[test]
 fn test_typed_apis() {

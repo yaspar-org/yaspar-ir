@@ -11,14 +11,14 @@ use crate::ast::ctx::quantifier::QuantifierContext;
 use crate::ast::ctx::recs::RecFunsContext;
 use crate::ast::utils::{is_term_bool, is_term_bool_alt};
 use crate::ast::{
-    alg, ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt,
-    RecFunc, SymbolQuote,
+    ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt, RecFunc,
+    SymbolQuote, alg,
 };
 use crate::meta::WithMeta;
 use crate::raw::instance::{Command, Constant, Identifier, QualifiedIdentifier, Sort, Str, Term};
 use crate::raw::tc::{
-    sort_mismatch, tc_sort, typed_app, typed_constant, typed_distinct, typed_eq, typed_not, typed_qualified_identifier,
-    TCEnv, Typecheck, TC,
+    TC, TCEnv, Typecheck, sort_mismatch, tc_sort, typed_app, typed_constant, typed_distinct,
+    typed_eq, typed_not, typed_qualified_identifier,
 };
 use crate::traits::{AllocatableString, Repr};
 use dashu::integer::{IBig, Sign, UBig};

@@ -5,6 +5,7 @@
 //! for other extensions.
 
 use crate::allocator::{ObjectAllocatorExt, SortAllocator, StrAllocator};
+use crate::ast::FunctionMeta;
 use crate::ast::alg::BvLenExpr;
 #[cfg(feature = "cnf")]
 use crate::ast::cnf::CNFCache;
@@ -12,7 +13,6 @@ use crate::ast::cnf::CNFCache;
 use crate::ast::ctx::Caches;
 use crate::ast::ctx::{Arena, BvInSort, BvOutSort, Sig, SigIndex, SortDef, Str, Theory};
 use crate::ast::ctx::{Context, LOGICS};
-use crate::ast::FunctionMeta;
 use crate::statics::{ARRAY, BOOL};
 use crate::traits::Repr;
 use dashu::integer::UBig;

@@ -5,7 +5,7 @@ use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::Context;
 use crate::ast::ctx::{
-    Arena, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TCEnv, Term, TypedApi, TC,
+    Arena, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TC, TCEnv, Term, TypedApi,
 };
 use crate::ast::{SymbolQuote, Theory};
 use crate::locenv::LocEnv;

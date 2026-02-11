@@ -4,7 +4,7 @@
 //! This module instantiates untyped AST
 
 use crate::allocator::StrAllocator;
-use crate::ast::{alg, ACommand, AConstant, AIndex, ATerm, HasArenaAlt};
+use crate::ast::{ACommand, AConstant, AIndex, ATerm, HasArenaAlt, alg};
 use crate::instantiate_ast;
 use crate::meta::WithMeta;
 use crate::raw::alg::CheckIdentifier;
@@ -16,6 +16,7 @@ use num_traits::ToPrimitive;
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
 use std::rc::Rc;
+use yaspar::Tokenizer;
 use yaspar::action::{
     ActionOnAttribute, ActionOnConstant, ActionOnIdentifier, ActionOnIndex, ActionOnSort,
     ActionOnString, ActionOnTerm, ParsingAction, ParsingResult, Pattern as ActionOnPattern,
@@ -23,7 +24,6 @@ use yaspar::action::{
 use yaspar::ast::{GrammarError, Keyword};
 use yaspar::position::Range;
 use yaspar::smtlib2::{CommandParser, ScriptParser, SortParser, TermParser};
-use yaspar::Tokenizer;
 
 /// An untyped object is an object with associated location information
 #[derive(Clone, PartialEq, Eq, Hash)]
