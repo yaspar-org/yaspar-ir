@@ -9,7 +9,7 @@ use crate::ast::ctx::{
 use crate::ast::{MatchContext, SymbolQuote};
 use crate::locenv::LocEnv;
 use crate::raw::instance::HasArena;
-use crate::raw::tc::{TCEnv, TC};
+use crate::raw::tc::{TC, TCEnv};
 use crate::traits::{AllocatableString, Contains};
 use std::collections::HashSet;
 

@@ -21,7 +21,7 @@ pub use crate::raw::alg::{
     SymbolQuote, Term as ATerm,
 };
 pub use crate::raw::instance::*;
-use crate::raw::tc::{TCEnv, TC};
+use crate::raw::tc::{TC, TCEnv};
 pub use checked::{ScopedSortApi, TypedApi};
 use lazy_static::lazy_static;
 use std::collections::hash_map::Keys;
@@ -29,9 +29,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 
 #[cfg(feature = "cnf")]
-pub use crate::ast::cnf::{partition_nnfs, CNFConversion};
-#[cfg(feature = "cnf")]
 use crate::ast::cnf::{CNFCache, CNFEnv};
+#[cfg(feature = "cnf")]
+pub use crate::ast::cnf::{CNFConversion, partition_nnfs};
 use crate::statics::{BITVEC, BV_RE};
 use crate::traits::AllocatableString;
 pub use crate::traits::Contains;
@@ -392,13 +392,13 @@ impl Context {
         }
     }
 
-    /// Convert an arena [id] into a sat variables.
+    /// Convert an arena `id` into a sat variables.
     #[cfg(feature = "cnf")]
     pub fn sat_var(&self, id: u64) -> Option<i32> {
         self.caches.cnf_cache.var_map.get(&id).copied()
     }
 
-    /// Convert a slice of arena [ids] into a vector of sat variables.
+    /// Convert a slice of arena `ids` into a vector of sat variables.
     #[cfg(feature = "cnf")]
     pub fn sat_vars(&self, ids: &[u64], negate: bool) -> Vec<i32> {
         let factor = if negate { -1 } else { 1 };
@@ -568,7 +568,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{u, LetElim, Typecheck};
+    use crate::ast::{LetElim, Typecheck, u};
     use crate::untyped::UntypedAst;
     use dashu::integer::IBig;
 

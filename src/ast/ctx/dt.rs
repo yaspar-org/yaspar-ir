@@ -5,11 +5,11 @@ use crate::allocator::{CommandAllocator, ObjectAllocatorExt, SortAllocator, StrA
 use crate::ast::alg::{SigIndex, VarBinding};
 use crate::ast::ctx::checked::ScopedSortApi;
 use crate::ast::ctx::{
-    Arena, Command, ConstructorDec, Context, DatatypeDec, DatatypeDef, Sig, Sort, Str, TCEnv, Theory,
-    TC,
+    Arena, Command, ConstructorDec, Context, DatatypeDec, DatatypeDef, Sig, Sort, Str, TC, TCEnv,
+    Theory,
 };
-use crate::ast::{alg, DatatypeFunction, FunctionMeta, SymbolQuote, Typecheck};
-use crate::locenv::{sanitize_bindings, LocEnv};
+use crate::ast::{DatatypeFunction, FunctionMeta, SymbolQuote, Typecheck, alg};
+use crate::locenv::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, Contains};
 use std::borrow::Borrow;

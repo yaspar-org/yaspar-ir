@@ -241,11 +241,11 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
     ///
     /// There are two interesting cases:
     ///
-    /// 1. for `(and a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the [formula]
-    /// `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`.
+    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the [formula]
+    ///    `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`.
     ///
-    /// 2.  `(or a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the [formula]
-    /// `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`.
+    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the [formula]
+    ///    `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`.
     ///
     /// c.f. https://dl.acm.org/doi/10.1145/3551349.3556938
     fn cnf_nnf(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
@@ -304,13 +304,13 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
     ///
     /// There are two interesting cases:
     ///
-    /// 1. for `(and a1 a2 ... an)` and a fresh variable `x`, we add to the [formula]
-    /// `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`
-    /// and `(=> (and a1 a2 ... an) x)`, which unfolds to `(or (not a1) ... (not an) x)``.
+    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, we add to the [formula]
+    ///    `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`
+    ///    and `(=> (and a1 a2 ... an) x)`, which unfolds to `(or (not a1) ... (not an) x)``.
     ///
-    /// 2.  `(or a1 a2 ... an)` and a fresh variable `x`, we add to the [formula]
-    /// `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`
-    /// and `(=> (or a1 a2 ... an) x)`, which unfolds to a conjunction of of `(or x (not ai))` for all `i`
+    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, we add to the [formula]
+    ///    `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`
+    ///    and `(=> (or a1 a2 ... an) x)`, which unfolds to a conjunction of of `(or x (not ai))` for all `i`
     ///
     /// c.f. https://en.wikipedia.org/wiki/Tseytin_transformation
     fn cnf_nnf_tseitin(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
@@ -441,7 +441,7 @@ fn has_no_disjunction(t: &Term) -> bool {
     }
 }
 
-/// partition nnfs into (those that have no disjunction, those that have disjunctions)
+/// Partition nnfs into (those that have no disjunction, those that have disjunctions)
 pub fn partition_nnfs(ts: Vec<Term>) -> (Vec<Term>, Vec<Term>) {
     ts.into_iter().partition(has_no_disjunction)
 }

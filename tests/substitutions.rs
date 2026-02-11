@@ -1,11 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use dashu::integer::UBig;
 use yaspar_ir::ast::gsubst::{GlobalSubstInplace, GlobalSubstPreproc};
 use yaspar_ir::ast::subst::{Substitute, Substitution};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck, TypedApi};
 use yaspar_ir::untyped::UntypedAst;
-use dashu::integer::UBig;
 
 #[test]
 fn test_substitutions() {

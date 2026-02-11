@@ -142,29 +142,26 @@ fn depth(t: &Term) -> usize {
     // invoke `.repr()` to obtain the internal representation
     match t.repr() {
         ATerm::Constant(_, _) | ATerm::Global(_, _) | ATerm::Local(_) => 1,
-        ATerm::App(_, ts, _) => ts.iter().map(depth).max().unwrap() + 1,
-        ATerm::Let(ts, t) => ts.iter().map(|b| &b.2).chain([t]).map(depth).max().unwrap() + 1,
         ATerm::Exists(_, t) | ATerm::Forall(_, t) | ATerm::Annotated(t, _) | ATerm::Not(t) => {
             1 + depth(t)
         }
         ATerm::Matching(t, arms) => {
-            arms.iter()
+            1 + arms.iter()
                 .map(|a| &a.body)
                 .chain([t])
                 .map(depth)
                 .max()
                 .unwrap()
-                + 1
         }
         ATerm::Eq(a, b) => {
             let a = depth(a);
             let b = depth(b);
             1 + a.max(b)
         }
-        ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) => {
+        ATerm::App(_, ts, _) | ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) => {
             1 + ts.iter().map(depth).max().unwrap()
         }
-        ATerm::Implies(ts, cl) => ts.iter().chain([cl]).map(depth).max().unwrap(),
+        ATerm::Let(ts, t) | ATerm::Implies(ts, t) => 1 + ts.iter().chain([t]).map(depth).max().unwrap(),
         ATerm::Ite(c, t, e) => {
             let c = depth(c);
             let t = depth(t);

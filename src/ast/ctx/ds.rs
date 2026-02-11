@@ -6,7 +6,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::{Arena, Context, TCEnv};
 use crate::ast::ctx::{Command, Sort, Str, TC};
 use crate::ast::{ScopedSortApi, SymbolQuote};
-use crate::locenv::{sanitize_bindings, LocEnv};
+use crate::locenv::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::traits::AllocatableString;
 

@@ -20,8 +20,8 @@ cache = []
 none = []
 
 [dependencies]
-yaspar = { version = "2.7", path = "../yaspar" }
-sat-interface = { version = "0.1", path = "../sat-interface", optional = true }
+yaspar = "2.7"
+sat-interface = { version = "0.1", optional = true }
 dashu = { version = "0.4.2", features = ["serde", "num-traits", "num-order"] }
 hashconsing = "1.6"
 paste = "1"

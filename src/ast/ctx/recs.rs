@@ -6,9 +6,9 @@
 use crate::allocator::{CommandAllocator, LocalVarAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::checked::TypedApi;
-use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TCEnv, TC};
+use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
 use crate::ast::{FetchSort, LetContext, MatchContext, QuantifierContext, SymbolQuote, Term};
-use crate::locenv::{sanitize_bindings, LocEnv};
+use crate::locenv::{LocEnv, sanitize_bindings};
 use crate::traits::AllocatableString;
 use std::collections::{HashMap, HashSet};
 
