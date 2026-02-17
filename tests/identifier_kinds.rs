@@ -5,7 +5,7 @@ use dashu::integer::UBig;
 use yaspar::tokens::Token;
 use yaspar_ir::ast::alg::CheckIdentifier;
 use yaspar_ir::ast::{
-    Context, HasArena, Identifier, IdentifierKind, Index, QualifiedIdentifier, StrAllocator,
+    Context, HasArena, Identifier, IdentifierKind, QualifiedIdentifier, StrAllocator,
 };
 
 fn test_simple_kind<T>(context: &mut T, kind: IdentifierKind)
@@ -14,6 +14,7 @@ where
 {
     let name = context.arena().allocate_symbol(kind.name());
     let identifier = QualifiedIdentifier::simple(name);
+    assert_eq!(kind.indices(), vec![]);
     assert_eq!(identifier.get_kind(), Some(kind));
 }
 
@@ -26,7 +27,7 @@ where
     let symbol = context.arena().allocate_symbol(kind.name());
     let identifier: QualifiedIdentifier = Identifier {
         symbol,
-        indices: vec![Index::Numeral(idx)],
+        indices: kind.indices(),
     }
     .into();
     assert_eq!(identifier.get_kind(), Some(kind));
@@ -41,7 +42,7 @@ where
     let symbol = context.arena().allocate_symbol(kind.name());
     let identifier: QualifiedIdentifier = Identifier {
         symbol,
-        indices: vec![Index::Numeral(idx1), Index::Numeral(idx2)],
+        indices: kind.indices(),
     }
     .into();
     assert_eq!(identifier.get_kind(), Some(kind));
@@ -184,7 +185,7 @@ fn test_identifier_kinds() {
     let symbol = context.arena().allocate_symbol(kind.name());
     let identifier: QualifiedIdentifier = Identifier {
         symbol,
-        indices: vec![Index::Hexadecimal(bytes, len)],
+        indices: kind.indices(),
     }
     .into();
     assert_eq!(identifier.get_kind(), Some(kind));
@@ -194,7 +195,7 @@ fn test_identifier_kinds() {
     let symbol = context.arena().allocate_symbol(kind.name());
     let identifier: QualifiedIdentifier = Identifier {
         symbol,
-        indices: vec![Index::Symbol(foo)],
+        indices: kind.indices(),
     }
     .into();
     assert_eq!(identifier.get_kind(), Some(kind));

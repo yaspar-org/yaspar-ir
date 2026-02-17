@@ -11,8 +11,8 @@ use crate::ast::ctx::quantifier::QuantifierContext;
 use crate::ast::ctx::recs::RecFunsContext;
 use crate::ast::utils::{is_term_bool, is_term_bool_alt};
 use crate::ast::{
-    ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt, RecFunc,
-    SymbolQuote, alg,
+    ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt,
+    IdentifierKind, RecFunc, SymbolQuote, alg,
 };
 use crate::meta::WithMeta;
 use crate::raw::instance::{Command, Constant, Identifier, QualifiedIdentifier, Sort, Str, Term};
@@ -143,6 +143,25 @@ pub trait TypedApi: HasArena {
     {
         let f_symbol = f.allocate(self.arena());
         self.typed_app(QualifiedIdentifier::simple(f_symbol), args)
+    }
+
+    /// Convert an [IdentifierKind] to an [Identifier]
+    fn kind_to_identifier(&mut self, kind: IdentifierKind) -> Identifier {
+        let symbol = self.arena().allocate_symbol(kind.name());
+        Identifier {
+            symbol,
+            indices: kind.indices(),
+        }
+    }
+
+    /// Similar to [Self::typed_app], but use [IdentifierKind] as the function instead. This is
+    /// useful for builtin functions.
+    fn typed_app_with_kind<T>(&mut self, f: IdentifierKind, args: T) -> TC<Term>
+    where
+        T: IntoIterator<Item = Term>,
+    {
+        let id = self.kind_to_identifier(f);
+        self.typed_app(id.into(), args)
     }
 
     /// Checked API for building equality
