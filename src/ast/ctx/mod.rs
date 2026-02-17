@@ -107,6 +107,11 @@ lazy_static! {
     ]);
     pub(crate) static ref ALL_LOGICS: Vec<&'static str> = LOGICS.keys().cloned().collect();
     static ref EMP_SET: HashSet<Theory> = HashSet::from([]);
+    static ref SPECIAL_SYMBOLS: HashSet<&'static str> = {
+      let mut set = yaspar::tokens::SPECIAL_SYMBOLS.keys().cloned().collect::<HashSet<_>>();
+        set.extend(["and", "or", "not", "ite", "=>", "distinct", "="].iter());
+        set
+    };
 }
 
 #[cfg(feature = "cache")]
@@ -188,6 +193,7 @@ impl Context {
 
     /// Check whether a given sort name can be added to the sort table
     pub fn can_add_sort(&self, symbol: &Str) -> Result<()> {
+        self.check_special_symbols(symbol)?;
         self.check_bv(symbol)?;
         if self.sorts.contains_key(symbol) {
             Err(format!("sort {} is already defined!", symbol.sym_quote()))
@@ -247,6 +253,14 @@ impl Context {
         Ok(())
     }
 
+    fn check_special_symbols(&self, sym: &Str) -> Result<()> {
+        if SPECIAL_SYMBOLS.contains(sym.as_str()) {
+            Err("Special symbols cannot be declared!".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
     fn check_bv_sym(&self, sym: &Str) -> Result<()> {
         if self.check_support_theory(Theory::Bitvectors).is_ok() && BV_RE.is_match(sym) {
             Err("symbols of the form bvX cannot be declared!".to_string())
@@ -264,6 +278,7 @@ impl Context {
     }
 
     fn check_sym_validity(&self, sym: &Str) -> Result<()> {
+        self.check_special_symbols(sym)?;
         self.check_bv_sym(sym)?;
         self.check_is_sym(sym)
     }
@@ -339,6 +354,7 @@ impl Context {
         S: AllocatableString<Arena>,
     {
         let symbol = symbol.allocate(self.arena());
+        self.check_special_symbols(&symbol)?;
         self.check_bv_sym(&symbol)?;
         self.push_symbol(symbol, sig, FunctionMeta::Opaque);
         Ok(())
