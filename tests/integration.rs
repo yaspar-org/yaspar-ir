@@ -1210,3 +1210,23 @@ fn test_main() -> TC<()> {
 fn do_test() {
     test_main().unwrap()
 }
+
+fn cannot_add_symbol(context: &mut Context, sym: &str) {
+    let sym = context.allocate_symbol(sym);
+    assert!(context.can_add_symbol(&sym).is_err());
+}
+
+#[test]
+fn test_special_symbols() {
+    let mut context = Context::new();
+    for sym in yaspar::tokens::SPECIAL_SYMBOLS.keys() {
+        cannot_add_symbol(&mut context, sym);
+    }
+    cannot_add_symbol(&mut context, "and");
+    cannot_add_symbol(&mut context, "or");
+    cannot_add_symbol(&mut context, "not");
+    cannot_add_symbol(&mut context, "=>");
+    cannot_add_symbol(&mut context, "=");
+    cannot_add_symbol(&mut context, "ite");
+    cannot_add_symbol(&mut context, "distinct");
+}
