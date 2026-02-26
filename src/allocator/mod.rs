@@ -117,6 +117,7 @@ pub trait TermAllocator<Str, So, T> {
     | Term::Distinct(ts: Vec<T>)
     | Term::And(ts: Vec<T>)
     | Term::Or(ts: Vec<T>)
+    | Term::Xor(ts: Vec<T>)
     | Term::Not(t: T)
     | Term::Implies(ts: Vec<T>, t: T)
     | Term::Ite(b: T, t: T, e: T));

@@ -90,6 +90,14 @@ fn test_substitutions_shadow() {
         .unwrap();
     let nt = t.subst(&subst, &mut q_ctx);
     assert_eq!(nt, t);
+
+    let t = UntypedAst
+        .parse_term_str("(xor (= x 5) (= y 10))")
+        .unwrap()
+        .type_check(&mut q_ctx)
+        .unwrap();
+    let nt = t.subst(&subst, &mut q_ctx);
+    assert_eq!(nt.to_string(), "(xor (= (+ 1 2) 5) (= y 10))");
 }
 
 #[test]

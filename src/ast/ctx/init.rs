@@ -39,24 +39,15 @@ impl Context {
         HashMap::from([(bool, SortDef::Opaque(0))])
     }
 
-    fn default_symbol_table(arena: &mut Arena) -> HashMap<Str, Vec<(Sig, FunctionMeta)>> {
-        let xor = arena.allocate_symbol("xor");
-        let bool = arena.bool_sort();
-        // the default table only includes xor because other connectives in Core have been included
-        // in the ASTs as primitives
-        HashMap::from([builtin(xor, Sig::VarLenFunc(bool.clone(), 1, bool))])
-    }
-
     /// Create a new context to manipulate SMT
     pub fn new() -> Self {
         let mut arena = Arena::new();
         let sorts = Self::default_sorts(&mut arena);
-        let symbol_table = Self::default_symbol_table(&mut arena);
         Self {
             arena,
             logic: None,
             sorts,
-            symbol_table,
+            symbol_table: Default::default(),
             #[cfg(feature = "cache")]
             caches: Caches {
                 #[cfg(feature = "cnf")]

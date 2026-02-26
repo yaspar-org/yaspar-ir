@@ -158,6 +158,10 @@ impl LetElim<LetEnv<'_, '_>> for Term {
                 let nts = ts.let_elim(env);
                 env.arena.or(nts)
             }
+            alg::Term::Xor(ts) => {
+                let nts = ts.let_elim(env);
+                env.arena.xor(nts)
+            }
             alg::Term::Not(t) => {
                 let nt = t.let_elim(env);
                 env.arena.not(nt)
@@ -227,6 +231,24 @@ mod tests {
             .let_elim(&mut context);
         let equiv = UntypedAst
             .parse_term_str("(! (* (+ 1 2) (+ 1 2)) :pattern ((+ 1 2)))")
+            .unwrap()
+            .type_check(&mut context)
+            .unwrap();
+        assert_eq!(t, equiv);
+    }
+
+    #[test]
+    fn test_let_elim_xor() {
+        let mut context = Context::default();
+        context.ensure_logic();
+        let t = UntypedAst
+            .parse_term_str("(let ((p true) (q false)) (xor p q))")
+            .unwrap()
+            .type_check(&mut context)
+            .unwrap()
+            .let_elim(&mut context);
+        let equiv = UntypedAst
+            .parse_term_str("(xor true false)")
             .unwrap()
             .type_check(&mut context)
             .unwrap();

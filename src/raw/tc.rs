@@ -1510,6 +1510,16 @@ where
                 let nts = tc_vec_sort_bool(ts, env)?;
                 Ok(env.arena.or(nts))
             }
+            alg::Term::Xor(ts) => {
+                if ts.is_empty() {
+                    return Err(format!(
+                        "TC: 'xor'{} requires at least one argument!",
+                        self.display_meta_data()
+                    ));
+                }
+                let nts = tc_vec_sort_bool(ts, env)?;
+                Ok(env.arena.xor(nts))
+            }
             alg::Term::Not(t) => {
                 let nt = t.type_check(env)?;
                 typed_not(env, nt, &t.display_meta_data())

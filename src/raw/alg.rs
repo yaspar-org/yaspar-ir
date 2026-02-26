@@ -710,6 +710,8 @@ pub enum Term<Str, So, T> {
     And(Vec<T>),
     /// Invariant: vector must contain at least one term of sort Bool.
     Or(Vec<T>),
+    /// Invariant: vector must contain at least one term of sort Bool.
+    Xor(Vec<T>),
     /// Invariant:
     /// * vector must contain at least one term of sort Bool.
     /// * conclusion must have sort Bool.
@@ -1293,6 +1295,7 @@ where
             Term::Forall(vs, t) => fmt_binder(f, "forall", vs, t),
             Term::And(ts) => fmt_app(f, "and", ts),
             Term::Or(ts) => fmt_app(f, "or", ts),
+            Term::Xor(ts) => fmt_app(f, "xor", ts),
             Term::Not(t) => fmt_app(f, "not", &[t]),
             Term::Implies(ts, r) => {
                 write!(f, "(=> ")?;

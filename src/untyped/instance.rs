@@ -324,6 +324,19 @@ impl ActionOnTerm for UntypedAst {
                         })
                     }
                 }
+                IdentifierKind::Xor => {
+                    if !args.is_empty() {
+                        Ok(wrap(ATerm::Xor(args).into(), range))
+                    } else {
+                        Err(ParseError::User {
+                            error: GrammarError::Other {
+                                range,
+                                message: "Parsing: 'xor' should be given at least one argument!"
+                                    .into(),
+                            },
+                        })
+                    }
+                }
                 IdentifierKind::Not => {
                     if args.len() != 1 {
                         Err(ParseError::User {

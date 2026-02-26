@@ -83,6 +83,50 @@ fn test_false() {
 }
 
 #[test]
+fn test_xor_parsing() {
+    let mut context = Context::new();
+    context.ensure_logic();
+    let xor = UntypedAst
+        .parse_term_str("(xor true false)")
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+    assert_eq!(xor.to_string(), "(xor true false)");
+}
+
+#[test]
+fn test_xor() {
+    let script = r"
+(set-logic ALL)
+(declare-const p Bool)
+(declare-const q Bool)
+(declare-const r Bool)
+(assert (xor p q))
+(assert (xor p q r))
+(assert (xor (and p q) (or p q)))
+(assert (= (xor p q) (not (= p q))))
+";
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_ok());
+
+    let script = r"
+(set-logic QF_LIA)
+(declare-const x Int)
+(assert (xor x true))
+";
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_err());
+
+    let script = "(assert (xor true))";
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_ok());
+}
+
+#[test]
 fn test_int_div() {
     // int division operator is `div`
     let script: String = r"
