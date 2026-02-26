@@ -108,10 +108,12 @@ fn test_more_typed_apis() {
         .unwrap()
         .type_check(&mut q_context)
         .unwrap();
-    let t_and = q_context.typed_and([t1.clone(), t2]).unwrap();
+    let t_and = q_context.typed_and([t1.clone(), t2.clone()]).unwrap();
     assert_eq!(t_and.to_string(), "(and (<= 0 m n) (< 0 m n))");
-    let t_or = q_context.typed_or([t3.clone(), t4]).unwrap();
+    let t_or = q_context.typed_or([t3.clone(), t4.clone()]).unwrap();
     assert_eq!(t_or.to_string(), "(or (>= 0 m n) (> 0 m n))");
+    let t_xor = q_context.typed_xor([t2, t4]).unwrap();
+    assert_eq!(t_xor.to_string(), "(xor (< 0 m n) (> 0 m n))");
 
     // negative tests
     assert!(q_context.typed_and([]).is_err());
@@ -119,6 +121,8 @@ fn test_more_typed_apis() {
     assert!(q_context.typed_and([t1, one.clone()]).is_err());
     assert!(q_context.typed_or([]).is_err());
     assert!(q_context.typed_or([t3, one.clone()]).is_err());
+    assert!(q_context.typed_xor([]).is_err());
+    assert!(q_context.typed_xor([one.clone()]).is_err());
 
     let t = q_context
         .typed_distinct([t_and.clone(), t_or.clone()])
@@ -195,6 +199,19 @@ fn test_typed_quantifiers() {
     assert_eq!(
         t.to_string(),
         "(= (exists ((x Int) (y Int)) (= (* 10 x) y)) (forall ((x Int) (y Int)) (=> (> x y) (> (+ x 1) (+ 1 y)))))"
+    );
+
+    let mut q_context = context.build_quantifier().unwrap();
+    let bool_sort = q_context.bool_sort();
+    q_context.extend("p", bool_sort.clone()).unwrap();
+    q_context.extend("q", bool_sort).unwrap();
+    let p = q_context.typed_symbol("p").unwrap();
+    let q = q_context.typed_symbol("q").unwrap();
+    let xor = q_context.typed_xor([p, q]).unwrap();
+    let forall_xor = q_context.typed_forall(xor).unwrap();
+    assert_eq!(
+        forall_xor.to_string(),
+        "(forall ((p Bool) (q Bool)) (xor p q))"
     );
 }
 

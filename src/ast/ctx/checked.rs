@@ -206,6 +206,19 @@ pub trait TypedApi: HasArena {
         Ok(env.arena_alt().or(terms))
     }
 
+    /// Checked API for building exclusive disjunctions
+    fn typed_xor<T>(&mut self, terms: T) -> TC<Term>
+    where
+        T: IntoIterator<Item = Term>,
+    {
+        let mut env = self.get_tcenv();
+        let terms = check_all_bool_terms(terms, &mut env)?;
+        if terms.is_empty() {
+            return Err("TC: 'xor' requires at least one argument!".into());
+        }
+        Ok(env.arena_alt().xor(terms))
+    }
+
     /// Checked API for building negation
     fn typed_not(&mut self, t: Term) -> TC<Term> {
         typed_not(&mut self.get_tcenv(), t, "")

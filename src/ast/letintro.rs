@@ -297,19 +297,21 @@ impl FindSectionsImpl for Term {
                 acc.reverse();
                 acc
             }
-            ATerm::App(_, ts, _) => find_sections_slice(ts, tail, binders),
             ATerm::Let(_, _) => unreachable!(), // assume let elimination
-            ATerm::Exists(vs, t) => find_sections_binder(vs, t, tail, binders),
-            ATerm::Forall(vs, t) => find_sections_binder(vs, t, tail, binders),
+            ATerm::Exists(vs, t) | ATerm::Forall(vs, t) => {
+                find_sections_binder(vs, t, tail, binders)
+            }
             ATerm::Annotated(t, _) => t.find_sections(tail, binders, insert),
             ATerm::Eq(a, b) => {
                 let ra = a.find_sections(tail, binders, true);
                 let rb = b.find_sections(tail, binders, true);
                 glb(&ra, &rb)
             }
-            ATerm::Distinct(ts) => find_sections_slice(ts, tail, binders),
-            ATerm::And(ts) => find_sections_slice(ts, tail, binders),
-            ATerm::Or(ts) => find_sections_slice(ts, tail, binders),
+            ATerm::App(_, ts, _)
+            | ATerm::Distinct(ts)
+            | ATerm::And(ts)
+            | ATerm::Or(ts)
+            | ATerm::Xor(ts) => find_sections_slice(ts, tail, binders),
             ATerm::Implies(a, b) => {
                 let ra = find_sections_slice(a, tail, binders);
                 let rb = b.find_sections(tail, binders, true);
@@ -486,6 +488,10 @@ where
             ATerm::Or(ts) => {
                 let nts = ts.let_intro_body(cell, binders, vars, false, env);
                 env.arena_alt().or(nts)
+            }
+            ATerm::Xor(ts) => {
+                let nts = ts.let_intro_body(cell, binders, vars, false, env);
+                env.arena_alt().xor(nts)
             }
             ATerm::Implies(a, b) => {
                 let na = a.let_intro_body(cell.clone(), binders, vars, false, env);

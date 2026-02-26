@@ -185,6 +185,10 @@ impl GlobalSubstPreprocImpl<Context> for Term {
                 let nts = ts.gsubst_preproc_impl(body_map, env);
                 env.or(nts)
             }
+            ATerm::Xor(ts) => {
+                let nts = ts.gsubst_preproc_impl(body_map, env);
+                env.xor(nts)
+            }
             ATerm::Implies(ts, concl) => {
                 let nts = ts.gsubst_preproc_impl(body_map, env);
                 let nconcl = concl.gsubst_preproc_impl(body_map, env);
@@ -268,7 +272,7 @@ fn find_dependencies(
             find_dependencies(context, global_names, dependencies, block, a, acc);
             find_dependencies(context, global_names, dependencies, block, b, acc);
         }
-        ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) => {
+        ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) | ATerm::Xor(ts) => {
             ts.iter().for_each(|t| {
                 find_dependencies(context, global_names, dependencies, block, t, acc);
             });
@@ -509,6 +513,10 @@ impl GlobalSubstInplaceImpl<Context> for Term {
             ATerm::Or(ts) => {
                 let nts = ts.gsubst_inplace_impl(global_names, block, env, cache);
                 env.or(nts)
+            }
+            ATerm::Xor(ts) => {
+                let nts = ts.gsubst_inplace_impl(global_names, block, env, cache);
+                env.xor(nts)
             }
             ATerm::Implies(ts, concl) => {
                 let nts = ts.gsubst_inplace_impl(global_names, block, env, cache);

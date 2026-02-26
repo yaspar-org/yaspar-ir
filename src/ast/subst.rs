@@ -222,6 +222,10 @@ where
                 let nts = ts.subst_impl(substs, env);
                 env.arena_alt().or(nts)
             }
+            ATerm::Xor(ts) => {
+                let nts = ts.subst_impl(substs, env);
+                env.arena_alt().xor(nts)
+            }
             ATerm::Implies(ts, concl) => {
                 let nts = ts.subst_impl(substs, env);
                 let concl = concl.subst_impl(substs, env);

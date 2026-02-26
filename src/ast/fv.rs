@@ -21,9 +21,11 @@ impl FreeLocalVars for Term {
                 set.insert(l.symbol.clone());
                 set
             }
-            ATerm::App(_, ts, _) | ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) => {
-                ts.iter().flat_map(|t| t.free_loc_vars()).collect()
-            }
+            ATerm::App(_, ts, _)
+            | ATerm::Distinct(ts)
+            | ATerm::And(ts)
+            | ATerm::Or(ts)
+            | ATerm::Xor(ts) => ts.iter().flat_map(|t| t.free_loc_vars()).collect(),
             ATerm::Let(vs, t) => free_loc_vars_handle_binders(vs, t, |v| &v.0),
             ATerm::Exists(vs, t) | ATerm::Forall(vs, t) => {
                 free_loc_vars_handle_binders(vs, t, |v| &v.0)
