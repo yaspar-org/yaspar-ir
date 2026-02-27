@@ -62,11 +62,11 @@ where
 
 /// zthese type constraints say that
 ///
-/// If an environment implements [TypedApi], then it can provide a type-checking environment [TCEnv],
+/// If an environment implements [CheckedApi], then it can provide a type-checking environment [TCEnv],
 /// so we can use that for type-checking.
 impl<C, T, O> Typecheck<C> for T
 where
-    C: StrAllocator<Str = Str> + TypedApi,
+    C: StrAllocator<Str = Str> + CheckedApi,
     T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort>, Out = O>,
     O: 'static,
 {

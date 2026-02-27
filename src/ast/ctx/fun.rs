@@ -6,7 +6,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::matching::MatchContext;
 use crate::ast::ctx::quantifier::QuantifierContext;
-use crate::ast::ctx::{Arena, Context, FetchSort, SymbolQuote, TCEnv, TypedApi};
+use crate::ast::ctx::{Arena, CheckedApi, Context, FetchSort, SymbolQuote, TCEnv};
 use crate::ast::ctx::{Command, FunctionDef, Sort, Str, TC, Term};
 use crate::locenv::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
@@ -90,7 +90,7 @@ impl HasArena for FunctionContext<'_> {
     }
 }
 
-impl TypedApi for FunctionContext<'_> {
+impl CheckedApi for FunctionContext<'_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
         let theories = self.context.get_theories();
         TCEnv {

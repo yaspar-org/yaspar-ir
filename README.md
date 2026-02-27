@@ -130,7 +130,7 @@ fn test_add_2() -> TC<()> {
 ```
 
 All checked APIs are in the form of `typed_*` for building terms, and `wf_*` for building sorts. See
-the module `ast::ctx::checked`, and traits `TypedApi` and `ScopedSortApi` for the full list of APIs.
+the module `ast::ctx::checked`, and traits `CheckedApi` and `ScopedSortApi` for the full list of APIs.
 
 ### Analyzing hashconsed objects
 

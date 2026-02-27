@@ -4,8 +4,8 @@
 use dashu::integer::{IBig, UBig};
 use yaspar_ir::ast::alg::QualifiedIdentifier;
 use yaspar_ir::ast::{
-    Context, FetchSort, ObjectAllocatorExt, ScopedSortApi, SortAllocator, StrAllocator, Typecheck,
-    TypedApi,
+    CheckedApi, Context, FetchSort, ObjectAllocatorExt, ScopedSortApi, SortAllocator, StrAllocator,
+    Typecheck,
 };
 use yaspar_ir::untyped::UntypedAst;
 

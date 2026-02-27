@@ -4,7 +4,7 @@
 use crate::allocator::TermAllocator;
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::local::LocalContext;
-use crate::ast::ctx::{Arena, Context, FetchSort, Result, TCEnv, TypedApi};
+use crate::ast::ctx::{Arena, CheckedApi, Context, FetchSort, Result, TCEnv};
 use crate::ast::ctx::{Sort, Str, Term};
 use crate::ast::{MatchContext, QuantifierContext, TC};
 use crate::locenv::LocEnv;
@@ -13,7 +13,7 @@ use crate::traits::AllocatableString;
 
 /// It's a builder context for building let-bindings
 ///
-/// c.f. [TypedApi::build_let] and [LetContext::typed_let]
+/// c.f. [CheckedApi::build_let] and [LetContext::typed_let]
 pub struct LetContext<'a, 'b> {
     // reuse LocalContext to reuse apis
     inner: LocalContext<'a, 'b>,
@@ -80,7 +80,7 @@ impl HasArena for LetContext<'_, '_> {
     }
 }
 
-impl TypedApi for LetContext<'_, '_> {
+impl CheckedApi for LetContext<'_, '_> {
     #[inline]
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
         self.inner.get_tcenv()

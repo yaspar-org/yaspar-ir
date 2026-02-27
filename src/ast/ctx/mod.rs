@@ -22,7 +22,7 @@ pub use crate::raw::alg::{
 };
 pub use crate::raw::instance::*;
 use crate::raw::tc::{TC, TCEnv};
-pub use checked::{ScopedSortApi, TypedApi};
+pub use checked::{CheckedApi, ScopedSortApi};
 use lazy_static::lazy_static;
 use std::collections::hash_map::Keys;
 use std::collections::{HashMap, HashSet};
@@ -522,7 +522,7 @@ impl HasArena for Context {
     }
 }
 
-impl TypedApi for Context {
+impl CheckedApi for Context {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
         let theories = self.get_theories();
         TCEnv {

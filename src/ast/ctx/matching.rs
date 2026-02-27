@@ -5,7 +5,8 @@ use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::Context;
 use crate::ast::ctx::{
-    Arena, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TC, TCEnv, Term, TypedApi,
+    Arena, CheckedApi, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TC, TCEnv,
+    Term,
 };
 use crate::ast::{SymbolQuote, Theory};
 use crate::locenv::LocEnv;
@@ -292,7 +293,7 @@ impl HasArena for ArmContext<'_, '_, '_> {
     }
 }
 
-impl TypedApi for ArmContext<'_, '_, '_> {
+impl CheckedApi for ArmContext<'_, '_, '_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
         let theories = self.parent.context.get_theories();
         TCEnv {

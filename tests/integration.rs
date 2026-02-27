@@ -5,8 +5,6 @@ use dashu::integer::UBig;
 use yaspar_ir::ast::*;
 use yaspar_ir::untyped::UntypedAst;
 
-mod typed;
-
 #[test]
 fn test_parse() {
     let script = r#"(forall (($generated@@18 Int)) (! (= ($generated ($generated@@8 $generated@@18)) $generated@@18) :pattern (($generated@@8 $generated@@18))))"#;
@@ -1272,4 +1270,289 @@ fn test_special_symbols() {
     cannot_add_symbol(&mut context, "=");
     cannot_add_symbol(&mut context, "ite");
     cannot_add_symbol(&mut context, "distinct");
+}
+
+#[test]
+fn test_build_fun_context() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+
+    let int = ctx.int_sort();
+    let mut f_ctx = ctx
+        .build_fun_out_sort("add", [("x", int.clone()), ("y", int.clone())], int)
+        .unwrap();
+    let x = f_ctx.typed_symbol("x").unwrap();
+    let y = f_ctx.typed_symbol("y").unwrap();
+    let body = f_ctx.typed_simp_app("+", [x, y]).unwrap();
+    let cmd = f_ctx.typed_define_fun(body).unwrap();
+
+    assert_eq!(
+        cmd.to_string(),
+        "(define-fun add ((x Int) (y Int)) Int (+ x y))"
+    );
+}
+
+#[test]
+fn test_build_fun_with_quantifier() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+
+    let int = ctx.int_sort();
+    let bool = ctx.bool_sort();
+    let mut f_ctx = ctx
+        .build_fun_out_sort("is_positive", [("x", int)], bool)
+        .unwrap();
+    let body = UntypedAst
+        .parse_term_str("(> x 0)")
+        .unwrap()
+        .type_check(&mut f_ctx)
+        .unwrap();
+    let cmd = f_ctx.typed_define_fun(body).unwrap();
+
+    assert_eq!(
+        cmd.to_string(),
+        "(define-fun is_positive ((x Int)) Bool (> x 0))"
+    );
+}
+
+#[test]
+fn test_build_matching_context() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype Option ((none) (some (value Int))))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let option = ctx.wf_sort("Option").unwrap();
+    let mut q_ctx = ctx.build_quantifier_with_domain([("o", option)]).unwrap();
+    let o = q_ctx.typed_symbol("o").unwrap();
+    let zero = q_ctx.numeral(UBig::from(0u8)).unwrap();
+    let mut m_ctx = q_ctx.build_matching(o).unwrap();
+
+    let none_ctx = m_ctx.build_arm_nullary("none").unwrap();
+    none_ctx.typed_arm(zero.clone()).unwrap();
+
+    let mut some_ctx = m_ctx.build_arm("some", [Some("v")]).unwrap();
+    let v = some_ctx.typed_symbol("v").unwrap();
+    some_ctx.typed_arm(v).unwrap();
+
+    let match_term = m_ctx.typed_matching().unwrap();
+    let eq = q_ctx.typed_eq(match_term, zero).unwrap();
+    let forall = q_ctx.typed_forall(eq).unwrap();
+
+    assert_eq!(
+        forall.to_string(),
+        "(forall ((o Option)) (= (match o ((none 0) ((some v) v))) 0))"
+    );
+}
+
+#[test]
+fn test_matching_get_constructors() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype Color ((red) (green) (blue)))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let color = ctx.wf_sort("Color").unwrap();
+    let mut q_ctx = ctx.build_quantifier_with_domain([("c", color)]).unwrap();
+    let c = q_ctx.typed_symbol("c").unwrap();
+    let mut m_ctx = q_ctx.build_matching(c).unwrap();
+
+    let ctors = m_ctx.get_constructors();
+    assert_eq!(ctors.len(), 3);
+
+    assert!(m_ctx.is_constructor(&"red"));
+    assert!(m_ctx.is_constructor(&"green"));
+    assert!(m_ctx.is_constructor(&"blue"));
+    assert!(!m_ctx.is_constructor(&"yellow"));
+}
+
+#[test]
+fn test_fun_context_with_let() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+
+    let int = ctx.int_sort();
+    let mut f_ctx = ctx
+        .build_fun_out_sort("compute", [("x", int.clone()), ("y", int.clone())], int)
+        .unwrap();
+    let x = f_ctx.typed_symbol("x").unwrap();
+    let y = f_ctx.typed_symbol("y").unwrap();
+    let sum = f_ctx.typed_simp_app("+", [x.clone(), y.clone()]).unwrap();
+    let mut let_ctx = f_ctx.build_let([("z", sum)]).unwrap();
+    let z = let_ctx.typed_symbol("z").unwrap();
+    let body = let_ctx.typed_simp_app("*", [z, x]).unwrap();
+    let let_term = let_ctx.typed_let(body);
+    let cmd = f_ctx.typed_define_fun(let_term).unwrap();
+
+    assert_eq!(
+        cmd.to_string(),
+        "(define-fun compute ((x Int) (y Int)) Int (let ((z (+ x y))) (* z x)))"
+    );
+}
+
+#[test]
+fn test_fun_context_with_quantifier() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+
+    let int = ctx.int_sort();
+    let bool = ctx.bool_sort();
+    let mut f_ctx = ctx
+        .build_fun_out_sort("all_positive", [("x", int)], bool)
+        .unwrap();
+    let mut q_ctx = f_ctx.build_quantifier().unwrap();
+    let cmp = UntypedAst
+        .parse_term_str("(> x 0)")
+        .unwrap()
+        .type_check(&mut q_ctx)
+        .unwrap();
+    let forall = q_ctx.typed_forall(cmp).unwrap();
+    let cmd = f_ctx.typed_define_fun(forall).unwrap();
+
+    assert_eq!(
+        cmd.to_string(),
+        "(define-fun all_positive ((x Int)) Bool (forall () (> x 0)))"
+    );
+}
+
+#[test]
+fn test_fun_context_with_matching() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype Bool2 ((true2) (false2)))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let bool2 = ctx.wf_sort("Bool2").unwrap();
+    let int = ctx.int_sort();
+    let mut f_ctx = ctx
+        .build_fun_out_sort("bool2_to_int", [("b", bool2)], int)
+        .unwrap();
+    let b = f_ctx.typed_symbol("b").unwrap();
+    let one = f_ctx.numeral(UBig::from(1u8)).unwrap();
+    let zero = f_ctx.numeral(UBig::from(0u8)).unwrap();
+    let mut m_ctx = f_ctx.build_matching(b).unwrap();
+
+    let true_ctx = m_ctx.build_arm_nullary("true2").unwrap();
+    true_ctx.typed_arm(one).unwrap();
+
+    let false_ctx = m_ctx.build_arm_nullary("false2").unwrap();
+    false_ctx.typed_arm(zero).unwrap();
+
+    let match_term = m_ctx.typed_matching().unwrap();
+    let cmd = f_ctx.typed_define_fun(match_term).unwrap();
+
+    assert_eq!(
+        cmd.to_string(),
+        "(define-fun bool2_to_int ((b Bool2)) Int (match b ((true2 1) (false2 0))))"
+    );
+}
+
+#[test]
+fn test_matching_scrutinee_sort() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype Color ((red) (green)))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let color = ctx.wf_sort("Color").unwrap();
+    let mut q_ctx = ctx
+        .build_quantifier_with_domain([("c", color.clone())])
+        .unwrap();
+    let c = q_ctx.typed_symbol("c").unwrap();
+    let mut m_ctx = q_ctx.build_matching(c).unwrap();
+
+    let sort = m_ctx.scrutinee_sort();
+    assert_eq!(sort.to_string(), "Color");
+}
+
+#[test]
+fn test_matching_is_covered() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype Bit ((zero) (one)))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let bit = ctx.wf_sort("Bit").unwrap();
+    let mut q_ctx = ctx.build_quantifier_with_domain([("b", bit)]).unwrap();
+    let b = q_ctx.typed_symbol("b").unwrap();
+    let val = q_ctx.numeral(UBig::from(0u8)).unwrap();
+    let mut m_ctx = q_ctx.build_matching(b).unwrap();
+
+    assert!(!m_ctx.is_covered());
+
+    let zero_ctx = m_ctx.build_arm_nullary("zero").unwrap();
+    zero_ctx.typed_arm(val.clone()).unwrap();
+
+    assert!(!m_ctx.is_covered());
+
+    let one_ctx = m_ctx.build_arm_nullary("one").unwrap();
+    one_ctx.typed_arm(val).unwrap();
+
+    assert!(m_ctx.is_covered());
+}
+
+#[test]
+fn test_matching_get_unseen_constructors() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype Tri ((a) (b) (c)))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let tri = ctx.wf_sort("Tri").unwrap();
+    let a_sym = ctx.allocate_symbol("a");
+    let mut q_ctx = ctx.build_quantifier_with_domain([("t", tri)]).unwrap();
+    let t = q_ctx.typed_symbol("t").unwrap();
+    let val = q_ctx.numeral(UBig::from(0u8)).unwrap();
+    let mut m_ctx = q_ctx.build_matching(t).unwrap();
+
+    assert_eq!(m_ctx.get_unseen_constructors().len(), 3);
+
+    let a_ctx = m_ctx.build_arm_nullary("a").unwrap();
+    a_ctx.typed_arm(val).unwrap();
+
+    let unseen = m_ctx.get_unseen_constructors();
+    assert_eq!(unseen.len(), 2);
+    assert!(!unseen.contains(&a_sym));
 }
