@@ -15,7 +15,7 @@ use yaspar::ast::Keyword;
 macro_rules! gen_ctor {
     ($alloc: tt, $t:ident :: $ctor:ident() -> $rt:ty) => {
         paste! {
-            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::TypedApi] and [crate::ast::ScopedSortApi] instead"]
+            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::CheckedApi] and [crate::ast::ScopedSortApi] instead"]
             fn [<$ctor:snake>](&mut self) -> $rt {
                self.$alloc($t::$ctor)
             }
@@ -23,7 +23,7 @@ macro_rules! gen_ctor {
     };
     ($alloc: tt, $fname:ident, $t:ident :: $ctor:ident() -> $rt:ty) => {
         paste! {
-            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::TypedApi] and [crate::ast::ScopedSortApi] instead"]
+            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::CheckedApi] and [crate::ast::ScopedSortApi] instead"]
             fn $fname(&mut self) -> $rt {
                self.$alloc($t::$ctor)
             }
@@ -31,7 +31,7 @@ macro_rules! gen_ctor {
     };
     ($alloc: tt, $t:ident :: $ctor:ident($($x:ident : $xt:ty),+) -> $rt:ty) => {
         paste! {
-            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::TypedApi] and [crate::ast::ScopedSortApi] instead"]
+            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::CheckedApi] and [crate::ast::ScopedSortApi] instead"]
             fn [<$ctor:snake>](&mut self $(, $x: $xt)*) -> $rt {
                self.$alloc($t::$ctor($($x,)*))
             }
@@ -39,7 +39,7 @@ macro_rules! gen_ctor {
     };
     ($alloc: tt, $fname:ident, $t:ident :: $ctor:ident($($x:ident : $xt:ty),+) -> $rt:ty) => {
         paste! {
-            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::TypedApi] and [crate::ast::ScopedSortApi] instead"]
+            #[doc = "Allocate a new `" $ctor "` object. This API requires manual maintenance of invariance. Consider [crate::ast::CheckedApi] and [crate::ast::ScopedSortApi] instead"]
             fn $fname(&mut self $(, $x: $xt)*) -> $rt {
                self.$alloc($t::$ctor($($x,)*))
             }

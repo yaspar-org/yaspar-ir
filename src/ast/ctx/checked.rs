@@ -32,7 +32,7 @@ use yaspar::ast::Keyword;
 /// themselves if they use "unchecked" APIs.
 ///
 /// c.f. [ScopedSortApi]
-pub trait TypedApi: HasArena {
+pub trait CheckedApi: HasArena {
     /// Obtain a type-checking environment
     ///
     /// This is used internally to implement other functions
@@ -276,7 +276,7 @@ where
 
 /// The trait that represents checked APIs to construct sorts
 ///
-/// c.f. [TypedApi]
+/// c.f. [CheckedApi]
 pub trait ScopedSortApi: HasArena {
     /// Obtain a type-checking environment
     ///
@@ -320,7 +320,7 @@ pub trait ScopedSortApi: HasArena {
 
 impl<X> ScopedSortApi for X
 where
-    X: StrAllocator<Str = Str> + TermAllocator<Str, Sort, Term> + TypedApi,
+    X: StrAllocator<Str = Str> + TermAllocator<Str, Sort, Term> + CheckedApi,
 {
     fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, ()> {
         self.get_tcenv().convert_to_empty_local()

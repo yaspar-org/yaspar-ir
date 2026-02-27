@@ -4,7 +4,7 @@
 use crate::allocator::LocalVarAllocator;
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::{
-    Arena, Context, LetContext, QuantifierContext, Result, Sort, Str, Term, TypedApi,
+    Arena, CheckedApi, Context, LetContext, QuantifierContext, Result, Sort, Str, Term,
 };
 use crate::ast::{MatchContext, SymbolQuote};
 use crate::locenv::LocEnv;
@@ -100,7 +100,7 @@ impl HasArena for LocalContext<'_, '_> {
     }
 }
 
-impl TypedApi for LocalContext<'_, '_> {
+impl CheckedApi for LocalContext<'_, '_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
         let theories = self.context.get_theories();
         TCEnv {

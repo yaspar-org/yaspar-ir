@@ -4,7 +4,7 @@
 use crate::allocator::TermAllocator;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::local::LocalContext;
-use crate::ast::ctx::{Arena, Context, Result, Sort, Str, TCEnv, Term, TypedApi};
+use crate::ast::ctx::{Arena, CheckedApi, Context, Result, Sort, Str, TCEnv, Term};
 use crate::ast::utils::is_term_bool;
 use crate::ast::{MatchContext, Theory};
 use crate::locenv::LocEnv;
@@ -66,7 +66,7 @@ impl HasArena for QuantifierContext<'_, '_> {
     }
 }
 
-impl TypedApi for QuantifierContext<'_, '_> {
+impl CheckedApi for QuantifierContext<'_, '_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
         self.0.get_tcenv()
     }

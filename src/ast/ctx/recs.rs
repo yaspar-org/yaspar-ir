@@ -5,7 +5,7 @@
 
 use crate::allocator::{CommandAllocator, LocalVarAllocator};
 use crate::ast::alg::VarBinding;
-use crate::ast::ctx::checked::TypedApi;
+use crate::ast::ctx::checked::CheckedApi;
 use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
 use crate::ast::{FetchSort, LetContext, MatchContext, QuantifierContext, SymbolQuote, Term};
 use crate::locenv::{LocEnv, sanitize_bindings};
@@ -252,7 +252,7 @@ impl HasArena for EachRecFunContext<'_> {
     }
 }
 
-impl TypedApi for EachRecFunContext<'_> {
+impl CheckedApi for EachRecFunContext<'_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
         self.context.get_tcenv().convert_to_new_local(LocEnv::Cons {
             car: self.inputs,

@@ -1393,7 +1393,7 @@ where
             Command::Push(i) => write!(f, "(push {})", i),
             Command::Reset => write!(f, "(reset)"),
             Command::ResetAssertions => write!(f, "(reset-assertions)"),
-            Command::SetInfo(at) => write!(f, "(set-assertions {})", at),
+            Command::SetInfo(at) => write!(f, "(set-info {})", at),
             Command::SetLogic(l) => write!(f, "(set-logic {})", l),
             Command::SetOption(op) => write!(f, "(set-option {})", op),
             Command::DeclareConst(id, s) => write!(f, "(declare-const {} {})", id, s),
