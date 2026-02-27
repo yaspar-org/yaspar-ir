@@ -710,7 +710,7 @@ pub enum Term<Str, So, T> {
     And(Vec<T>),
     /// Invariant: vector must contain at least one term of sort Bool.
     Or(Vec<T>),
-    /// Invariant: vector must contain at least one term of sort Bool.
+    /// Invariant: vector must contain at least two terms of sort Bool.
     Xor(Vec<T>),
     /// Invariant:
     /// * vector must contain at least one term of sort Bool.

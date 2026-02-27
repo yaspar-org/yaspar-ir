@@ -213,8 +213,8 @@ pub trait TypedApi: HasArena {
     {
         let mut env = self.get_tcenv();
         let terms = check_all_bool_terms(terms, &mut env)?;
-        if terms.is_empty() {
-            return Err("TC: 'xor' requires at least one argument!".into());
+        if terms.len() < 2 {
+            return Err("TC: 'xor' requires at least two arguments!".into());
         }
         Ok(env.arena_alt().xor(terms))
     }

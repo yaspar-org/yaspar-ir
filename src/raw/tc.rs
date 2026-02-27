@@ -1511,9 +1511,9 @@ where
                 Ok(env.arena.or(nts))
             }
             alg::Term::Xor(ts) => {
-                if ts.is_empty() {
+                if ts.len() < 2 {
                     return Err(format!(
-                        "TC: 'xor'{} requires at least one argument!",
+                        "TC: 'xor'{} requires at least two arguments!",
                         self.display_meta_data()
                     ));
                 }

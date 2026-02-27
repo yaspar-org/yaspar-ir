@@ -325,13 +325,13 @@ impl ActionOnTerm for UntypedAst {
                     }
                 }
                 IdentifierKind::Xor => {
-                    if !args.is_empty() {
+                    if args.len() >= 2 {
                         Ok(wrap(ATerm::Xor(args).into(), range))
                     } else {
                         Err(ParseError::User {
                             error: GrammarError::Other {
                                 range,
-                                message: "Parsing: 'xor' should be given at least one argument!"
+                                message: "Parsing: 'xor' should be given at least two arguments!"
                                     .into(),
                             },
                         })
