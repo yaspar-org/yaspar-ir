@@ -122,8 +122,7 @@ fn test_xor() {
     let script = "(assert (xor true))";
     let mut ctx = Context::new();
     ctx.ensure_logic();
-    let cs = UntypedAst.parse_script_str(script).unwrap();
-    assert!(cs.type_check(&mut ctx).is_ok());
+    assert!(UntypedAst.parse_script_str(script).is_err());
 }
 
 #[test]
