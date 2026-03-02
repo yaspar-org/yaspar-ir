@@ -240,13 +240,51 @@ fn type_check_command(command: &u::Command, env: &mut Context) -> TC<Command> {
         ACommand::GetUnsatAssumptions => Ok(env.arena.get_unsat_assumptions()),
         ACommand::GetUnsatCore => Ok(env.arena.get_unsat_core()),
         ACommand::GetValue(ts) => {
+            if ts.is_empty() {
+                return Err("get-value should contain at least one term!".into());
+            }
             let nts = ts.type_check(env)?;
+            nts.iter().try_for_each(is_quantifier_free)?;
             Ok(env.arena.get_value(nts))
         }
         ACommand::Pop(n) => Ok(env.arena.pop(n.clone())),
         ACommand::Push(n) => Ok(env.arena.push(n.clone())),
         ACommand::Reset => Ok(env.arena.reset()),
         ACommand::ResetAssertions => Ok(env.arena.reset_assertions()),
+    }
+}
+
+/// Check whether the current term is quantifier-free
+fn is_quantifier_free(term: &Term) -> TC<()> {
+    match term.repr() {
+        ATerm::Constant(_, _) | ATerm::Global(_, _) | ATerm::Local(_) => Ok(()),
+        ATerm::App(_, ts, _) => ts.iter().try_for_each(is_quantifier_free),
+        ATerm::Let(bindings, body) => {
+            bindings.iter().try_for_each(|b| is_quantifier_free(&b.2))?;
+            is_quantifier_free(body)
+        }
+        ATerm::Exists(_, _) | ATerm::Forall(_, _) => Err(format!("{} includes a quantifier", term)),
+        ATerm::Matching(t, arms) => {
+            is_quantifier_free(t)?;
+            arms.iter().try_for_each(|a| is_quantifier_free(&a.body))
+        }
+        ATerm::Annotated(t, _) | ATerm::Not(t) => is_quantifier_free(t),
+        ATerm::Eq(a, b) => {
+            is_quantifier_free(a)?;
+            is_quantifier_free(b)
+        }
+        ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) | ATerm::Xor(ts) => {
+            ts.iter().try_for_each(is_quantifier_free)
+        }
+        ATerm::Implies(ts, t) => {
+            ts.iter().try_for_each(is_quantifier_free)?;
+            is_quantifier_free(t)
+        }
+        ATerm::Ite(c, t, e) => {
+            is_quantifier_free(c)?;
+            is_quantifier_free(t)?;
+            is_quantifier_free(e)
+        }
     }
 }
 

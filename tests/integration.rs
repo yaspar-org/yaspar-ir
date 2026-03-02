@@ -1556,3 +1556,73 @@ fn test_matching_get_unseen_constructors() {
     assert_eq!(unseen.len(), 2);
     assert!(!unseen.contains(&a_sym));
 }
+
+#[test]
+fn test_get_value_empty() {
+    let script = r"
+(set-logic QF_LIA)
+(get-value ())
+";
+    assert!(UntypedAst.parse_script_str(script).is_err());
+}
+
+#[test]
+fn test_get_value_basic() {
+    let script = r"
+(set-logic QF_LIA)
+(declare-const x Int)
+(get-value (x))
+";
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_ok());
+}
+
+#[test]
+fn test_get_value_quantified_var() {
+    let script = r"
+(set-logic LIA)
+(declare-const x Int)
+(assert (forall ((y Int)) (> (+ x y) 0)))
+(get-value (y))
+";
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_err());
+}
+
+#[test]
+fn test_get_value_quantified_term() {
+    let script = r"
+(set-logic LIA)
+(declare-const x Int)
+(get-value ((forall ((y Int)) (> y x))))
+";
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_err());
+}
+
+#[test]
+fn test_get_value_exists_term() {
+    let script = r"
+(set-logic LIA)
+(declare-const a Int)
+(get-value ((exists ((b Int)) (= b a))))
+";
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_err());
+}
+
+#[test]
+fn test_get_value_nested_quantifier() {
+    let script = r"
+(set-logic LIA)
+(declare-const x Int)
+(get-value ((and (> x 0) (forall ((y Int)) (< y x)))))
+";
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_err());
+}
