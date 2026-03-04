@@ -439,6 +439,7 @@ impl Context {
                 HashSet::new(),
                 FunctionDef {
                     name: n,
+                    sort_params: vec![],
                     vars: vec![],
                     out_sort: s,
                     body: t,
@@ -511,6 +512,7 @@ impl Context {
         let sort = body.get_sort(self);
         let def = FunctionDef {
             name: name.clone(),
+            sort_params: vec![],
             vars: vec![],
             out_sort: sort.clone(),
             body: body.clone(),
@@ -536,6 +538,7 @@ impl Context {
         }
         let def = FunctionDef {
             name: name.clone(),
+            sort_params: vec![],
             vars: vec![],
             out_sort: sort.clone(),
             body: body.clone(),

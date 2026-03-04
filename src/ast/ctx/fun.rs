@@ -73,6 +73,7 @@ impl<'a> FunctionContext<'a> {
         }
         let def = FunctionDef {
             name: self.name,
+            sort_params: vec![],
             vars: self.inputs,
             out_sort: sort,
             body,

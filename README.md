@@ -232,15 +232,25 @@ Currently, the crate provides the following functionalities:
 
 ## SMTLib compliance
 
-This package is completely SMTLib-2.7-compliant. Namely, it follows the SMTLib spec and fully supports specified
-features (with exceptions below),
-including quantifiers and datatypes. Extension theories supported by z3 or cvc5 are usually not considered.
+This crate is completely SMTLib-2.7-compliant. Namely, it follows the SMTLib spec and fully supports specified
+features (with exceptions below), including quantifiers and datatypes. Extension theories supported by z3 or cvc5 are
+usually not considered.
 
 The following features are intensionally avoided, but we welcome contributors to extend them:
 
 1. floating points,
 2. higher order logic, and
 3. prenex polymorphism in user-defined sorts and functions.
+
+### Datatypes
+
+This crate fully supports features of datatypes as described by the SMTLib standard. More specifically, it supports:
+
+1. Polymorphic, mutually recursive datatype declarations,
+2. Well-formedness and non-emptiness checking, as described by the SMTLib standard,
+3. Constructors, selectors and testers generation; In particular, this crate supports both `(_ is X)` tester (standard),
+   and `is-X` tester (common extension and de facto standard). `is-X` is defined in terms of `(_ is X)` as a definition.
+4. Match expressions.
 
 ## Security
 

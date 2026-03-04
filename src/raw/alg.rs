@@ -824,10 +824,11 @@ pub struct ConstructorDec<Str, So> {
 /// other datatypes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DatatypeDec<Str, So> {
-    /// sort parameters introduced by `par`
+    /// Sort parameters introduced by `par`
     ///
-    /// an empty params means that the datatype is monomorphic.
+    /// An empty params means that the datatype is monomorphic.
     pub params: Vec<Str>,
+    /// The list of constructors defining this datatype
     pub constructors: Vec<ConstructorDec<Str, So>>,
 }
 
@@ -847,6 +848,8 @@ pub struct DatatypeDef<Str, So> {
 pub struct FunctionDef<Str, So, T> {
     /// Name of the function
     pub name: Str,
+    /// A list of sort parameters
+    pub sort_params: Vec<Str>,
     /// Variables of the function
     pub vars: Vec<VarBinding<Str, So>>,
     /// The output sort of the function

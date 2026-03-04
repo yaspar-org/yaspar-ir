@@ -236,6 +236,7 @@ impl<'b> EachRecFunContext<'b> {
             self.current.clone(),
             FunctionDef {
                 name: self.current.clone(),
+                sort_params: vec![],
                 vars: self.inputs.clone(),
                 out_sort: sort,
                 body,

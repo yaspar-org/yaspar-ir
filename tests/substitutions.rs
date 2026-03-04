@@ -468,3 +468,129 @@ fn test_gsubst_nested_shadowing() {
         "(forall ((z Int)) (exists ((z Int)) (= (- z 1) z)))"
     );
 }
+
+#[test]
+fn test_gsubst_datatype_tester() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))
+        (declare-const l (List Int))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let l = ctx.typed_symbol("l").unwrap();
+    let is_nil = ctx.typed_simp_app("is-nil", [l.clone()]).unwrap();
+
+    let expanded = is_nil.gsubst_preproc(["is-nil"], &mut ctx);
+    assert_eq!(expanded.to_string(), "((_ is nil) l)");
+
+    let expanded_inplace = is_nil.gsubst_inplace(["is-nil"], &mut ctx);
+    assert_eq!(expanded_inplace.to_string(), "((_ is nil) l)");
+}
+
+#[test]
+fn test_gsubst_datatype_tester_in_formula() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))
+        (declare-const l (List Real))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let l = ctx.typed_symbol("l").unwrap();
+    let is_nil = ctx.typed_simp_app("is-nil", [l.clone()]).unwrap();
+    let is_cons = ctx.typed_simp_app("is-cons", [l.clone()]).unwrap();
+    let formula = ctx.typed_or([is_nil, is_cons]).unwrap();
+
+    let expanded = formula.gsubst_preproc(["is-nil", "is-cons"], &mut ctx);
+    assert_eq!(expanded.to_string(), "(or ((_ is nil) l) ((_ is cons) l))");
+
+    let expanded_inplace = formula.gsubst_inplace(["is-nil", "is-cons"], &mut ctx);
+    assert_eq!(
+        expanded_inplace.to_string(),
+        "(or ((_ is nil) l) ((_ is cons) l))"
+    );
+}
+
+#[test]
+fn test_gsubst_datatype_tester_with_quantifier() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let list_int = UntypedAst
+        .parse_sort_str("(List Int)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let mut q_ctx = ctx.build_quantifier_with_domain([("x", list_int)]).unwrap();
+    let x = q_ctx.typed_symbol("x").unwrap();
+    let is_nil = q_ctx.typed_simp_app("is-nil", [x]).unwrap();
+    let forall = q_ctx.typed_forall(is_nil).unwrap();
+
+    assert_eq!(forall.to_string(), "(forall ((x (List Int))) (is-nil x))");
+    let expanded = forall.gsubst_preproc(["is-nil"], &mut ctx);
+    assert_eq!(
+        expanded.to_string(),
+        "(forall ((x (List Int))) ((_ is nil) x))"
+    );
+
+    let expanded_inplace = forall.gsubst_inplace(["is-nil"], &mut ctx);
+    assert_eq!(
+        expanded_inplace.to_string(),
+        "(forall ((x (List Int))) ((_ is nil) x))"
+    );
+}
+
+#[test]
+fn test_gsubst_multiple_datatype_testers() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-datatype Option (par (T) ((none) (some (value T)))))
+        (declare-const opt (Option Bool))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let opt = ctx.typed_symbol("opt").unwrap();
+    let is_none = ctx.typed_simp_app("is-none", [opt.clone()]).unwrap();
+    let is_some = ctx.typed_simp_app("is-some", [opt.clone()]).unwrap();
+    let xor = ctx.typed_xor([is_none, is_some]).unwrap();
+
+    let expanded = xor.gsubst_preproc(["is-none", "is-some"], &mut ctx);
+    assert_eq!(
+        expanded.to_string(),
+        "(xor ((_ is none) opt) ((_ is some) opt))"
+    );
+
+    let expanded_inplace = xor.gsubst_inplace(["is-none", "is-some"], &mut ctx);
+    assert_eq!(
+        expanded_inplace.to_string(),
+        "(xor ((_ is none) opt) ((_ is some) opt))"
+    );
+}

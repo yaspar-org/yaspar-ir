@@ -547,6 +547,7 @@ fn function_def_conv<Str, S, T>(
 ) -> alg::FunctionDef<Str, S, T> {
     alg::FunctionDef {
         name: definition.name,
+        sort_params: vec![],
         vars: definition
             .vars
             .into_iter()

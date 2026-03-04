@@ -120,14 +120,6 @@ pub struct Caches {
     pub cnf_cache: CNFCache,
 }
 
-/// The kinds of a function related to a datatype
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DatatypeFunction {
-    Constructor,
-    Selector,
-    Tester,
-}
-
 /// Meta-data for a defined function
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionMetaDefined {
@@ -135,6 +127,20 @@ pub struct FunctionMetaDefined {
     pub rec_deps: HashSet<Str>,
     /// The definition of the function
     pub def: FunctionDef,
+}
+
+/// The kinds of a function related to a datatype
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatatypeFunction {
+    Constructor,
+    Selector,
+    /// Tester in the following form,
+    /// ```text
+    /// (_ is X)
+    /// ```
+    Tester,
+    /// Tester defined in terms of `(_ is X)`; typically it is `is-X`.
+    TesterDefined(FunctionMetaDefined),
 }
 
 /// Meta-data for functions
@@ -344,7 +350,7 @@ impl Context {
     {
         let symbol = symbol.allocate(self.arena());
         self.can_add_symbol(&symbol)?;
-        self.insert_symbol(symbol, sig, FunctionMeta::OpaqueDeclared);
+        self.insert_symbol(symbol, sig, FunctionMeta::Opaque);
         Ok(())
     }
 
@@ -374,7 +380,7 @@ impl Context {
         let symbol = symbol.allocate(self.arena());
         self.check_special_symbols(&symbol)?;
         self.check_bv_sym(&symbol)?;
-        self.push_symbol(symbol, sig, FunctionMeta::OpaqueDeclared);
+        self.push_symbol(symbol, sig, FunctionMeta::Opaque);
         Ok(())
     }
 
@@ -502,20 +508,6 @@ impl Context {
                         }
                     })
                     .next()
-            })
-            .collect()
-    }
-
-    /// Returns the set of all builtin function symbols in the current context
-    pub fn builtin_symbols(&self) -> HashSet<Str> {
-        self.symbol_table
-            .iter()
-            .filter_map(|(name, sigs)| {
-                if sigs.iter().any(|(_, meta)| meta.is_builtin()) {
-                    Some(name.clone())
-                } else {
-                    None
-                }
             })
             .collect()
     }
@@ -772,33 +764,5 @@ mod tests {
             .unwrap();
         // 2.6 in set-info shouldn't matter
         cmd.type_check(&mut context).unwrap();
-    }
-
-    #[test]
-    fn test_is_builtin() {
-        assert!(FunctionMeta::Opaque.is_builtin());
-        assert!(!FunctionMeta::OpaqueDeclared.is_builtin());
-    }
-
-    #[test]
-    fn test_builtin_symbols() {
-        let mut context = Context::new();
-        UntypedAst
-            .parse_script_str(
-                r#"
-            (set-logic QF_LIA)
-            (declare-const x Int)
-            (declare-fun f (Int) Int)
-        "#,
-            )
-            .unwrap()
-            .type_check(&mut context)
-            .unwrap();
-
-        let builtins = context.builtin_symbols();
-        assert!(builtins.contains(&context.allocate_symbol("+")));
-        assert!(builtins.contains(&context.allocate_symbol("-")));
-        assert!(!builtins.contains(&context.allocate_symbol("x")));
-        assert!(!builtins.contains(&context.allocate_symbol("f")));
     }
 }

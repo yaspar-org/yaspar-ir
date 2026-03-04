@@ -1,14 +1,20 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::allocator::{CommandAllocator, ObjectAllocatorExt, SortAllocator, StrAllocator};
+use crate::allocator::{
+    CommandAllocator, LocalVarAllocator, ObjectAllocatorExt, SortAllocator, StrAllocator,
+    TermAllocator,
+};
 use crate::ast::alg::{SigIndex, VarBinding};
 use crate::ast::ctx::checked::ScopedSortApi;
 use crate::ast::ctx::{
     Arena, Command, ConstructorDec, Context, DatatypeDec, DatatypeDef, Sig, Sort, Str, TC, TCEnv,
     Theory,
 };
-use crate::ast::{DatatypeFunction, FunctionMeta, SymbolQuote, Typecheck, alg};
+use crate::ast::{
+    DatatypeFunction, FunctionDef, FunctionMeta, FunctionMetaDefined, Identifier, Index, Local,
+    SymbolQuote, Typecheck, alg,
+};
 use crate::locenv::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, Contains};
@@ -504,6 +510,7 @@ pub(crate) fn check_dt_emptiness<D: Borrow<DatatypeDef>>(def_map: &HashMap<Str, 
 pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Context) {
     let bool_sort = env.bool_sort();
     let is_symb = env.allocate_symbol("is");
+    let x_var = env.allocate_symbol("x");
     for def in defs {
         for ctor in &def.dec.constructors {
             // 1. insert constructor
@@ -558,6 +565,7 @@ pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Con
             );
 
             // 4. insert is-X testers
+            //    we expand is-X to (_ is X) by defining the former in terms of the latter
             let mut is_sym = "is-".to_string();
             is_sym.push_str(ctor.ctor.inner());
             let is_sym = env.allocate_symbol(&is_sym);
@@ -567,12 +575,33 @@ pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Con
                 vec![current_sort.clone()],
                 bool_sort.clone(),
             );
+            let qid = Identifier {
+                symbol: is_symb.clone(),
+                indices: vec![Index::Symbol(ctor.ctor.clone())],
+            }
+            .into();
+            let id = env.new_local();
+            let x_loc = env.local(Local {
+                id,
+                symbol: x_var.clone(),
+                sort: Some(current_sort.clone()),
+            });
+            let body = env.app(qid, vec![x_loc], Some(bool_sort.clone()));
             env.insert_symbol(
                 is_sym.clone(),
                 sig,
                 FunctionMeta::Datatype {
                     dt_name: def.name.clone(),
-                    kind: DatatypeFunction::Tester,
+                    kind: DatatypeFunction::TesterDefined(FunctionMetaDefined {
+                        rec_deps: Default::default(),
+                        def: FunctionDef {
+                            name: is_sym.clone(),
+                            sort_params: def.dec.params.clone(),
+                            vars: vec![VarBinding(x_var.clone(), id, current_sort.clone())],
+                            out_sort: bool_sort.clone(),
+                            body,
+                        },
+                    }),
                 },
             );
         }
