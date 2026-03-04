@@ -9,6 +9,7 @@ pub mod gsubst;
 #[cfg(feature = "implicant-generation")]
 pub(crate) mod implicant;
 pub mod letintro;
+pub mod mono;
 pub mod subst;
 
 pub use crate::allocator::*;
@@ -25,6 +26,7 @@ pub use crate::raw::letelim::*;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck};
 pub use crate::untyped as u;
 pub use gsubst::{GlobalSubstInplace, GlobalSubstPreproc};
+pub use mono::Monomorphization;
 pub use subst::{Substitute, Substitution};
 
 use crate::traits::MetaData;
