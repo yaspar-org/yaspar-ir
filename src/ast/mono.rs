@@ -6,9 +6,16 @@
 //! This module provides functionality to instantiate parametric datatypes with concrete sorts,
 //! eliminating sort variables by substituting them with ground types.
 
+use crate::allocator::{LocalVarAllocator, TermAllocator};
+use crate::ast::alg;
 use crate::ast::alg::VarBinding;
-use crate::ast::{ConstructorDec, DatatypeDec, HasArenaAlt, Sort, TC};
+use crate::ast::{
+    ATerm, Attribute, ConstructorDec, DatatypeDec, HasArenaAlt, Local, QualifiedIdentifier, Sort,
+    Str, TC, Term,
+};
+use crate::locenv::LocEnv;
 use crate::raw::tc::unif::{SortSubst, apply_subst};
+use crate::traits::Repr;
 
 /// Trait for monomorphizing parametric types by substituting sort variables with concrete sorts.
 pub trait Monomorphization<E, I> {
@@ -16,6 +23,12 @@ pub trait Monomorphization<E, I> {
 
     /// Monomorphize `self` using the provided input and environment.
     fn monomorphize(&self, input: &I, env: &mut E) -> Self::Output;
+}
+
+/// Environment for monomorphizing terms, tracking local variable ID mappings.
+struct TermMonoEnv<'a, E> {
+    arena: &'a mut E,
+    local: LocEnv<'a, Str, ()>,
 }
 
 /// Apply a sort substitution to a sort, replacing sort variables with their concrete instantiations.
@@ -29,11 +42,12 @@ where
     }
 }
 
-/// Monomorphize a variable binding by applying the substitution to its sort.
-impl<E, S> Monomorphization<E, SortSubst> for VarBinding<S, Sort>
+/// Monomorphize a variable binding by applying the substitution to its second component.
+impl<E, S, T> Monomorphization<E, SortSubst> for VarBinding<S, T>
 where
     E: HasArenaAlt,
     S: Clone,
+    T: Monomorphization<E, SortSubst, Output = T>,
 {
     type Output = Self;
     fn monomorphize(&self, input: &SortSubst, env: &mut E) -> Self {
@@ -96,6 +110,241 @@ where
     }
 }
 
+/// Monomorphize a qualified identifier by applying the substitution to its optional sort.
+fn monomorphize_qid<E: HasArenaAlt>(
+    qid: &QualifiedIdentifier,
+    subst: &SortSubst,
+    env: &mut E,
+) -> QualifiedIdentifier {
+    alg::QualifiedIdentifier(
+        qid.0.clone(),
+        qid.1.as_ref().map(|s| s.monomorphize(subst, env)),
+    )
+}
+
+/// Monomorphize an attribute by applying the substitution to pattern terms.
+fn monomorphize_attribute<'a, E: HasArenaAlt>(
+    attr: &Attribute,
+    subst: &SortSubst,
+    env: &mut TermMonoEnv<'a, E>,
+) -> Attribute {
+    match attr {
+        Attribute::Pattern(ts) => Attribute::Pattern(
+            ts.iter()
+                .map(|t| monomorphize_term(t, subst, env))
+                .collect(),
+        ),
+        _ => attr.clone(),
+    }
+}
+
+/// Recursively monomorphize a term by substituting sort variables with concrete sorts.
+///
+/// This traverses the term structure, applying the sort substitution to all embedded sorts
+/// (in constants, globals, locals, applications, quantifiers, etc.) and re-allocating local
+/// variable IDs to avoid collisions. Delegates to [`monomorphize_qid`] for qualified identifiers
+/// and [`monomorphize_attribute`] for annotations.
+fn monomorphize_term<'a, E: HasArenaAlt>(
+    term: &Term,
+    subst: &SortSubst,
+    env: &mut TermMonoEnv<'a, E>,
+) -> Term {
+    match term.repr() {
+        ATerm::Constant(c, sort) => {
+            let s = sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
+            env.arena.arena_alt().constant(c.clone(), s)
+        }
+        ATerm::Global(id, sort) => {
+            let nid = monomorphize_qid(id, subst, env.arena);
+            let s = sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
+            env.arena.arena_alt().global(nid, s)
+        }
+        ATerm::Local(l) => {
+            if let Some((new_id, _)) = env.local.lookup(&l.symbol) {
+                let new_sort = l.sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
+                env.arena.arena_alt().local(Local {
+                    id: new_id,
+                    symbol: l.symbol.clone(),
+                    sort: new_sort,
+                })
+            } else {
+                term.clone()
+            }
+        }
+        ATerm::App(id, ts, sort) => {
+            let nid = monomorphize_qid(id, subst, env.arena);
+            let nts = ts
+                .iter()
+                .map(|t| monomorphize_term(t, subst, env))
+                .collect();
+            let s = sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
+            env.arena.arena_alt().app(nid, nts, s)
+        }
+        ATerm::Let(bindings, body) => {
+            let nbindings: Vec<_> = bindings
+                .iter()
+                .map(|b| {
+                    let new_id = env.arena.arena_alt().new_local();
+                    VarBinding(b.0.clone(), new_id, monomorphize_term(&b.2, subst, env))
+                })
+                .collect();
+            let tracking: Vec<_> = nbindings
+                .iter()
+                .map(|b| VarBinding(b.0.clone(), b.1, ()))
+                .collect();
+            let local = env.local.insert(&tracking).unwrap();
+            let mut new_env = TermMonoEnv {
+                arena: env.arena,
+                local,
+            };
+            let nbody = monomorphize_term(body, subst, &mut new_env);
+            env.arena.arena_alt().let_term(nbindings, nbody)
+        }
+        ATerm::Exists(vars, body) => {
+            let nvars: Vec<_> = vars
+                .iter()
+                .map(|v| {
+                    let new_id = env.arena.arena_alt().new_local();
+                    VarBinding(v.0.clone(), new_id, v.2.monomorphize(subst, env.arena))
+                })
+                .collect();
+            let tracking: Vec<_> = nvars
+                .iter()
+                .map(|v| VarBinding(v.0.clone(), v.1, ()))
+                .collect();
+            let local = env.local.insert(&tracking).unwrap();
+            let mut new_env = TermMonoEnv {
+                arena: env.arena,
+                local,
+            };
+            let nbody = monomorphize_term(body, subst, &mut new_env);
+            env.arena.arena_alt().exists(nvars, nbody)
+        }
+        ATerm::Forall(vars, body) => {
+            let nvars: Vec<_> = vars
+                .iter()
+                .map(|v| {
+                    let new_id = env.arena.arena_alt().new_local();
+                    VarBinding(v.0.clone(), new_id, v.2.monomorphize(subst, env.arena))
+                })
+                .collect();
+            let tracking: Vec<_> = nvars
+                .iter()
+                .map(|v| VarBinding(v.0.clone(), v.1, ()))
+                .collect();
+            let local = env.local.insert(&tracking).unwrap();
+            let mut new_env = TermMonoEnv {
+                arena: env.arena,
+                local,
+            };
+            let nbody = monomorphize_term(body, subst, &mut new_env);
+            env.arena.arena_alt().forall(nvars, nbody)
+        }
+        ATerm::Matching(scrutinee, cases) => {
+            let nscrutinee = monomorphize_term(scrutinee, subst, env);
+            let ncases = cases
+                .iter()
+                .map(|c| {
+                    let vars: Vec<_> = c
+                        .pattern
+                        .variables()
+                        .iter()
+                        .map(|&s| {
+                            let new_id = env.arena.arena_alt().new_local();
+                            VarBinding(s.clone(), new_id, ())
+                        })
+                        .collect();
+                    let local = env.local.insert(&vars).unwrap();
+                    let mut new_env = TermMonoEnv {
+                        arena: env.arena,
+                        local,
+                    };
+                    crate::ast::alg::PatternArm {
+                        pattern: c.pattern.clone(),
+                        body: monomorphize_term(&c.body, subst, &mut new_env),
+                    }
+                })
+                .collect();
+            env.arena.arena_alt().matching(nscrutinee, ncases)
+        }
+        ATerm::Annotated(t, anns) => {
+            let nt = monomorphize_term(t, subst, env);
+            let nanns = anns
+                .iter()
+                .map(|a| monomorphize_attribute(a, subst, env))
+                .collect();
+            env.arena.arena_alt().annotated(nt, nanns)
+        }
+        ATerm::Eq(a, b) => {
+            let na = monomorphize_term(a, subst, env);
+            let nb = monomorphize_term(b, subst, env);
+            env.arena.arena_alt().eq(na, nb)
+        }
+        ATerm::Distinct(ts) => {
+            let nts = ts
+                .iter()
+                .map(|t| monomorphize_term(t, subst, env))
+                .collect();
+            env.arena.arena_alt().distinct(nts)
+        }
+        ATerm::And(ts) => {
+            let nts = ts
+                .iter()
+                .map(|t| monomorphize_term(t, subst, env))
+                .collect();
+            env.arena.arena_alt().and(nts)
+        }
+        ATerm::Or(ts) => {
+            let nts = ts
+                .iter()
+                .map(|t| monomorphize_term(t, subst, env))
+                .collect();
+            env.arena.arena_alt().or(nts)
+        }
+        ATerm::Xor(ts) => {
+            let nts = ts
+                .iter()
+                .map(|t| monomorphize_term(t, subst, env))
+                .collect();
+            env.arena.arena_alt().xor(nts)
+        }
+        ATerm::Implies(ts, concl) => {
+            let nts = ts
+                .iter()
+                .map(|t| monomorphize_term(t, subst, env))
+                .collect();
+            let nconcl = monomorphize_term(concl, subst, env);
+            env.arena.arena_alt().implies(nts, nconcl)
+        }
+        ATerm::Not(t) => {
+            let nt = monomorphize_term(t, subst, env);
+            env.arena.arena_alt().not(nt)
+        }
+        ATerm::Ite(c, t, e) => {
+            let nc = monomorphize_term(c, subst, env);
+            let nt = monomorphize_term(t, subst, env);
+            let ne = monomorphize_term(e, subst, env);
+            env.arena.arena_alt().ite(nc, nt, ne)
+        }
+    }
+}
+
+/// Monomorphize a term by applying the sort substitution.
+impl<E> Monomorphization<E, SortSubst> for Term
+where
+    E: HasArenaAlt,
+{
+    type Output = Self;
+
+    fn monomorphize(&self, subst: &SortSubst, env: &mut E) -> Self {
+        let mut mono_env = TermMonoEnv {
+            arena: env,
+            local: LocEnv::Nil,
+        };
+        monomorphize_term(self, subst, &mut mono_env)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +352,9 @@ mod tests {
     use crate::ast::{ASortDef, Context, Typecheck};
     use crate::untyped::UntypedAst;
 
+    /// Test monomorphizing a parametric `List` datatype with `Int`.
+    /// Declares `(List (par (X) ...))`, instantiates it as `(List Int)`, and verifies
+    /// that all constructor argument sorts in the result are closed (no open sort variables).
     #[test]
     fn test_sort_monomorphize() {
         let mut ctx = Context::new();
@@ -133,6 +385,9 @@ mod tests {
         }
     }
 
+    /// Test monomorphizing a parametric `Pair` datatype with `Int` and `Bool`.
+    /// Declares `(Pair (par (A B) ...))`, instantiates it as `(Pair Int Bool)`, and verifies
+    /// that all constructor argument sorts in the result are closed (no open sort variables).
     #[test]
     fn test_constructor_monomorphize() {
         let mut ctx = Context::new();
@@ -160,5 +415,158 @@ mod tests {
                 arg.2.type_check(&mut ctx).unwrap();
             }
         }
+    }
+
+    /// Test monomorphizing a simple global term whose sort contains a sort variable.
+    /// Builds `(as nil (List X))` with sort variable `X`, monomorphizes with `X -> Int`,
+    /// and verifies the result is `(as nil (List Int))`.
+    #[test]
+    fn test_term_monomorphize_global() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        UntypedAst
+            .parse_command_str(
+                "(declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))",
+            )
+            .unwrap()
+            .type_check(&mut ctx)
+            .unwrap();
+
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+        let list_sym = ctx.allocate_symbol("List");
+        let list_x = ctx.sort_n(list_sym, vec![x_sort]);
+        let nil_sym = ctx.allocate_symbol("nil");
+        let nil = ctx.global(
+            alg::QualifiedIdentifier::simple_sorted(nil_sym, list_x.clone()),
+            Some(list_x),
+        );
+
+        let int = ctx.int_sort();
+        let subst: SortSubst = [(x_sym, Some(int))].into_iter().collect();
+        let result = nil.monomorphize(&subst, &mut ctx);
+        assert_eq!(result.to_string(), "(as nil (List Int))");
+        result.type_check(&mut ctx).unwrap();
+    }
+
+    /// Test monomorphizing a function application term with sort variables.
+    /// Builds `(cons x (as nil (List X)))` with sort variable `X`, monomorphizes with `X -> Int`,
+    /// and verifies the result is `(cons x (as nil (List Int)))`.
+    #[test]
+    fn test_term_monomorphize_app() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        UntypedAst
+            .parse_command_str(
+                "(declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))",
+            )
+            .unwrap()
+            .type_check(&mut ctx)
+            .unwrap();
+
+        UntypedAst
+            .parse_command_str("(declare-const x Int)")
+            .unwrap()
+            .type_check(&mut ctx)
+            .unwrap();
+
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+        let list_sym = ctx.allocate_symbol("List");
+        let list_x = ctx.sort_n(list_sym, vec![x_sort.clone()]);
+
+        let nil_sym = ctx.allocate_symbol("nil");
+        let nil = ctx.global(
+            alg::QualifiedIdentifier::simple_sorted(nil_sym, list_x.clone()),
+            Some(list_x.clone()),
+        );
+
+        let x_var = ctx.simple_sorted_symbol("x", x_sort);
+        let cons_sym = ctx.allocate_symbol("cons");
+        let cons_app = ctx.app(
+            alg::QualifiedIdentifier::simple(cons_sym),
+            vec![x_var, nil],
+            Some(list_x),
+        );
+
+        let int = ctx.int_sort();
+        let subst: SortSubst = [(x_sym, Some(int))].into_iter().collect();
+        let result = cons_app.monomorphize(&subst, &mut ctx);
+        assert_eq!(result.to_string(), "(cons x (as nil (List Int)))");
+        result.type_check(&mut ctx).unwrap();
+    }
+
+    /// Test monomorphizing a let-binding term with sort variables in the bound value.
+    /// Builds `(let ((y (as nil (List X)))) y)` with sort variable `X`, monomorphizes
+    /// with `X -> Bool`, and verifies the result preserves the let structure with
+    /// the substituted sort.
+    #[test]
+    fn test_term_monomorphize_let() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        UntypedAst
+            .parse_command_str(
+                "(declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))",
+            )
+            .unwrap()
+            .type_check(&mut ctx)
+            .unwrap();
+
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+        let list_sym = ctx.allocate_symbol("List");
+        let list_x = ctx.sort_n(list_sym, vec![x_sort]);
+
+        let nil_sym = ctx.allocate_symbol("nil");
+        let nil = ctx.global(
+            alg::QualifiedIdentifier::simple_sorted(nil_sym, list_x.clone()),
+            Some(list_x),
+        );
+
+        let y_sym = ctx.allocate_symbol("y");
+        let y_id = ctx.new_local();
+        let y_local = ctx.local(Local {
+            id: y_id,
+            symbol: y_sym.clone(),
+            sort: None,
+        });
+        let let_term = ctx.let_term(vec![VarBinding(y_sym, y_id, nil)], y_local);
+
+        let bool_sort = ctx.bool_sort();
+        let subst: SortSubst = [(x_sym, Some(bool_sort))].into_iter().collect();
+        let result = let_term.monomorphize(&subst, &mut ctx);
+        assert_eq!(result.to_string(), "(let ((y (as nil (List Bool)))) y)");
+        result.type_check(&mut ctx).unwrap();
+    }
+
+    /// Test monomorphizing a quantified term with sort variables in the bound variable sorts.
+    /// Builds `(forall ((x X)) (= x x))` with sort variable `X`, monomorphizes with `X -> Real`,
+    /// and verifies the result is `(forall ((x Real)) (= x x))`.
+    #[test]
+    fn test_term_monomorphize_forall() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+
+        let var_sym = ctx.allocate_symbol("x");
+        let var_id = ctx.new_local();
+        let var_local = ctx.local(Local {
+            id: var_id,
+            symbol: var_sym.clone(),
+            sort: Some(x_sort.clone()),
+        });
+        let eq = ctx.eq(var_local.clone(), var_local);
+        let forall = ctx.forall(vec![VarBinding(var_sym, var_id, x_sort)], eq);
+
+        let real = ctx.real_sort();
+        let subst: SortSubst = [(x_sym, Some(real))].into_iter().collect();
+        let result = forall.monomorphize(&subst, &mut ctx);
+        assert_eq!(result.to_string(), "(forall ((x Real)) (= x x))");
+        result.type_check(&mut ctx).unwrap();
     }
 }
