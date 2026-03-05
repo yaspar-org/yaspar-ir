@@ -34,6 +34,9 @@ use regex::Captures;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::str::FromStr;
+use unif::SortSubst;
+
+pub(crate) mod unif;
 
 /// Type-checking monad
 pub type TC<T> = Result<T, String>;
@@ -221,7 +224,7 @@ pub(crate) fn sort_mismatch<T>(
 }
 
 pub(crate) fn check_subst_instantiation(subst: &SortSubst, t: impl Display) -> TC<()> {
-    let vs = subst_missed_vars(subst);
+    let vs = unif::subst_missed_vars(subst);
     if !vs.is_empty() {
         Err(format!(
             "TC: term {} does not have enough information to determine all sort variable(s): {}!",
@@ -300,88 +303,6 @@ where
     Ok((vs, nt))
 }
 
-/// A [SortSubst] is a substitution from sort variables to ground sorts (sorts with no open variables)
-pub(crate) type SortSubst = HashMap<Str, Option<Sort>>;
-
-/// Unify a ground sort with an expected sort with potential open sort variables; update the
-/// substitution if necessary
-fn sort_unification(subst: &mut SortSubst, expected: &Sort, ground: &Sort) -> TC<bool> {
-    // 1. if [ground] has arity > 0, then it's not possible for [expected] itself to be parametric
-    if ground.1.is_empty() {
-        // 2. in this case, it is possible for expected to be a variable, so we must check it
-        let esymb = &expected.repr().0.symbol;
-        if let Some(v) = subst.get(esymb) {
-            // 3. then it is a variable,
-            match v {
-                None => {
-                    // 3.1. but this variable is not unified, so we unify it with a ground type
-                    subst.insert(esymb.clone(), Some(ground.clone()));
-                    Ok(true)
-                }
-                Some(v) => Ok(*v == *ground), // otherwise, we must make sure the unified sort matches with [ground]
-            }
-        } else {
-            // 3. then expected and ground must be equal
-            Ok(*expected == *ground)
-        }
-    } else if expected.1.len() != ground.1.len() {
-        Err(format!(
-            "TC: sort mismatch: {} and {} cannot be unified!",
-            ground, expected
-        ))
-    } else {
-        // 2. [expected] and [ground]'s sort parameters are recursively unified
-        for (e, g) in expected.1.iter().zip(ground.1.iter()) {
-            if !sort_unification(subst, e, g)? {
-                return Ok(false);
-            }
-        }
-        // 3. in this case, we know all sort parameters match up, so sorts are unified
-        Ok(true)
-    }
-}
-
-fn empty_subst(vs: &[Str]) -> SortSubst {
-    vs.iter().map(|s| (s.clone(), None)).collect()
-}
-
-/// Return variables in a substitutions that have not determined a sort
-fn subst_missed_vars(subst: &SortSubst) -> Vec<Str> {
-    subst
-        .iter()
-        .filter_map(|(k, v)| if v.is_none() { Some(k.clone()) } else { None })
-        .collect()
-}
-
-pub(crate) fn apply_subst<A: HasArenaAlt>(arena: &mut A, subst: &SortSubst, s: &Sort) -> Sort {
-    if s.1.is_empty() {
-        let sym = &s.repr().0.symbol;
-        if let Some(Some(v)) = subst.get(sym) {
-            v.clone()
-        } else {
-            s.clone()
-        }
-    } else {
-        let ss = s.1.iter().map(|s| apply_subst(arena, subst, s)).collect();
-        arena.arena_alt().sort(s.repr().0.clone(), ss)
-    }
-}
-
-fn format_subst(subst: &SortSubst) -> String {
-    subst
-        .iter()
-        .map(|(k, v)| match v {
-            None => {
-                format!("?/{}", k)
-            }
-            Some(v) => {
-                format!("{}/{}", v, k)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// Check and return a valid bit vector sort
 fn valid_bv_sort<T>(env: &mut T, sz: UBig) -> TC<Sort>
 where
@@ -444,7 +365,7 @@ where
                         .zip(sorts)
                         .map(|(k, v)| (k, Some(v)))
                         .collect();
-                    let s = apply_subst(env, &subst, sort);
+                    let s = unif::apply_subst(env, &subst, sort);
                     Ok(s)
                 }
             }
@@ -496,7 +417,7 @@ fn type_check_func_arg_with_implicit_coercion(
     subst: &mut SortSubst,
 ) -> TC<Either<Sort, Term>> {
     let ns = t.get_sort(env);
-    let unifiable = sort_unification(subst, expected, &ns)?;
+    let unifiable = unif::sort_unification(subst, expected, &ns)?;
     if unifiable {
         return Ok(Either::Right(t.clone()));
     }
@@ -507,7 +428,7 @@ fn type_check_func_arg_with_implicit_coercion(
     }
 
     // 2. otherwise, we have to check whether there should be an implicit coercion.
-    let expected_substed = apply_subst(env, subst, expected);
+    let expected_substed = unif::apply_subst(env, subst, expected);
     if ns.is_int() && expected_substed.is_real() {
         // 3. if `t` has sort `Int` and is expected to have sort `Real`, then `to_real` is inserted.
         // this seems to be the only specified implicit coercion in the spec, so we just handle it
@@ -659,7 +580,7 @@ fn type_check_with_func_sig(
             Ok(env.arena.app(f.clone(), new_args, Some(o.clone())))
         }
         Sig::ParFunc(sig_indices, vs, ss, s) => {
-            let mut subst: SortSubst = empty_subst(vs);
+            let mut subst: SortSubst = unif::empty_subst(vs);
 
             // 3.0 determine the sorts for indices
             check_sig_indices(f, f_meta, sig_indices)?;
@@ -685,7 +606,7 @@ fn type_check_with_func_sig(
                         return Err(format!(
                             "TC: the {i}'th argument{nt_meta} of function '{}' expects sort {s} but was given {ns}! subst: {}",
                             f.id_str().sym_quote(),
-                            format_subst(&subst)
+                            unif::format_subst(&subst)
                         ));
                     }
                     Either::Right(nt) => new_args.push(nt),
@@ -694,14 +615,14 @@ fn type_check_with_func_sig(
 
             // 3.3 if sorts of the overall application is ascribed, then this sort must also match.
             if let Some(fs) = &f.1
-                && !sort_unification(&mut subst, s, fs)?
+                && !unif::sort_unification(&mut subst, s, fs)?
             {
                 return sort_mismatch(fs, s, t, app_string);
             }
 
             // 3.4 do the same for the ascribed sort
             if let Some(outs) = outs
-                && !sort_unification(&mut subst, s, outs)?
+                && !unif::sort_unification(&mut subst, s, outs)?
             {
                 return sort_mismatch(outs, s, t, app_string);
             }
@@ -710,7 +631,7 @@ fn type_check_with_func_sig(
             check_subst_instantiation(&subst, t)?;
 
             // passing all tests
-            let ret_sort = apply_subst(env, &subst, s);
+            let ret_sort = unif::apply_subst(env, &subst, s);
             Ok(env.arena.app(f.clone(), new_args, Some(ret_sort)))
         }
         Sig::BvFunc(m, n, is_extract, ss, s) => {
@@ -1250,9 +1171,9 @@ pub(crate) fn typed_qualified_identifier(
                         }
                         Some(s) => {
                             // now we prepare a substitution
-                            let mut subst: SortSubst = empty_subst(pars);
+                            let mut subst: SortSubst = unif::empty_subst(pars);
                             // we first unify the ascribed sort with the sort in the symbol table
-                            if !sort_unification(&mut subst, out, &s)? {
+                            if !unif::sort_unification(&mut subst, out, &s)? {
                                 return sort_mismatch(&s, out, &qid, meta_string);
                             }
 
@@ -1348,9 +1269,9 @@ fn tc_determine_datatype_dec<'a>(
     let dt = env
         .get_datatype_dec(&sort_name)
         .map_err(|_| format!("TC: sort {sort_name} of the given term{meta} is not a datatype!"))?;
-    let mut subst: SortSubst = empty_subst(&dt.params);
+    let mut subst: SortSubst = unif::empty_subst(&dt.params);
     let expected = env.arena.sort_n_params(sort_name, dt.params.clone());
-    if !sort_unification(&mut subst, &expected, &so)? {
+    if !unif::sort_unification(&mut subst, &expected, &so)? {
         return Err(format!(
             "TC: {t}{meta} has sort {so}, which fails to unify with {expected}!"
         ));
@@ -1376,7 +1297,7 @@ pub(crate) fn tc_determine_datatype_sort_map(
                 ctor.ctor.clone(),
                 ctor.args
                     .iter()
-                    .map(|arg| apply_subst(env, &subst, &arg.2))
+                    .map(|arg| unif::apply_subst(env, &subst, &arg.2))
                     .collect(),
             )
         })
