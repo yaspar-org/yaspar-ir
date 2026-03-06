@@ -849,6 +849,8 @@ pub struct FunctionDef<Str, So, T> {
     /// Name of the function
     pub name: Str,
     /// A list of sort parameters
+    ///
+    /// Invariant: this list of parameters is identical to the list of parameters in the corresponding signature
     pub sort_params: Vec<Str>,
     /// Variables of the function
     pub vars: Vec<VarBinding<Str, So>>,

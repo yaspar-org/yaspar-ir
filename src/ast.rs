@@ -25,7 +25,7 @@ pub use crate::raw::alg;
 pub use crate::raw::letelim::*;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck};
 pub use crate::untyped as u;
-pub use gsubst::{GlobalSubstInplace, GlobalSubstPreproc};
+pub use gsubst::GlobalSubst;
 pub use mono::Monomorphization;
 pub use subst::{Substitute, Substitution};
 

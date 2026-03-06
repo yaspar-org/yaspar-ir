@@ -350,7 +350,7 @@ impl Context {
     {
         let symbol = symbol.allocate(self.arena());
         self.can_add_symbol(&symbol)?;
-        self.insert_symbol(symbol, sig, FunctionMeta::Opaque);
+        self.insert_symbol(symbol, sig, FunctionMeta::OpaqueDeclared);
         Ok(())
     }
 
@@ -380,7 +380,7 @@ impl Context {
         let symbol = symbol.allocate(self.arena());
         self.check_special_symbols(&symbol)?;
         self.check_bv_sym(&symbol)?;
-        self.push_symbol(symbol, sig, FunctionMeta::Opaque);
+        self.push_symbol(symbol, sig, FunctionMeta::OpaqueDeclared);
         Ok(())
     }
 
@@ -475,17 +475,23 @@ impl Context {
         self.symbol_table.get(symbol).map(|sigs| sigs.as_slice())
     }
 
-    /// Get the definition associated with the given name
-    pub fn get_definition(&self, symbol: &Str) -> Option<&FunctionMetaDefined> {
+    /// Get the signature and definition associated with the given name
+    pub fn get_sig_and_definition(&self, symbol: &Str) -> Option<(&Sig, &FunctionMetaDefined)> {
         self.get_symbol_binding(symbol).and_then(|sigs| {
-            sigs.iter().find_map(|(_, m)| {
-                if let FunctionMeta::Defined(d) = m {
-                    Some(d)
-                } else {
-                    None
-                }
+            sigs.iter().find_map(|(sig, m)| match m {
+                FunctionMeta::Defined(d)
+                | FunctionMeta::Datatype {
+                    kind: DatatypeFunction::TesterDefined(d),
+                    ..
+                } => Some((sig, d)),
+                _ => None,
             })
         })
+    }
+
+    /// Get the definition associated with the given name
+    pub fn get_definition(&self, symbol: &Str) -> Option<&FunctionMetaDefined> {
+        self.get_sig_and_definition(symbol).map(|(_, d)| d)
     }
 
     /// Return the definition of the sort bound to a given name
@@ -508,6 +514,20 @@ impl Context {
                         }
                     })
                     .next()
+            })
+            .collect()
+    }
+
+    /// Returns the set of all builtin function symbols in the current context
+    pub fn builtin_symbols(&self) -> HashSet<Str> {
+        self.symbol_table
+            .iter()
+            .filter_map(|(name, sigs)| {
+                if sigs.iter().any(|(_, meta)| meta.is_builtin()) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -764,5 +784,33 @@ mod tests {
             .unwrap();
         // 2.6 in set-info shouldn't matter
         cmd.type_check(&mut context).unwrap();
+    }
+
+    #[test]
+    fn test_is_builtin() {
+        assert!(FunctionMeta::Opaque.is_builtin());
+        assert!(!FunctionMeta::OpaqueDeclared.is_builtin());
+    }
+
+    #[test]
+    fn test_builtin_symbols() {
+        let mut context = Context::new();
+        UntypedAst
+            .parse_script_str(
+                r#"
+            (set-logic QF_LIA)
+            (declare-const x Int)
+            (declare-fun f (Int) Int)
+        "#,
+            )
+            .unwrap()
+            .type_check(&mut context)
+            .unwrap();
+
+        let builtins = context.builtin_symbols();
+        assert!(builtins.contains(&context.allocate_symbol("+")));
+        assert!(builtins.contains(&context.allocate_symbol("-")));
+        assert!(!builtins.contains(&context.allocate_symbol("x")));
+        assert!(!builtins.contains(&context.allocate_symbol("f")));
     }
 }

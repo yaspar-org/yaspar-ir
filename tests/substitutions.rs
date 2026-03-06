@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dashu::integer::UBig;
-use yaspar_ir::ast::gsubst::{GlobalSubstInplace, GlobalSubstPreproc};
+use yaspar_ir::ast::gsubst::GlobalSubst;
 use yaspar_ir::ast::subst::{Substitute, Substitution};
 use yaspar_ir::ast::{CheckedApi, Context, LetElim, ObjectAllocatorExt, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
@@ -121,19 +121,18 @@ fn test_global_substitutions() {
         .type_check(&mut context)
         .unwrap();
 
-    // preproc
     let z = context.typed_symbol("z").unwrap();
-    let nz = z.gsubst_preproc(["y"], &mut context);
+    let nz = z.gsubst(["y"], &mut context);
     assert_eq!(nz.to_string(), "z");
-    let nz = z.gsubst_preproc(["z", "max"], &mut context);
+    let nz = z.gsubst(["z", "max"], &mut context);
     assert_eq!(nz.to_string(), "(ite (> (* x y) y) (* x y) y)");
-    let nz = z.gsubst_preproc(["z", "max", "y"], &mut context);
+    let nz = z.gsubst(["z", "max", "y"], &mut context);
     assert_eq!(
         nz.to_string(),
         "(ite (> (* x (/ x 100.1)) (/ x 100.1)) (* x (/ x 100.1)) (/ x 100.1))"
     );
     let all = context.all_defined_symbols();
-    let nz = z.gsubst_preproc(&all, &mut context);
+    let nz = z.gsubst(&all, &mut context);
     assert_eq!(
         nz.to_string(),
         "(ite (> (* x (/ x 100.1)) (/ x 100.1)) (* x (/ x 100.1)) (/ x 100.1))"
@@ -148,40 +147,7 @@ fn test_global_substitutions() {
     let app = context
         .typed_simp_app("append", [nil.clone(), nil.clone()])
         .unwrap();
-    let napp = app.gsubst_preproc(["append"], &mut context);
-    assert_eq!(
-        napp.to_string(),
-        "(match (as nil (List Real)) ((nil (as nil (List Real))) ((cons a l1) (cons a (append l1 (as nil (List Real)))))))"
-    );
-
-    // inplace
-    let z = context.typed_symbol("z").unwrap();
-    let nz = z.gsubst_inplace(["y"], &mut context);
-    assert_eq!(nz.to_string(), "z");
-    let nz = z.gsubst_inplace(["z", "max"], &mut context);
-    assert_eq!(nz.to_string(), "(ite (> (* x y) y) (* x y) y)");
-    let nz = z.gsubst_inplace(["z", "max", "y"], &mut context);
-    assert_eq!(
-        nz.to_string(),
-        "(ite (> (* x (/ x 100.1)) (/ x 100.1)) (* x (/ x 100.1)) (/ x 100.1))"
-    );
-    let all = context.all_defined_symbols();
-    let nz = z.gsubst_inplace(&all, &mut context);
-    assert_eq!(
-        nz.to_string(),
-        "(ite (> (* x (/ x 100.1)) (/ x 100.1)) (* x (/ x 100.1)) (/ x 100.1))"
-    );
-
-    let real_list = UntypedAst
-        .parse_sort_str("(List Real)")
-        .unwrap()
-        .type_check(&mut context)
-        .unwrap();
-    let nil = context.typed_symbol_with_sort("nil", real_list).unwrap();
-    let app = context
-        .typed_simp_app("append", [nil.clone(), nil.clone()])
-        .unwrap();
-    let napp = app.gsubst_inplace(["append"], &mut context);
+    let napp = app.gsubst(["append"], &mut context);
     assert_eq!(
         napp.to_string(),
         "(match (as nil (List Real)) ((nil (as nil (List Real))) ((cons a l1) (cons a (append l1 (as nil (List Real)))))))"
@@ -206,10 +172,7 @@ fn test_gsubst_define_fun() {
     let y = ctx.typed_symbol("y").unwrap();
     let double_y = ctx.typed_simp_app("double", [y]).unwrap();
 
-    let expanded = double_y.gsubst_preproc(["double"], &mut ctx);
-    assert_eq!(expanded.to_string(), "(+ y y)");
-
-    let expanded_inplace = double_y.gsubst_inplace(["double"], &mut ctx);
+    let expanded_inplace = double_y.gsubst(["double"], &mut ctx);
     assert_eq!(expanded_inplace.to_string(), "(+ y y)");
 }
 
@@ -233,10 +196,7 @@ fn test_gsubst_multiple_definitions() {
     let dec_z = ctx.typed_simp_app("dec", [z.clone()]).unwrap();
     let inc_dec_z = ctx.typed_simp_app("inc", [dec_z]).unwrap();
 
-    let expanded = inc_dec_z.gsubst_preproc(["inc", "dec"], &mut ctx);
-    assert_eq!(expanded.to_string(), "(+ (- z 1) 1)");
-
-    let expanded_inplace = inc_dec_z.gsubst_inplace(["inc", "dec"], &mut ctx);
+    let expanded_inplace = inc_dec_z.gsubst(["inc", "dec"], &mut ctx);
     assert_eq!(expanded_inplace.to_string(), "(+ (- z 1) 1)");
 }
 
@@ -259,10 +219,7 @@ fn test_gsubst_nested_definitions() {
     let a = ctx.typed_symbol("a").unwrap();
     let quad_a = ctx.typed_simp_app("quad", [a]).unwrap();
 
-    let expanded = quad_a.gsubst_preproc(["quad", "square"], &mut ctx);
-    assert_eq!(expanded.to_string(), "(* (* a a) (* a a))");
-
-    let expanded_inplace = quad_a.gsubst_inplace(["quad", "square"], &mut ctx);
+    let expanded_inplace = quad_a.gsubst(["quad", "square"], &mut ctx);
     assert_eq!(expanded_inplace.to_string(), "(* (* a a) (* a a))");
 }
 
@@ -290,10 +247,8 @@ fn test_gsubst_with_quantifier() {
     let forall = q_ctx.typed_forall(eq).unwrap();
 
     assert_eq!(forall.to_string(), "(forall ((z Int)) (= (double z) y))");
-    let expanded = forall.gsubst_preproc(["double"], &mut ctx);
-    assert_eq!(expanded.to_string(), "(forall ((z Int)) (= (+ z z) y))");
 
-    let expanded_inplace = forall.gsubst_inplace(["double"], &mut ctx);
+    let expanded_inplace = forall.gsubst(["double"], &mut ctx);
     assert_eq!(
         expanded_inplace.to_string(),
         "(forall ((z Int)) (= (+ z z) y))"
@@ -323,10 +278,8 @@ fn test_gsubst_with_let() {
     let let_term = l_ctx.typed_let(inc_b);
 
     assert_eq!(let_term.to_string(), "(let ((b (inc a))) (inc b))");
-    let expanded = let_term.gsubst_preproc(["inc"], &mut ctx);
-    assert_eq!(expanded.to_string(), "(let ((b (+ a 1))) (+ b 1))");
 
-    let expanded_inplace = let_term.gsubst_inplace(["inc"], &mut ctx);
+    let expanded_inplace = let_term.gsubst(["inc"], &mut ctx);
     assert_eq!(expanded_inplace.to_string(), "(let ((b (+ a 1))) (+ b 1))");
 }
 
@@ -359,13 +312,8 @@ fn test_gsubst_nested_binders() {
         exists.to_string(),
         "(exists ((x Int)) (let ((y (square x))) (= (square y) x)))"
     );
-    let expanded = exists.gsubst_preproc(["square"], &mut ctx);
-    assert_eq!(
-        expanded.to_string(),
-        "(exists ((x Int)) (let ((y (* x x))) (= (* y y) x)))"
-    );
 
-    let expanded_inplace = exists.gsubst_inplace(["square"], &mut ctx);
+    let expanded_inplace = exists.gsubst(["square"], &mut ctx);
     assert_eq!(
         expanded_inplace.to_string(),
         "(exists ((x Int)) (let ((y (* x x))) (= (* y y) x)))"
@@ -396,7 +344,7 @@ fn test_gsubst_shadowing_in_quantifier() {
     let forall = q_ctx.typed_forall(eq).unwrap();
 
     assert_eq!(forall.to_string(), "(forall ((x Int)) (= (f x) y))");
-    let expanded = forall.gsubst_preproc(["f"], &mut ctx);
+    let expanded = forall.gsubst(["f"], &mut ctx);
     assert_eq!(expanded.to_string(), "(forall ((x Int)) (= (+ x 1) y))");
 }
 
@@ -423,11 +371,11 @@ fn test_gsubst_shadowing_in_let() {
     let let_term = l_ctx.typed_let(g_y_local);
 
     assert_eq!(let_term.to_string(), "(let ((y (g y))) (g y))");
-    let expanded = let_term.gsubst_preproc(["g"], &mut ctx);
+    let expanded = let_term.gsubst(["g"], &mut ctx);
     assert_eq!(expanded.to_string(), "(let ((y (* y 2))) (* y 2))");
 
     assert_eq!(
-        let_term.let_elim(&mut ctx).gsubst_inplace(["g"], &mut ctx),
+        let_term.let_elim(&mut ctx).gsubst(["g"], &mut ctx),
         expanded.let_elim(&mut ctx)
     );
 }
@@ -462,7 +410,7 @@ fn test_gsubst_nested_shadowing() {
         forall.to_string(),
         "(forall ((z Int)) (exists ((z Int)) (= (h z) z)))"
     );
-    let expanded = forall.gsubst_preproc(["h"], &mut ctx);
+    let expanded = forall.gsubst(["h"], &mut ctx);
     assert_eq!(
         expanded.to_string(),
         "(forall ((z Int)) (exists ((z Int)) (= (- z 1) z)))"
@@ -487,11 +435,9 @@ fn test_gsubst_datatype_tester() {
     let l = ctx.typed_symbol("l").unwrap();
     let is_nil = ctx.typed_simp_app("is-nil", [l.clone()]).unwrap();
 
-    let expanded = is_nil.gsubst_preproc(["is-nil"], &mut ctx);
-    assert_eq!(expanded.to_string(), "((_ is nil) l)");
-
-    let expanded_inplace = is_nil.gsubst_inplace(["is-nil"], &mut ctx);
+    let expanded_inplace = is_nil.gsubst(["is-nil"], &mut ctx);
     assert_eq!(expanded_inplace.to_string(), "((_ is nil) l)");
+    expanded_inplace.type_check(&mut ctx).unwrap();
 }
 
 #[test]
@@ -514,14 +460,12 @@ fn test_gsubst_datatype_tester_in_formula() {
     let is_cons = ctx.typed_simp_app("is-cons", [l.clone()]).unwrap();
     let formula = ctx.typed_or([is_nil, is_cons]).unwrap();
 
-    let expanded = formula.gsubst_preproc(["is-nil", "is-cons"], &mut ctx);
-    assert_eq!(expanded.to_string(), "(or ((_ is nil) l) ((_ is cons) l))");
-
-    let expanded_inplace = formula.gsubst_inplace(["is-nil", "is-cons"], &mut ctx);
+    let expanded_inplace = formula.gsubst(["is-nil", "is-cons"], &mut ctx);
     assert_eq!(
         expanded_inplace.to_string(),
         "(or ((_ is nil) l) ((_ is cons) l))"
     );
+    expanded_inplace.type_check(&mut ctx).unwrap();
 }
 
 #[test]
@@ -549,17 +493,12 @@ fn test_gsubst_datatype_tester_with_quantifier() {
     let forall = q_ctx.typed_forall(is_nil).unwrap();
 
     assert_eq!(forall.to_string(), "(forall ((x (List Int))) (is-nil x))");
-    let expanded = forall.gsubst_preproc(["is-nil"], &mut ctx);
-    assert_eq!(
-        expanded.to_string(),
-        "(forall ((x (List Int))) ((_ is nil) x))"
-    );
-
-    let expanded_inplace = forall.gsubst_inplace(["is-nil"], &mut ctx);
+    let expanded_inplace = forall.gsubst(["is-nil"], &mut ctx);
     assert_eq!(
         expanded_inplace.to_string(),
         "(forall ((x (List Int))) ((_ is nil) x))"
     );
+    expanded_inplace.type_check(&mut ctx).unwrap();
 }
 
 #[test]
@@ -582,15 +521,10 @@ fn test_gsubst_multiple_datatype_testers() {
     let is_some = ctx.typed_simp_app("is-some", [opt.clone()]).unwrap();
     let xor = ctx.typed_xor([is_none, is_some]).unwrap();
 
-    let expanded = xor.gsubst_preproc(["is-none", "is-some"], &mut ctx);
-    assert_eq!(
-        expanded.to_string(),
-        "(xor ((_ is none) opt) ((_ is some) opt))"
-    );
-
-    let expanded_inplace = xor.gsubst_inplace(["is-none", "is-some"], &mut ctx);
+    let expanded_inplace = xor.gsubst(["is-none", "is-some"], &mut ctx);
     assert_eq!(
         expanded_inplace.to_string(),
         "(xor ((_ is none) opt) ((_ is some) opt))"
     );
+    expanded_inplace.type_check(&mut ctx).unwrap();
 }

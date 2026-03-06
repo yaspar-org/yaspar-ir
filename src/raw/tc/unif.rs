@@ -12,8 +12,8 @@ pub(crate) type SortSubst = HashMap<Str, Option<Sort>>;
 /// Unify a ground sort with an expected sort with potential open sort variables; update the
 /// substitution if necessary
 pub fn sort_unification(subst: &mut SortSubst, expected: &Sort, ground: &Sort) -> TC<bool> {
-    // 1. if [ground] has arity > 0, then it's not possible for [expected] itself to be parametric
-    if ground.1.is_empty() {
+    // 1. if [expected] has arity > 0, then it's not possible for [expected] itself to be parametric
+    if expected.1.is_empty() {
         // 2. in this case, it is possible for expected to be a variable, so we must check it
         let esymb = &expected.repr().0.symbol;
         if let Some(v) = subst.get(esymb) {
@@ -33,7 +33,7 @@ pub fn sort_unification(subst: &mut SortSubst, expected: &Sort, ground: &Sort) -
     } else if expected.1.len() != ground.1.len() {
         Err(format!(
             "TC: sort mismatch: {} and {} cannot be unified!",
-            ground, expected
+            ground, expected,
         ))
     } else {
         // 2. [expected] and [ground]'s sort parameters are recursively unified
@@ -71,6 +71,19 @@ pub(crate) fn apply_subst<A: HasArenaAlt>(arena: &mut A, subst: &SortSubst, s: &
         let ss = s.1.iter().map(|s| apply_subst(arena, subst, s)).collect();
         arena.arena_alt().sort(s.repr().0.clone(), ss)
     }
+}
+
+/// instantiate a given sort substitution with a sequence of (expected, ground) sort pairs
+pub fn instantiate_subst<'a, 'b>(
+    subst: &mut SortSubst,
+    eg_pairs: impl IntoIterator<Item = (&'a Sort, &'b Sort)>,
+) -> TC<bool> {
+    for (expected, ground) in eg_pairs {
+        if !sort_unification(subst, expected, ground)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub fn format_subst(subst: &SortSubst) -> String {
