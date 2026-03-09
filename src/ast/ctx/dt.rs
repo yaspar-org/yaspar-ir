@@ -27,9 +27,21 @@ struct DatatypeDefs {
     dt_defs: HashMap<Str, DatatypeDef>,
 }
 
-/// It is a builder context for datatypes
+/// A builder context for declaring one or more datatypes (`declare-datatype(s)`).
 ///
-/// c.f. [DatatypeContext::build_datatype] and [DatatypeContext::typed_declare_datatypes]
+/// Created via [`Context::build_datatypes`]. Datatype names and their sort parameters are
+/// declared upfront. For each datatype, call [`build_datatype`](Self::build_datatype) to obtain
+/// a [`DtDeclContext`], add constructors inside it, and finalize with
+/// [`DtDeclContext::typed_datatype`]. Once all datatypes are defined, call
+/// [`typed_declare_datatypes`](Self::typed_declare_datatypes) to produce the command.
+///
+/// The context validates non-emptiness (every datatype must have at least one non-recursive
+/// constructor path), constructor/selector name uniqueness, and sort parameter scoping.
+///
+/// If the context is dropped without calling `typed_declare_datatypes`, no changes are made to
+/// the global context (the operation is transactional).
+///
+/// For simple enums without fields, use [`Context::typed_enum`] as a shorthand.
 pub struct DatatypeContext<'a> {
     context: &'a mut Context,
     /// Invariant: almost always Some; it is only None when we confirm we have managed to build
@@ -39,9 +51,13 @@ pub struct DatatypeContext<'a> {
     additional_symbols: HashSet<Str>,
 }
 
-/// It is a builder context for individual datatype declarations
+/// A builder context for declaring the constructors of a single datatype within a [`DatatypeContext`].
 ///
-/// c.f. [DtDeclContext::build_datatype_constructor] and [DtDeclContext::typed_datatype]
+/// Created via [`DatatypeContext::build_datatype`]. Sort parameters (e.g. `X` in `List X`) are
+/// in scope and can be referenced via [`ScopedSortApi::wf_sort`]. Add constructors with
+/// [`build_datatype_constructor`](Self::build_datatype_constructor) or
+/// [`build_datatype_constructor_nullary`](Self::build_datatype_constructor_nullary), then
+/// finalize with [`typed_datatype`](Self::typed_datatype).
 pub struct DtDeclContext<'a, 'b> {
     parent: &'b mut DatatypeContext<'a>,
     params: Vec<VarBinding<Str, ()>>,

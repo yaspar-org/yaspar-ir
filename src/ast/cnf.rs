@@ -1,9 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the NNF and CNF conversion algorithms
+//! NNF (Negation Normal Form) and CNF (Conjunctive Normal Form) conversion algorithms.
 //!
-//! It is enabled using `cnf`.
+//! This module provides the [`CNFConversion`] trait with three operations:
+//!
+//! - `nnf(env)` — convert a Boolean term to Negation Normal Form (negations pushed to literals).
+//! - `cnf(env)` — convert to a SAT [`Formula`](sat_interface::Formula) in CNF.
+//! - `cnf_tseitin(env)` — convert to CNF using the Tseitin transformation for a bidirectional
+//!   (equisatisfiable) encoding, which avoids exponential blowup.
+//!
+//! Best used after let-elimination. Inputs must have sort `Bool`.
+//!
+//! Requires the `cnf` feature flag.
 
 use crate::ast::{
     AConstant, ATerm, Arena, FetchSort, FlatConnectivesExt, ObjectAllocatorExt, Term, TermAllocator,

@@ -15,9 +15,46 @@ use crate::raw::tc::{sort_mismatch, tc_determine_datatype_sort_map};
 use crate::traits::AllocatableString;
 use std::collections::{HashMap, HashSet};
 
-/// It's a builder context for building a match expression
+/// A builder context for constructing `match` expressions over datatype values.
 ///
-/// c.f. [MatchContext::build_arm] and [MatchContext::typed_matching]
+/// Created via [`CheckedApi::build_matching`]. The scrutinee must have a datatype sort.
+///
+/// Arms are added one at a time via [`build_arm`](Self::build_arm) (for constructors with
+/// arguments), [`build_arm_nullary`](Self::build_arm_nullary) (for nullary constructors),
+/// [`build_arm_wildcard`](Self::build_arm_wildcard) (for a named wildcard), or
+/// [`build_arm_catchall`](Self::build_arm_catchall) (for `_`). Each returns an [`ArmContext`]
+/// in which the pattern-bound variables are in scope; finalize each arm with
+/// [`ArmContext::typed_arm`].
+///
+/// The context tracks constructor coverage. Once all constructors are covered (or a wildcard
+/// arm is present), call [`typed_matching`](Self::typed_matching) to produce the match term.
+/// It returns `Err` if coverage is incomplete. All arm bodies must have the same sort.
+///
+/// # Example
+///
+/// ```rust
+/// use yaspar_ir::ast::{CheckedApi, Context, ScopedSortApi, Typecheck};
+/// use yaspar_ir::untyped::UntypedAst;
+///
+/// let mut context = Context::new();
+/// UntypedAst.parse_script_str(
+///     "(set-logic ALL) \
+///      (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X)))))) \
+///      (declare-const l (List Int))"
+/// ).unwrap().type_check(&mut context).unwrap();
+/// let l = context.typed_symbol("l").unwrap();
+/// let zero = context.numeral(0u8.into()).unwrap();
+/// let mut m = context.build_matching(l).unwrap();
+/// // nil arm
+/// let nil_arm = m.build_arm_nullary("nil").unwrap();
+/// nil_arm.typed_arm(zero.clone()).unwrap();
+/// // cons arm — use head element
+/// let mut cons_arm = m.build_arm("cons", [Some("h"), Some("t")]).unwrap();
+/// let h = cons_arm.typed_symbol("h").unwrap();
+/// cons_arm.typed_arm(h).unwrap();
+/// let term = m.typed_matching().unwrap();
+/// assert_eq!(term.to_string(), "(match l ((nil 0) ((cons h t) h)))");
+/// ```
 pub struct MatchContext<'a, 'b> {
     context: &'a mut Context,
     tail: LocEnv<'b, Str, Sort>,
@@ -29,9 +66,15 @@ pub struct MatchContext<'a, 'b> {
     arm_sort: Option<Sort>,
 }
 
-/// It's a builder context for building an individual arm in a match expression
+/// A builder context for an individual arm within a [`MatchContext`].
 ///
-/// c.f. [ArmContext::typed_arm]
+/// Created by [`MatchContext::build_arm`], [`MatchContext::build_arm_nullary`],
+/// [`MatchContext::build_arm_wildcard`], or [`MatchContext::build_arm_catchall`].
+///
+/// Pattern-bound variables (e.g. `h` and `t` for a `cons` pattern) are in scope inside this
+/// context. Build the arm body using any [`CheckedApi`] method, then finalize with
+/// [`typed_arm`](Self::typed_arm), which validates that the body sort matches other arms and
+/// returns control to the parent [`MatchContext`].
 pub struct ArmContext<'a, 'b, 'c> {
     parent: &'c mut MatchContext<'a, 'b>,
     env: Vec<VarBinding<Str, Sort>>,

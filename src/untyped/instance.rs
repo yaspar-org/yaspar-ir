@@ -1,7 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module instantiates untyped AST
+//! Untyped AST instantiation and the parser entry point.
+//!
+//! This module instantiates the parametric algebraic ASTs from [`crate::raw::alg`] with the
+//! [`Untyped`] wrapper, which associates each AST node with a source location
+//! ([`Range`](yaspar::position::Range)). This location information is used for error reporting
+//! during type-checking.
+//!
+//! The [`UntypedAst`] struct provides the parsing entry points that produce untyped ASTs from
+//! strings. It delegates to the `yaspar` parser library.
 
 use crate::allocator::StrAllocator;
 use crate::ast::{ACommand, AConstant, AIndex, ATerm, HasArenaAlt, alg};

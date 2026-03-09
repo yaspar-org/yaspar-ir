@@ -443,6 +443,20 @@ fn test_array4() {
 }
 
 #[test]
+fn test_array5() {
+    let mut context = Context::new();
+    context.ensure_logic();
+    let _term = UntypedAst
+        .parse_script_str(
+            "\
+    (declare-const m (Array Int (Array Int Int)))
+    (declare-const v Int)
+    (assert (= v (select (select m 0) 1)))",
+        )
+        .unwrap();
+}
+
+#[test]
 fn test_datatype1() {
     let mut context = Context::new();
     context.ensure_logic();

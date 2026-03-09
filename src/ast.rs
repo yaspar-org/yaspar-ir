@@ -1,6 +1,35 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Typed AST types, the global context, and term transformation algorithms.
+//!
+//! This is the main module of the crate. It re-exports the core types and traits needed to work
+//! with well-formed SMTLib objects:
+//!
+//! # Core types
+//!
+//! - [`Context`] — the global environment that tracks the current logic, declared sorts, and the
+//!   symbol table. Most operations require a mutable reference to a context.
+//! - [`Term`], [`Sort`], [`Command`] — hashconsed typed AST nodes. Use `.repr()` (from the
+//!   [`Repr`] trait) to pattern-match on their internal structure ([`ATerm`], etc.).
+//! - [`Arena`] — the memory arena that manages hashconsed allocations. Accessed via `Context`.
+//!
+//! # Traits
+//!
+//! - [`CheckedApi`] — well-formedness-checked term building (see the `ctx::checked` module).
+//! - [`ScopedSortApi`] — well-formedness-checked sort building (auto-derived from `CheckedApi`).
+//! - [`Typecheck`] — convert untyped ASTs (or re-check typed ASTs) via `.type_check(&mut ctx)`.
+//! - [`LetElim`] — eliminate let-bindings by inlining bound terms.
+//! - [`Repr`] — access the internal enum representation of a hashconsed object.
+//!
+//! # Sub-modules
+//!
+//! - [`fv`] — free variable computation.
+//! - [`subst`] — local substitution.
+//! - [`gsubst`] — global definition expansion.
+//! - [`letintro`] — let-introduction via topological sorting (inverse of let-elimination).
+//! - [`mono`] — monomorphization of parametric datatypes.
+
 #[cfg(feature = "cnf")]
 pub(crate) mod cnf;
 mod ctx;

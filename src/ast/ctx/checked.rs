@@ -1,6 +1,54 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Checked (well-formedness-preserving) APIs for building SMTLib terms, sorts, and commands.
+//!
+//! This module defines two core traits:
+//!
+//! - [`CheckedApi`]: term-building operations that validate well-formedness through the [`TC<T>`]
+//!   monad (an alias for `Result<T, String>`). Every method checks scope, sort compatibility, and
+//!   arity before constructing a term, returning a descriptive `Err` on failure.
+//!
+//! - [`ScopedSortApi`]: sort-building operations (automatically derived for any [`CheckedApi`]
+//!   implementor) that validate sort existence and parameter counts.
+//!
+//! Both traits are implemented by [`Context`] (the global top-level environment) and by all
+//! builder context types ([`QuantifierContext`], [`LetContext`], [`MatchContext`],
+//! [`FunctionContext`], [`EachRecFunContext`], [`ArmContext`], and [`DefSortContext`]). This means
+//! the same term-building vocabulary is available at every scope level.
+//!
+//! # Builder context pattern
+//!
+//! Scoped constructs (quantifiers, let-bindings, match expressions, function definitions) are
+//! built through *builder contexts*. The typical workflow is:
+//!
+//! 1. Create a builder from the parent context (e.g. `context.build_quantifier()`).
+//! 2. Build terms inside the builder — local bindings are in scope.
+//! 3. Finalize the builder to produce the composite term or command (e.g. `q_ctx.typed_forall(body)`).
+//!
+//! Builder contexts borrow the parent mutably, so the parent cannot be used until the builder is
+//! consumed or dropped. Builders can be nested arbitrarily.
+//!
+//! # Example
+//!
+//! ```rust
+//! use yaspar_ir::ast::{CheckedApi, Context, ScopedSortApi, TC, Term};
+//!
+//! fn build_forall_gt(context: &mut Context) -> TC<Term> {
+//!     let int = context.wf_sort("Int")?;
+//!     let mut q = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)])?;
+//!     let x = q.typed_symbol("x")?;
+//!     let y = q.typed_symbol("y")?;
+//!     let body = q.typed_simp_app(">", [x, y])?;
+//!     q.typed_forall(body)
+//! }
+//!
+//! let mut context = Context::new();
+//! context.ensure_logic();
+//! let term = build_forall_gt(&mut context).unwrap();
+//! assert_eq!(term.to_string(), "(forall ((x Int) (y Int)) (> x y))");
+//! ```
+
 use crate::allocator::{CommandAllocator, ObjectAllocatorExt, StrAllocator, TermAllocator};
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::ds::DefSortContext;
@@ -25,13 +73,28 @@ use dashu::integer::{IBig, Sign, UBig};
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 
-/// The trait that represents checked APIs to construct terms
+/// The trait that represents checked APIs to construct terms.
 ///
-/// This trait makes sure that terms are only built through its guarding TC monad, so that
-/// we are sure that terms must be well-formed; otherwise programmers must maintain well-formedness
-/// themselves if they use "unchecked" APIs.
+/// Every method on this trait validates well-formedness before constructing a term, returning
+/// `Err(message)` (via the [`TC`] monad) when an invariant is violated. This relieves callers
+/// from manually maintaining sort compatibility, scope validity, and arity constraints.
 ///
-/// c.f. [ScopedSortApi]
+/// `CheckedApi` is implemented by [`Context`] (the global environment) and by every builder
+/// context type ([`QuantifierContext`], [`LetContext`], [`MatchContext`], `FunctionContext`,
+/// `EachRecFunContext`, and `ArmContext`). This means the same set of term-building
+/// functions is available at every scope level.
+///
+/// # Categories of methods
+///
+/// - **Symbols & identifiers** — `typed_symbol`, `typed_symbol_with_sort`, `typed_identifier`
+/// - **Function application** — `typed_app`, `typed_simp_app`, `typed_app_with_kind`
+/// - **Literals** — `numeral`, `integer`, `typed_constant`
+/// - **Logical connectives** — `typed_eq`, `typed_distinct`, `typed_and`, `typed_or`,
+///   `typed_xor`, `typed_not`, `typed_implies`, `typed_ite`
+/// - **Builder contexts** — `build_quantifier`, `build_quantifier_with_domain`, `build_let`,
+///   `build_matching`
+///
+/// See also [`ScopedSortApi`] for sort construction.
 pub trait CheckedApi: HasArena {
     /// Obtain a type-checking environment
     ///
@@ -274,9 +337,23 @@ where
     Ok(results)
 }
 
-/// The trait that represents checked APIs to construct sorts
+/// The trait that represents checked APIs to construct sorts.
 ///
-/// c.f. [CheckedApi]
+/// This trait provides well-formedness-checked sort construction. It validates that the sort
+/// exists in the current logic, has the correct number of parameters, and that bitvector
+/// lengths are within bounds.
+///
+/// `ScopedSortApi` is automatically implemented for any type that implements [`CheckedApi`]
+/// (plus the required allocator traits), so all builder contexts inherit these methods.
+///
+/// # Methods
+///
+/// - `wf_sort(name)` — look up a sort by name (e.g. `"Int"`, `"Bool"`, a user-defined sort).
+/// - `wf_sort_n(name, params)` — parameterized sort (e.g. `wf_sort_n("List", [int])` for `(List Int)`).
+/// - `wf_sort_id(id, params)` — sort from an `Identifier` and parameters.
+/// - `wf_bv_sort(len)` — bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds.
+///
+/// See also [`CheckedApi`] for term construction.
 pub trait ScopedSortApi: HasArena {
     /// Obtain a type-checking environment
     ///

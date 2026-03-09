@@ -1,16 +1,25 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Type-checking
+//! Type-checking algorithm for SMTLib ASTs.
 //!
-//! This module checks an object and returns its corresponding typed representation.
+//! This module checks an AST object and returns its corresponding typed representation, or an
+//! error message if the object is malformed. The algorithm is organized as constraint programming
+//! over the parametric algebraic ASTs in [`crate::raw::alg`], which allows it to work with
+//! multiple AST instantiations:
 //!
-//! This module is organized in a form of constraint programming. It has the advantage of being able
-//! to apply to different instantiations of the algebraic ASTs in [crate::raw::alg].
+//! - **Untyped → Typed**: the primary use case, converting parsed untyped ASTs into well-formed
+//!   typed representations.
+//! - **Typed → Typed**: re-checking a typed AST built via unchecked APIs, serving as a golden
+//!   standard for invariant validation during development.
 //!
-//! One example application is to invoke `.type_check()` on a typed AST that is built by a user
-//! using unchecked APIs. In this case, during developing, `.type_check()` can be invoked as a golden
-//! standard and a single point of failure to ensure the AST properly maintains type invariants.
+//! The core types are:
+//!
+//! - [`TC<T>`] — alias for `Result<T, String>`, the type-checking monad.
+//! - [`TCEnv`] — the type-checking environment, carrying the arena, theory set, sort table,
+//!   symbol table, and local variable scope.
+//! - [`Typecheck`] — the trait implemented by all AST nodes; call `.type_check(&mut env)` to
+//!   perform type-checking.
 
 use super::alg;
 use super::alg::VarBinding;

@@ -1,7 +1,32 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module handles the substitution operation
+//! Local substitution of variables in terms.
+//!
+//! This module provides [`Substitution`], a mapping from variable names to replacement terms,
+//! and the [`Substitute`] trait for applying substitutions to terms. The substitution operation
+//! correctly handles variable shadowing in binders (`let`, `forall`, `exists`, `match`):
+//! a substitution for `x` is suspended inside a scope that re-binds `x`.
+//!
+//! # Example
+//!
+//! ```rust
+//! use yaspar_ir::ast::{CheckedApi, Context, ScopedSortApi, Typecheck};
+//! use yaspar_ir::ast::subst::{Substitution, Substitute};
+//! use yaspar_ir::untyped::UntypedAst;
+//!
+//! let mut context = Context::new();
+//! context.ensure_logic();
+//! let int = context.wf_sort("Int").unwrap();
+//! let mut q = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)]).unwrap();
+//! let term = UntypedAst.parse_term_str("(+ x y)").unwrap().type_check(&mut q).unwrap();
+//! let one = q.numeral(1u8.into()).unwrap();
+//! let subst = Substitution::new([("x", one)], &mut q);
+//! let result = term.subst(&subst, &mut q);
+//! assert_eq!(result.to_string(), "(+ 1 y)");
+//! ```
+//!
+//! For expanding global definitions (e.g. `define-fun` bodies), see [`crate::ast::gsubst`].
 
 use crate::allocator::TermAllocator;
 use crate::ast::alg::VarBinding;
@@ -10,7 +35,10 @@ use crate::locenv::MemLinkedList;
 use crate::traits::{AllocatableString, Repr};
 use std::collections::HashMap;
 
-/// a substitution object
+/// A mapping from variable names to replacement terms.
+///
+/// Create with [`Substitution::new`] (from name–term pairs) or [`Substitution::empty`].
+/// Apply to a term via the [`Substitute`] trait.
 pub struct Substitution(HashMap<Str, Option<Term>>);
 
 impl Substitution {

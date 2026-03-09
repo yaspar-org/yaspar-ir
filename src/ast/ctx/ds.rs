@@ -10,9 +10,25 @@ use crate::locenv::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::traits::AllocatableString;
 
-/// It's a builder context for defining a sort alias
+/// A builder context for defining a sort alias (`define-sort`).
 ///
-/// c.f. [Context::build_sort_alias] and [DefSortContext::typed_define_sort]
+/// Created via [`Context::build_sort_alias`]. Sort parameters are in scope and can be
+/// referenced via [`ScopedSortApi::wf_sort`]. Finalize with
+/// [`typed_define_sort`](Self::typed_define_sort), which registers the alias in the global
+/// context and returns the `define-sort` command.
+///
+/// # Example
+///
+/// ```rust
+/// use yaspar_ir::ast::{CheckedApi, Context, ObjectAllocatorExt, ScopedSortApi};
+///
+/// let mut context = Context::new();
+/// context.ensure_logic();
+/// let int = context.wf_sort("Int").unwrap();
+/// let s_ctx = context.build_sort_alias("MyInt", Vec::<&str>::new()).unwrap();
+/// let cmd = s_ctx.typed_define_sort(int).unwrap();
+/// assert_eq!(cmd.to_string(), "(define-sort MyInt () Int)");
+/// ```
 pub struct DefSortContext<'a> {
     context: &'a mut Context,
     name: Str,

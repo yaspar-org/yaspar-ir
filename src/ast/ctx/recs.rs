@@ -42,16 +42,31 @@ struct RecFunsDefs {
     sigs: HashMap<Str, (Vec<VarBinding<Str, Sort>>, Sort)>,
 }
 
-/// It is a builder context for building recursive functions
+/// A builder context for constructing recursive function definitions (`define-fun-rec` / `define-funs-rec`).
 ///
-/// c.f. [RecFunsContext::typed_define_funs_rec]
+/// Created via [`Context::build_rec_funs`]. All function signatures (names, parameter sorts,
+/// output sorts) are declared upfront and immediately added to the symbol table so that
+/// recursive calls are valid inside function bodies.
+///
+/// For each function, call [`build_function`](Self::build_function) to obtain an
+/// [`EachRecFunContext`], build the body inside it, and finalize with
+/// [`EachRecFunContext::typed_function`]. Once all functions have bodies, call
+/// [`typed_define_funs_rec`](Self::typed_define_funs_rec) to produce the command.
+///
+/// If the context is dropped without calling `typed_define_funs_rec`, the temporarily inserted
+/// signatures are removed from the global context (the operation is transactional).
 pub struct RecFunsContext<'a> {
     context: &'a mut Context,
     defs: Option<RecFunsDefs>,
     undefined_funs: HashSet<Str>,
 }
 
-/// It is a builder context for building each recursive function
+/// A builder context for the body of a single recursive function within a [`RecFunsContext`].
+///
+/// Created via [`RecFunsContext::build_function`]. The function's parameters are in scope, and
+/// all sibling recursive functions are callable. Finalize with
+/// [`typed_function`](Self::typed_function), which validates the body sort against the declared
+/// output sort.
 pub struct EachRecFunContext<'b> {
     context: &'b mut Context,
     current: Str,

@@ -12,9 +12,34 @@ use crate::raw::instance::HasArena;
 use crate::raw::tc::TC;
 use crate::traits::AllocatableString;
 
-/// A builder context for quantifiers
+/// A builder context for constructing quantified terms (`forall` and `exists`).
 ///
-/// It is a wrapper over `LocalContext` but extends it with [QuantifierContext::typed_forall] and [QuantifierContext::typed_exists]
+/// Created via [`CheckedApi::build_quantifier`] or [`CheckedApi::build_quantifier_with_domain`].
+/// Variables are introduced into scope either at creation time (with `build_quantifier_with_domain`)
+/// or incrementally via [`extend`](Self::extend) / [`extend_many`](Self::extend_many).
+///
+/// Once the body is built, finalize with [`typed_forall`](Self::typed_forall) or
+/// [`typed_exists`](Self::typed_exists), both of which consume the context and return the
+/// quantified term. The body must be `Bool`-sorted.
+///
+/// This context implements [`CheckedApi`], so all term-building methods are available inside it,
+/// and nested builder contexts (let-bindings, inner quantifiers, match expressions) can be created.
+///
+/// # Example
+///
+/// ```rust
+/// use yaspar_ir::ast::{CheckedApi, Context, ScopedSortApi};
+///
+/// let mut context = Context::new();
+/// context.ensure_logic();
+/// let int = context.wf_sort("Int").unwrap();
+/// let mut q = context.build_quantifier_with_domain([("x", int)]).unwrap();
+/// let x = q.typed_symbol("x").unwrap();
+/// let zero = q.numeral(0u8.into()).unwrap();
+/// let body = q.typed_simp_app(">", [x, zero]).unwrap();
+/// let term = q.typed_forall(body).unwrap();
+/// assert_eq!(term.to_string(), "(forall ((x Int)) (> x 0))");
+/// ```
 pub struct QuantifierContext<'a, 'b>(pub(crate) LocalContext<'a, 'b>);
 
 impl<'a, 'b> QuantifierContext<'a, 'b> {

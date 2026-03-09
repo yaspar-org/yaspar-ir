@@ -13,9 +13,31 @@ use crate::raw::instance::HasArena;
 use crate::traits::AllocatableString;
 use std::collections::HashSet;
 
-/// It is a builder context for building non-recursive functions
+/// A builder context for constructing non-recursive function definitions (`define-fun`).
 ///
-/// c.f. [FunctionContext::typed_define_fun]
+/// Created via [`Context::build_fun`] or [`Context::build_fun_out_sort`]. The function's
+/// parameter names and sorts are provided at creation time and are available as local variables
+/// inside this context.
+///
+/// Build the function body using any [`CheckedApi`] method, then finalize with
+/// [`typed_define_fun`](Self::typed_define_fun), which validates the body sort (against the
+/// declared output sort, if one was provided), registers the function in the global context,
+/// and returns the `define-fun` command.
+///
+/// # Example
+///
+/// ```rust
+/// use yaspar_ir::ast::{CheckedApi, Context, ScopedSortApi};
+///
+/// let mut context = Context::new();
+/// context.ensure_logic();
+/// let int = context.wf_sort("Int").unwrap();
+/// let mut f = context.build_fun_out_sort("double", [("x", int.clone())], int).unwrap();
+/// let x = f.typed_symbol("x").unwrap();
+/// let body = f.typed_simp_app("+", [x.clone(), x]).unwrap();
+/// let cmd = f.typed_define_fun(body).unwrap();
+/// assert_eq!(cmd.to_string(), "(define-fun double ((x Int)) Int (+ x x))");
+/// ```
 pub struct FunctionContext<'a> {
     context: &'a mut Context,
     name: Str,

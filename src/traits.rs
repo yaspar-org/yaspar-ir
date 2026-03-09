@@ -1,6 +1,22 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Core abstraction traits used throughout the crate.
+//!
+//! These traits provide a uniform interface for working with different string and AST
+//! representations:
+//!
+//! - [`Contains`] — extract the inner value from a wrapper type (e.g. hashconsed or
+//!   location-annotated wrappers).
+//! - [`Repr`] — access the internal enum representation of a wrapped AST node. Call `.repr()`
+//!   on a [`Term`](crate::ast::Term), [`Command`](crate::ast::Command), or
+//!   [`Sort`](crate::ast::Sort) to pattern-match on its structure.
+//! - [`MetaData`] — access associated metadata (e.g. source location for untyped ASTs).
+//! - [`Allocatable`] — allocate a value into an environment (typically an [`Arena`](crate::ast::Arena)).
+//! - [`AllocatableString`] — a string-like type that can be allocated as a symbol. Implemented
+//!   for `&str`, `String`, `Str` (hashconsed), and `u::Str` (untyped with location info).
+//!   This trait is used pervasively in the checked APIs to accept flexible string inputs.
+
 use crate::allocator::StrAllocator;
 use crate::ast::{HasArenaAlt, Str};
 

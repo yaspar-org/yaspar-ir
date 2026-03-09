@@ -1,13 +1,23 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module compute the set of free variables of a term
+//! Free variable computation for terms.
+//!
+//! This module provides the [`FreeLocalVars`] trait, which computes the set of free (unbound)
+//! local variables in a term. A variable is free if it is not bound by any enclosing `let`,
+//! `forall`, `exists`, or `match` binder.
+//!
+//! Use [`is_closed`] as a convenience check for whether a term has
+//! no free local variables.
 
 use crate::ast::{ATerm, Pattern, Str, Term};
 use crate::traits::Repr;
 use std::collections::HashSet;
 
-/// obtain the free variables of a term
+/// Compute the set of free local variables in a term.
+///
+/// A local variable is free if it is not bound by any enclosing binder (`let`, `forall`,
+/// `exists`, or `match` pattern).
 pub trait FreeLocalVars {
     fn free_loc_vars(&self) -> HashSet<Str>;
 }

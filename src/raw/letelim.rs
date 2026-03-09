@@ -1,11 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Let-elimination
+//! Let-elimination: inlining let-bound variables.
 //!
-//! Let-elimination expands all local variables with their bodies if they are introduced by let-bindings.
+//! Let-elimination expands all local variables introduced by `let`-bindings with their bound
+//! terms. After let-elimination, the resulting term contains no `let`-bindings, which simplifies
+//! subsequent analysis (e.g. substitution, free variable computation, CNF conversion).
 //!
-//! After let-elimination, the resulting term must contain no let-bindings.
+//! The main entry point is the [`LetElim`] trait. Call `.let_elim(&mut context)` on a [`Term`]
+//! to obtain the let-free equivalent.
+//!
+//! Note: let-elimination may increase term size due to duplication of shared sub-terms. For the
+//! inverse operation (re-introducing let-bindings to share common sub-terms), see
+//! [`crate::ast::letintro`].
 
 use super::alg;
 use super::instance::{Arena, Attribute, Pattern, Str, Term};

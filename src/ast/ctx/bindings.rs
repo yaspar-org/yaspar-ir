@@ -11,9 +11,37 @@ use crate::locenv::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::traits::AllocatableString;
 
-/// It's a builder context for building let-bindings
+/// A builder context for constructing `let` binding terms.
 ///
-/// c.f. [CheckedApi::build_let] and [LetContext::typed_let]
+/// Created via [`CheckedApi::build_let`]. The bindings (name–term pairs) must be provided at
+/// creation time because the bound terms are well-formed only in the *parent* scope — it would
+/// be a scope-level error to bind a term that references variables introduced by this very let.
+///
+/// After creation, the bound names are available as local variables inside this context. Build
+/// the body term using any [`CheckedApi`] method, then finalize with [`typed_let`](Self::typed_let),
+/// which consumes the context and returns the `let` term.
+///
+/// Note: `typed_let` always succeeds (returns `Term`, not `TC<Term>`) because the bindings were
+/// already validated at context creation.
+///
+/// # Example
+///
+/// ```rust
+/// use yaspar_ir::ast::{CheckedApi, Context, Typecheck};
+/// use yaspar_ir::untyped::UntypedAst;
+///
+/// let mut context = Context::new();
+/// UntypedAst.parse_script_str("(set-logic ALL) (declare-const a Int) (declare-const b Int)")
+///     .unwrap().type_check(&mut context).unwrap();
+/// let a = context.typed_symbol("a").unwrap();
+/// let b = context.typed_symbol("b").unwrap();
+/// let sum = context.typed_simp_app("+", [a, b]).unwrap();
+/// let mut l = context.build_let([("s", sum)]).unwrap();
+/// let s = l.typed_symbol("s").unwrap();
+/// let body = l.typed_simp_app("*", [s.clone(), s]).unwrap();
+/// let term = l.typed_let(body);
+/// assert_eq!(term.to_string(), "(let ((s (+ a b))) (* s s))");
+/// ```
 pub struct LetContext<'a, 'b> {
     // reuse LocalContext to reuse apis
     inner: LocalContext<'a, 'b>,

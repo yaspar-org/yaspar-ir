@@ -1,7 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module stores the static constants in the crate
+//! Static constants and regex patterns used throughout the crate.
+//!
+//! This module defines the canonical string names for built-in SMTLib sorts (`Bool`, `Int`,
+//! `Real`, `String`, `RegLan`, `Array`, `BitVec`) and regex patterns for validating bitvector
+//! literal symbols and SMTLib symbol syntax.
 
 use lazy_static::lazy_static;
 use regex::Regex;

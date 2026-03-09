@@ -1,10 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Allocator traits for an arena
+//! Allocator traits for the hashconsing arena — the unchecked building API layer.
 //!
-//! These traits expose unchecked APIs. They are responsible for object allocations **only**.
-//! Invariants need to be explicitly maintained.
+//! These traits ([`StrAllocator`], [`SortAllocator`], [`TermAllocator`], [`CommandAllocator`],
+//! [`LocalVarAllocator`]) expose low-level methods for allocating AST nodes in the
+//! [`Arena`](crate::ast::Arena). They are responsible for object allocation **only** and do not
+//! validate well-formedness invariants.
+//!
+//! For most use cases, prefer the checked APIs ([`CheckedApi`](crate::ast::CheckedApi) and
+//! [`ScopedSortApi`](crate::ast::ScopedSortApi)), which wrap these allocators with scope,
+//! sort, and arity validation.
+//!
+//! The [`ObjectAllocatorExt`] trait provides convenience methods for common sort and term
+//! constructions (e.g. `int_sort()`, `bool_sort()`, `bv_sort(len)`, `array_sort(idx, elem)`).
 
 use crate::raw::alg::*;
 use crate::statics::{ARRAY, BITVEC, BOOL, INT, REAL, REGLAN, STRING};

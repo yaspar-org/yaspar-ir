@@ -1,6 +1,25 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! The global context and builder context types for constructing well-formed SMTLib objects.
+//!
+//! The central type is [`Context`], which tracks the current logic, declared sorts, and the
+//! symbol table. It implements [`CheckedApi`] and [`ScopedSortApi`] for building terms and sorts
+//! with automatic well-formedness validation.
+//!
+//! Scoped constructs are built through *builder contexts* — temporary environments that extend
+//! the parent with local bindings:
+//!
+//! | Builder | Created by | Finalized by | Purpose |
+//! |---|---|---|---|
+//! | [`QuantifierContext`] | `build_quantifier()` | `typed_forall()` / `typed_exists()` | `forall` / `exists` |
+//! | [`LetContext`] | `build_let(bindings)` | `typed_let(body)` | `let` bindings |
+//! | [`MatchContext`] | `build_matching(scrutinee)` | `typed_matching()` | `match` expressions |
+//! | [`FunctionContext`] | `build_fun()` / `build_fun_out_sort()` | `typed_define_fun(body)` | `define-fun` |
+//! | [`RecFunsContext`] | `build_rec_funs(sigs)` | `typed_define_funs_rec()` | `define-fun-rec` / `define-funs-rec` |
+//! | [`DatatypeContext`] | `build_datatypes(names)` | `typed_declare_datatypes()` | `declare-datatype(s)` |
+//! | [`DefSortContext`] | `build_sort_alias(name, params)` | `typed_define_sort(sort)` | `define-sort` |
+
 mod bindings;
 mod checked;
 mod ds;

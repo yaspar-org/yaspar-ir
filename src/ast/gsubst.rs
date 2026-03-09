@@ -1,10 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module handles expansions of global definitions
+//! This module handles expansions of global definitions.
 //!
-//! In principle, a global substitution operation expands global definitions, invoking [Substitute::subst]
-//! whenever necessary.
+//! A global substitution operation expands global definitions, invoking [`Substitute::subst`]
+//! whenever necessary. The [`GlobalSubst`] trait provides the main entry point via
+//! `.gsubst(names, context)`, which expands the specified global definitions on the fly.
 
 use crate::allocator::{SortAllocator, TermAllocator};
 use crate::ast::alg::{PatternArm, VarBinding};

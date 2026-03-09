@@ -1,15 +1,20 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module instantiates typed AST
+//! The typed (hashconsed) instantiation of the algebraic ASTs.
 //!
-//! A typed AST is hashconsed AST. It is managed by a memory Arena. There are a number of advantages
-//! to use hashconsing:
-//! * An object of a fixed set of fields is globally uniquely allocated in the one arena at most once.
-//! * A hashconsed object is cheap to represent (as an [Arc]).
-//! * A hashconsed object is cheap to compare, hash, and clone.
+//! A typed AST is a hashconsed AST managed by a memory [`Arena`]. Hashconsing provides several
+//! advantages:
 //!
-//! Therefore, typed ASTs have optimized memory representation, and are time-efficient to use.
+//! - An object with a fixed set of fields is allocated at most once globally in the arena.
+//! - Hashconsed objects are cheap to represent (as an [`Arc`](std::sync::Arc)-like handle).
+//! - Comparison (`==`), hashing, and cloning are O(1) operations.
+//!
+//! This module also defines the [`Arena`] type, which owns the hashconsing tables, and the
+//! [`Theory`] enum representing SMTLib theory fragments (e.g. `Ints`, `Reals`, `Bitvectors`).
+//!
+//! The [`HasArena`] and [`HasArenaAlt`] traits provide access to the arena from various context
+//! types, and [`FetchSort`] retrieves the sort of a term.
 
 use super::alg;
 pub use crate::allocator::{

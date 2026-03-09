@@ -1,11 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the implicant computation algorithm
+//! Implicant computation over the Boolean skeleton of terms.
 //!
-//! It computes an iteration of implicant based on the boolean skeleton of a term.
+//! An implicant of a formula is a conjunction of literals that implies the formula. This module
+//! computes implicants by extracting the Boolean skeleton, solving it with a SAT solver, and
+//! mapping the satisfying assignment back to the original terms.
 //!
-//! This module depends on [crate::ast::cnf] and requires the feature `implicant-generation`.
+//! The main entry points are:
+//!
+//! - [`FindImplicant`] — find a single implicant for a set of assertions.
+//! - [`Context::iter_implicants`](crate::ast::Context::iter_implicants) — iterate over all
+//!   implicants, blocking each one after discovery.
+//!
+//! Depends on [`crate::ast::cnf`] and requires the `implicant-generation` feature flag.
 
 use crate::ast::cnf::CNFCache;
 use crate::ast::{ATerm, Arena, FlatConnectivesExt, Term};

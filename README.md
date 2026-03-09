@@ -132,6 +132,255 @@ fn test_add_2() -> TC<()> {
 All checked APIs are in the form of `typed_*` for building terms, and `wf_*` for building sorts. See
 the module `ast::ctx::checked`, and traits `CheckedApi` and `ScopedSortApi` for the full list of APIs.
 
+### Checked APIs in detail
+
+The checked APIs are organized around two traits and a set of builder context types. Together, they
+form a scoped, type-safe interface for constructing well-formed SMTLib objects.
+
+#### The `TC<T>` monad
+
+All checked APIs return `TC<T>`, which is an alias for `Result<T, String>`. When a well-formedness
+invariant is violated (e.g. a symbol is not in scope, a sort mismatch occurs, or an argument count
+is wrong), the API returns an `Err` with a descriptive message. This means callers can use `?` to
+propagate errors ergonomically.
+
+#### The `CheckedApi` trait — building terms
+
+`CheckedApi` is implemented by `Context` and by all builder context types (see below). It provides
+the following categories of functions:
+
+**Symbols and identifiers:**
+
+| Method | Description |
+|---|---|
+| `typed_symbol(name)` | Look up a declared/defined symbol by name. Returns `Err` if not in scope or ambiguous (e.g. overloaded). |
+| `typed_symbol_with_sort(name, sort)` | Look up a symbol and disambiguate by sort. Useful for polymorphic constructors like `nil`. |
+| `typed_identifier(qid)` | Look up a fully qualified identifier. |
+
+**Function application:**
+
+| Method | Description |
+|---|---|
+| `typed_app(qid, args)` | Apply a qualified identifier to arguments. Checks arity and argument sorts. |
+| `typed_simp_app(name, args)` | Convenience wrapper: apply a function by name string. |
+| `typed_app_with_kind(kind, args)` | Apply a builtin `IdentifierKind` (e.g. indexed operators). |
+
+**Literals:**
+
+| Method | Description |
+|---|---|
+| `numeral(n)` | Build a numeral literal from a `UBig`. |
+| `integer(i)` | Build an integer literal from an `IBig` (wraps negation if needed). |
+| `typed_constant(c)` | Build a typed constant from a `Constant` value. |
+
+**Logical connectives (all arguments must be `Bool`):**
+
+| Method | Description |
+|---|---|
+| `typed_eq(a, b)` | Equality `(= a b)`. Both arguments must have the same sort. |
+| `typed_distinct(ts)` | `(distinct ...)`. At least two arguments required. |
+| `typed_and(ts)` | `(and ...)`. At least one argument. |
+| `typed_or(ts)` | `(or ...)`. At least one argument. |
+| `typed_xor(ts)` | `(xor ...)`. At least two arguments. |
+| `typed_not(t)` | `(not t)`. |
+| `typed_implies(premises, concl)` | `(=> p1 p2 ... concl)`. |
+| `typed_ite(cond, then, else)` | `(ite c t e)`. Condition must be `Bool`; branches must have the same sort. |
+
+**Builder contexts (scoped sub-environments):**
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `build_quantifier()` | `TC<QuantifierContext>` | Enter a scope for building `forall`/`exists`. |
+| `build_quantifier_with_domain(bindings)` | `TC<QuantifierContext>` | Shorthand: enter a quantifier scope with pre-declared variables. |
+| `build_let(bindings)` | `TC<LetContext>` | Enter a scope for building `let` bindings. |
+| `build_matching(scrutinee)` | `TC<MatchContext>` | Enter a scope for building `match` expressions. |
+
+#### The `ScopedSortApi` trait — building sorts
+
+`ScopedSortApi` is automatically implemented for any type that implements `CheckedApi`. It provides
+well-formedness-checked sort construction:
+
+| Method | Description |
+|---|---|
+| `wf_sort(name)` | Look up a sort by name (e.g. `"Int"`, `"Bool"`, a user-defined sort). |
+| `wf_sort_n(name, params)` | Parameterized sort (e.g. `wf_sort_n("List", [int])` for `(List Int)`). |
+| `wf_sort_id(id, params)` | Sort from an `Identifier` and parameters. |
+| `wf_bv_sort(len)` | Bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds. |
+
+These return `Err` when the sort doesn't exist in the current logic, has the wrong number of
+parameters, or is otherwise invalid.
+
+#### Builder context types
+
+Builder contexts are scoped environments that extend the current context with local bindings. They
+implement `CheckedApi` themselves, so all term-building functions are available inside them. The key
+pattern is: create a builder, build terms within it, then finalize.
+
+**`QuantifierContext`** — for `forall` and `exists`:
+
+```rust
+let mut context = Context::new();
+context.ensure_logic();
+
+let int = context.int_sort();
+// Option 1: extend incrementally
+let mut q_ctx = context.build_quantifier()?;
+q_ctx.extend("x", int.clone())?.extend("y", int)?;
+
+// Option 2: provide domain upfront (equivalent)
+let mut q_ctx = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)])?;
+
+// Build terms using the local variables
+let body = q_ctx.typed_simp_app(">", [
+    q_ctx.typed_symbol("x")?,
+    q_ctx.typed_symbol("y")?,
+])?;
+
+// Finalize — consumes the context
+let forall_term = q_ctx.typed_forall(body)?;  // or .typed_exists(body)?
+```
+
+The body must be a `Bool`-sorted term. Duplicate variable names are rejected.
+
+**`LetContext`** — for `let` bindings:
+
+```rust
+// Bindings are provided at creation time (they are well-formed in the parent scope)
+let bound_term = context.typed_simp_app("+", [a.clone(), b.clone()])?;
+let mut l_ctx = context.build_let([("sum", bound_term)])?;
+
+// "sum" is now available as a local variable
+let body = l_ctx.typed_simp_app("*", [
+    l_ctx.typed_symbol("sum")?,
+    l_ctx.typed_symbol("sum")?,
+])?;
+
+// Finalize
+let let_term = l_ctx.typed_let(body);
+```
+
+Note that `typed_let` does not return `TC` — it always succeeds because the bindings were already
+validated at context creation.
+
+**`MatchContext` and `ArmContext`** — for `match` expressions:
+
+```rust
+// Assume List datatype is declared and l1 : (List Int)
+let mut m_ctx = context.build_matching(l1)?;
+
+// Build the nil arm (nullary constructor)
+let nil_arm = m_ctx.build_arm_nullary("nil")?;
+nil_arm.typed_arm(some_body)?;
+
+// Build the cons arm with named variables
+let mut cons_arm = m_ctx.build_arm("cons", [Some("h"), Some("t")])?;
+// "h" and "t" are now in scope within cons_arm
+let h = cons_arm.typed_symbol("h")?;
+let t = cons_arm.typed_symbol("t")?;
+let body = /* ... build body using h and t ... */;
+cons_arm.typed_arm(body)?;
+
+// Finalize — all constructors must be covered (or a wildcard must be present)
+let match_term = m_ctx.typed_matching()?;
+```
+
+The match context tracks constructor coverage. `typed_matching()` returns `Err` if not all
+constructors are covered. Use `build_arm_wildcard(var)` or `build_arm_catchall()` for wildcard
+arms. All arm bodies must have the same sort.
+
+**`FunctionContext`** — for `define-fun`:
+
+```rust
+let int = context.int_sort();
+let mut f_ctx = context.build_fun_out_sort(
+    "double", [("x", int.clone())], int
+)?;
+let x = f_ctx.typed_symbol("x")?;
+let body = f_ctx.typed_simp_app("+", [x.clone(), x])?;
+let cmd = f_ctx.typed_define_fun(body)?;
+// "double" is now in the global context
+```
+
+Use `build_fun` (without output sort) to let the sort be inferred from the body.
+
+**`RecFunsContext` and `EachRecFunContext`** — for `define-fun-rec` / `define-funs-rec`:
+
+```rust
+let int = context.int_sort();
+let list_int = context.wf_sort_n("List", [int.clone()])?;
+let mut ctx = context.build_rec_funs([
+    RecFunc::new("length", [("l", list_int.clone())], int.clone()),
+])?;
+let mut f_ctx = ctx.build_function("length")?;
+// The function "length" is already in scope (for recursive calls)
+let body = /* ... */;
+f_ctx.typed_function(body)?;
+let cmd = ctx.typed_define_funs_rec()?;
+```
+
+All declared functions must be given a body before calling `typed_define_funs_rec()`.
+
+**`DatatypeContext` and `DtDeclContext`** — for `declare-datatype(s)`:
+
+```rust
+// Simple enum
+let cmd = context.typed_enum("Color", ["red", "green", "blue"])?;
+
+// Polymorphic datatype
+let mut d_ctx = context.build_datatypes([("List", ["X"])])?;
+let mut c_ctx = d_ctx.build_datatype("List")?;
+c_ctx.build_datatype_constructor_nullary("nil")?;
+let xvar = c_ctx.wf_sort("X")?;  // sort parameter is in scope
+let list_x = c_ctx.wf_sort_n("List", [xvar.clone()])?;
+c_ctx.build_datatype_constructor("cons", [("car", xvar), ("cdr", list_x)])?;
+c_ctx.typed_datatype()?;
+let cmd = d_ctx.typed_declare_datatypes()?;
+```
+
+Datatype contexts validate non-emptiness, constructor uniqueness, and selector name uniqueness.
+If the context is dropped without calling `typed_declare_datatypes()`, no changes are made to the
+global context (the operation is transactional).
+
+**`DefSortContext`** — for `define-sort`:
+
+```rust
+let int = context.int_sort();
+let s_ctx = context.build_sort_alias("MyInt", [])?;
+let cmd = s_ctx.typed_define_sort(int)?;
+// "MyInt" is now an alias for Int
+```
+
+For parameterized sort aliases, the sort parameters are available via `wf_sort` inside the context.
+
+**Top-level command helpers on `Context`:**
+
+| Method | Description |
+|---|---|
+| `typed_assert(t)` | Build `(assert t)`. Validates `t` is `Bool` and processes `:named` annotations. |
+| `typed_define_const(name, body)` | Build `(define-const name sort body)` with inferred sort. |
+| `typed_define_const_sorted(name, sort, body)` | Same, but validates the body matches the declared sort. |
+| `typed_set_option(opt)` | Build `(set-option ...)` with keyword-specific validation. |
+| `typed_check_sat_assuming(assumptions)` | Build `(check-sat-assuming ...)`. All assumptions must be `Bool`. |
+
+#### Context nesting
+
+Builder contexts can be nested. For example, a `QuantifierContext` can create a `LetContext`, which
+can create another `QuantifierContext`, and so on. Each nested context sees all bindings from its
+ancestors:
+
+```rust
+let mut q_ctx = context.build_quantifier_with_domain([("x", int)])?;
+let inc_x = q_ctx.typed_simp_app("+", [q_ctx.typed_symbol("x")?, one])?;
+let mut l_ctx = q_ctx.build_let([("y", inc_x)])?;
+// "y" and "x" are both in scope here
+let body = l_ctx.typed_simp_app("*", [
+    l_ctx.typed_symbol("x")?,
+    l_ctx.typed_symbol("y")?,
+])?;
+let let_term = l_ctx.typed_let(body);
+let forall = q_ctx.typed_forall(let_term)?;
+```
+
 ### Analyzing hashconsed objects
 
 Typed ASTs in this crate are hashconsed to optimize memory and run time efficiency. It is still possible to pattern
@@ -217,7 +466,9 @@ Currently, the crate provides the following functionalities:
    context.
 3. A set of unchecked APIs for building typed ASTs. This functionality is achieved using allocator functions exposed by
    `ast::Context`.
-4. A set of checked APIs for building typed ASTs. This functionality is exposed by the functions in `ast::ctx::checked`.
+4. A set of checked APIs for building typed ASTs. This functionality is exposed by the `CheckedApi` and `ScopedSortApi`
+   traits, and the builder context types in `ast::ctx`. See the [Checked APIs in detail](#checked-apis-in-detail)
+   section for a comprehensive guide.
 5. Let-elimination: see `ast::LetElim`.
 6. Computing free variables of a given term: see `ast::FreeLocalVars`.
 7. A fresh variable allocator, which returns a fresh symbol that has not been used prior to the point of allocation: see
@@ -226,7 +477,7 @@ Currently, the crate provides the following functionalities:
    functionality
    introduces let-bindings to terms, so that they can be compactly printed with let-bindings inserted for sub-terms
    appearing multiple times.
-9. Global and local substitutions; see `ast::Substitute`, `ast::GlobalSubstInplace`, and `ast::GlobalSubstPreproc`.
+9. Global and local substitutions; see `ast::Substitute` and `ast::GlobalSubst`.
 10. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
 11. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
 
