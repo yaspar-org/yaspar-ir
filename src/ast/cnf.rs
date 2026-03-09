@@ -6,7 +6,7 @@
 //! This module provides the [`CNFConversion`] trait with three operations:
 //!
 //! - `nnf(env)` — convert a Boolean term to Negation Normal Form (negations pushed to literals).
-//! - `cnf(env)` — convert to a SAT [`Formula`](sat_interface::Formula) in CNF.
+//! - `cnf(env)` — convert to a SAT [`Formula`] in CNF.
 //! - `cnf_tseitin(env)` — convert to CNF using the Tseitin transformation for a bidirectional
 //!   (equisatisfiable) encoding, which avoids exponential blowup.
 //!
@@ -80,15 +80,15 @@ impl CNFEnv<'_> {
 trait CNFConversionHelper<Env> {
     /// This function computes the negative normal forms of the given formula
     ///
-    /// If [polarity] is true, then the function returns an NNF that is equivalent to the input [Self];
-    /// if [!polarity], then the return value is an NNF that negates the input [Self].
+    /// If `polarity` is true, then the function returns an NNF that is equivalent to the input;
+    /// if `!polarity`, then the return value is an NNF that negates the input.
     fn nnf_impl(&self, env: Env, polarity: bool) -> Self;
 
-    /// This function computes the variable representing the given term and updates the [formula]
+    /// This function computes the variable representing the given term and updates the `formula`
     /// if necessary.
     fn cnf_nnf(&self, env: Env, formula: &mut Formula) -> i32;
 
-    /// This function computes the variable representing the given term and updates the [formula]
+    /// This function computes the variable representing the given term and updates the `formula`
     /// if necessary using the Tseitin transformation
     fn cnf_nnf_tseitin(&self, env: Env, formula: &mut Formula) -> i32;
 }
@@ -250,13 +250,13 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
     ///
     /// There are two interesting cases:
     ///
-    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the [formula]
+    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the `formula`
     ///    `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`.
     ///
-    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the [formula]
+    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the `formula`
     ///    `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`.
     ///
-    /// c.f. https://dl.acm.org/doi/10.1145/3551349.3556938
+    /// c.f. <https://dl.acm.org/doi/10.1145/3551349.3556938>
     fn cnf_nnf(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
         // cache lookup
         if let Some(i) = env.cache.var_map.get(&self.uid()) {
@@ -313,15 +313,15 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
     ///
     /// There are two interesting cases:
     ///
-    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, we add to the [formula]
+    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, we add to the `formula`
     ///    `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`
     ///    and `(=> (and a1 a2 ... an) x)`, which unfolds to `(or (not a1) ... (not an) x)``.
     ///
-    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, we add to the [formula]
+    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, we add to the `formula`
     ///    `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`
     ///    and `(=> (or a1 a2 ... an) x)`, which unfolds to a conjunction of of `(or x (not ai))` for all `i`
     ///
-    /// c.f. https://en.wikipedia.org/wiki/Tseytin_transformation
+    /// c.f. <https://en.wikipedia.org/wiki/Tseytin_transformation>
     fn cnf_nnf_tseitin(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
         // cache lookup
         if let Some(i) = env.cache.var_map.get(&self.uid()) {

@@ -14,7 +14,8 @@
 //!
 //! Both traits are implemented by [`Context`] (the global top-level environment) and by all
 //! builder context types ([`QuantifierContext`], [`LetContext`], [`MatchContext`],
-//! [`FunctionContext`], [`EachRecFunContext`], [`ArmContext`], and [`DefSortContext`]). This means
+//! [`FunctionContext`], [`EachRecFunContext`](super::recs::EachRecFunContext),
+//! [`ArmContext`](super::matching::ArmContext), and [`DefSortContext`]). This means
 //! the same term-building vocabulary is available at every scope level.
 //!
 //! # Builder context pattern
@@ -80,19 +81,29 @@ use yaspar::ast::Keyword;
 /// from manually maintaining sort compatibility, scope validity, and arity constraints.
 ///
 /// `CheckedApi` is implemented by [`Context`] (the global environment) and by every builder
-/// context type ([`QuantifierContext`], [`LetContext`], [`MatchContext`], `FunctionContext`,
-/// `EachRecFunContext`, and `ArmContext`). This means the same set of term-building
+/// context type ([`QuantifierContext`], [`LetContext`], [`MatchContext`], [`FunctionContext`],
+/// [`EachRecFunContext`](super::recs::EachRecFunContext), and
+/// [`ArmContext`](super::matching::ArmContext)). This means the same set of term-building
 /// functions is available at every scope level.
 ///
 /// # Categories of methods
 ///
-/// - **Symbols & identifiers** — `typed_symbol`, `typed_symbol_with_sort`, `typed_identifier`
-/// - **Function application** — `typed_app`, `typed_simp_app`, `typed_app_with_kind`
-/// - **Literals** — `numeral`, `integer`, `typed_constant`
-/// - **Logical connectives** — `typed_eq`, `typed_distinct`, `typed_and`, `typed_or`,
-///   `typed_xor`, `typed_not`, `typed_implies`, `typed_ite`
-/// - **Builder contexts** — `build_quantifier`, `build_quantifier_with_domain`, `build_let`,
-///   `build_matching`
+/// - **Symbols & identifiers** — [`typed_symbol`](Self::typed_symbol),
+///   [`typed_symbol_with_sort`](Self::typed_symbol_with_sort),
+///   [`typed_identifier`](Self::typed_identifier)
+/// - **Function application** — [`typed_app`](Self::typed_app),
+///   [`typed_simp_app`](Self::typed_simp_app),
+///   [`typed_app_with_kind`](Self::typed_app_with_kind)
+/// - **Literals** — [`numeral`](Self::numeral), [`integer`](Self::integer),
+///   [`typed_constant`](Self::typed_constant)
+/// - **Logical connectives** — [`typed_eq`](Self::typed_eq),
+///   [`typed_distinct`](Self::typed_distinct), [`typed_and`](Self::typed_and),
+///   [`typed_or`](Self::typed_or), [`typed_xor`](Self::typed_xor),
+///   [`typed_not`](Self::typed_not), [`typed_implies`](Self::typed_implies),
+///   [`typed_ite`](Self::typed_ite)
+/// - **Builder contexts** — [`build_quantifier`](Self::build_quantifier),
+///   [`build_quantifier_with_domain`](Self::build_quantifier_with_domain),
+///   [`build_let`](Self::build_let), [`build_matching`](Self::build_matching)
 ///
 /// See also [`ScopedSortApi`] for sort construction.
 pub trait CheckedApi: HasArena {
@@ -116,7 +127,7 @@ pub trait CheckedApi: HasArena {
     ///
     /// It is a scope-level mistake to bind a term only bound in the let context.
     ///
-    /// Invoke [LetContext::build_let] to build a let binding
+    /// Invoke [`LetContext::typed_let`] to finalize the let binding
     fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
     where
         T: IntoIterator<Item = (S, Term)>,
@@ -130,17 +141,19 @@ pub trait CheckedApi: HasArena {
     /// Invoke [MatchContext::typed_matching] to conclude the term of matching
     fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>>;
 
+    /// Build a typed [`Term`] from a [`Constant`] value.
     fn typed_constant(&mut self, c: Constant) -> TC<Term> {
         typed_constant(&mut self.get_tcenv(), c)
     }
 
+    /// Build a numeral literal [`Term`] from a [`UBig`].
     fn numeral(&mut self, n: UBig) -> TC<Term> {
         self.typed_constant(Constant::Numeral(n))
     }
 
     /// Returns an integer as a term.
     ///
-    /// It is possible that this function returns an [Err] when neither
+    /// It is possible that this function returns an [`Err`] when neither
     /// `Int` nor `Real` is supported.
     fn integer(&mut self, i: IBig) -> TC<Term> {
         let (s, n) = i.into_parts();
@@ -182,7 +195,7 @@ pub trait CheckedApi: HasArena {
     }
 
     /// This function returns a typed term by applying `f` to `args`, if the resulting application
-    /// type checks. It is more convenient than [TermAllocator::app] as it ensures the end term must
+    /// type checks. It is more convenient than [`TermAllocator::app`] as it ensures the end term must
     /// be well-formed.
     fn typed_app<T>(&mut self, f: QualifiedIdentifier, args: T) -> TC<Term>
     where
@@ -227,12 +240,12 @@ pub trait CheckedApi: HasArena {
         self.typed_app(id.into(), args)
     }
 
-    /// Checked API for building equality
+    /// Checked API for building equality (`= a b`). Both arguments must have the same [`Sort`].
     fn typed_eq(&mut self, a: Term, b: Term) -> TC<Term> {
         typed_eq(&mut self.get_tcenv(), a, b, "")
     }
 
-    /// Checked API for building distinct
+    /// Checked API for building `(distinct ...)`. At least two arguments of the same [`Sort`] required.
     fn typed_distinct<T>(&mut self, ts: T) -> TC<Term>
     where
         T: IntoIterator<Item = Term>,
@@ -243,7 +256,7 @@ pub trait CheckedApi: HasArena {
         )
     }
 
-    /// Checked API for building conjunctions
+    /// Checked API for building `(and ...)`. All arguments must be `Bool`-sorted [`Term`]s.
     fn typed_and<T>(&mut self, terms: T) -> TC<Term>
     where
         T: IntoIterator<Item = Term>,
@@ -256,7 +269,7 @@ pub trait CheckedApi: HasArena {
         Ok(env.arena_alt().and(terms))
     }
 
-    /// Checked API for building disjunctions
+    /// Checked API for building `(or ...)`. All arguments must be `Bool`-sorted [`Term`]s.
     fn typed_or<T>(&mut self, terms: T) -> TC<Term>
     where
         T: IntoIterator<Item = Term>,
@@ -269,7 +282,7 @@ pub trait CheckedApi: HasArena {
         Ok(env.arena_alt().or(terms))
     }
 
-    /// Checked API for building exclusive disjunctions
+    /// Checked API for building `(xor ...)`. All arguments must be `Bool`-sorted [`Term`]s.
     fn typed_xor<T>(&mut self, terms: T) -> TC<Term>
     where
         T: IntoIterator<Item = Term>,
@@ -282,12 +295,12 @@ pub trait CheckedApi: HasArena {
         Ok(env.arena_alt().xor(terms))
     }
 
-    /// Checked API for building negation
+    /// Checked API for building `(not t)`. The argument must be a `Bool`-sorted [`Term`].
     fn typed_not(&mut self, t: Term) -> TC<Term> {
         typed_not(&mut self.get_tcenv(), t, "")
     }
 
-    /// Checked API for building implications
+    /// Checked API for building `(=> p1 p2 ... concl)`. All arguments must be `Bool`-sorted [`Term`]s.
     fn typed_implies<T>(&mut self, premises: T, concl: Term) -> TC<Term>
     where
         T: IntoIterator<Item = Term>,
@@ -298,7 +311,7 @@ pub trait CheckedApi: HasArena {
         Ok(env.arena_alt().implies(premises, concl))
     }
 
-    /// Checked API for building if-then-else
+    /// Checked API for building `(ite c t e)`. Condition must be `Bool`; branches must have the same [`Sort`].
     fn typed_ite(&mut self, condition: Term, then: Term, els: Term) -> TC<Term> {
         let mut env = self.get_tcenv();
         is_term_bool_alt(&mut env, &condition, "")?;
@@ -348,10 +361,10 @@ where
 ///
 /// # Methods
 ///
-/// - `wf_sort(name)` — look up a sort by name (e.g. `"Int"`, `"Bool"`, a user-defined sort).
-/// - `wf_sort_n(name, params)` — parameterized sort (e.g. `wf_sort_n("List", [int])` for `(List Int)`).
-/// - `wf_sort_id(id, params)` — sort from an `Identifier` and parameters.
-/// - `wf_bv_sort(len)` — bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds.
+/// - [`wf_sort(name)`](Self::wf_sort) — look up a sort by name (e.g. `"Int"`, `"Bool"`, a user-defined sort).
+/// - [`wf_sort_n(name, params)`](Self::wf_sort_n) — parameterized sort (e.g. `wf_sort_n("List", [int])` for `(List Int)`).
+/// - [`wf_sort_id(id, params)`](Self::wf_sort_id) — sort from an [`Identifier`] and parameters.
+/// - [`wf_bv_sort(len)`](Self::wf_bv_sort) — bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds.
 ///
 /// See also [`CheckedApi`] for term construction.
 pub trait ScopedSortApi: HasArena {
@@ -432,7 +445,7 @@ impl Context {
         FunctionContext::new(self, name, inputs, None)
     }
 
-    /// Create a context for building `define-fun-rec` and `define-fun-recs`
+    /// Create a context for building [`define-fun-rec`](RecFunsContext) and `define-fun-recs`
     pub fn build_rec_funs<T, S>(&mut self, funs: T) -> TC<RecFunsContext<'_>>
     where
         T: IntoIterator<Item = RecFunc<S, Sort>>,
@@ -441,7 +454,7 @@ impl Context {
         RecFunsContext::new(self, funs)
     }
 
-    /// Create a context for defining a sort, i.e. `define-sort`
+    /// Create a context for defining a sort, i.e. [`define-sort`](DefSortContext)
     pub fn build_sort_alias<S>(
         &mut self,
         name: S,
@@ -503,7 +516,7 @@ impl Context {
         }
     }
 
-    /// Checked API for building an assertion command
+    /// Checked API for building an assertion [`Command`]
     pub fn typed_assert(&mut self, t: Term) -> TC<Command> {
         self.check_logic()?;
         is_term_bool(self, &t)?;
@@ -526,7 +539,7 @@ impl Context {
         Ok(self.assert(t))
     }
 
-    /// Checked API for building a `set-option` command
+    /// Checked API for building a [`set-option`](Command) command
     pub fn typed_set_option<S, T>(&mut self, opt: &alg::Attribute<S, T>) -> TC<Command>
     where
         alg::Attribute<S, T>: Typecheck<Self, Out = Attribute>,
@@ -565,7 +578,9 @@ impl Context {
         Ok(self.set_option(opt))
     }
 
-    /// Makes sure assumptions are boolean
+    /// Makes sure assumptions are boolean.
+    ///
+    /// Returns a [`check-sat-assuming`](Command) command.
     pub fn typed_check_sat_assuming(
         &mut self,
         assumptions: impl IntoIterator<Item = Term>,
@@ -578,9 +593,9 @@ impl Context {
         Ok(self.check_sat_assuming(ts))
     }
 
-    /// Return a typed command for define-const
+    /// Return a typed [`Command`] for `define-const`
     ///
-    /// c.f. [Self::typed_define_const_sorted]
+    /// c.f. [`Self::typed_define_const_sorted`]
     pub fn typed_define_const<S>(&mut self, name: S, body: Term) -> TC<Command>
     where
         S: AllocatableString<Arena>,
@@ -598,9 +613,9 @@ impl Context {
         Ok(self.define_const(name, sort, body))
     }
 
-    /// Return a typed command for define-const
+    /// Return a typed [`Command`] for `define-const` with an explicit sort
     ///
-    /// c.f. [Self::typed_define_const]
+    /// c.f. [`Self::typed_define_const`]
     pub fn typed_define_const_sorted<S>(&mut self, name: S, s: Sort, body: Term) -> TC<Command>
     where
         S: AllocatableString<Arena>,

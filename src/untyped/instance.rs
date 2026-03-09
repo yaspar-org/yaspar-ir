@@ -5,7 +5,7 @@
 //!
 //! This module instantiates the parametric algebraic ASTs from [`crate::raw::alg`] with the
 //! [`Untyped`] wrapper, which associates each AST node with a source location
-//! ([`Range`](yaspar::position::Range)). This location information is used for error reporting
+//! ([`Range`]). This location information is used for error reporting
 //! during type-checking.
 //!
 //! The [`UntypedAst`] struct provides the parsing entry points that produce untyped ASTs from
