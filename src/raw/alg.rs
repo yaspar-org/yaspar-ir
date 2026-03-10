@@ -357,7 +357,7 @@ where
         self.is_sort0(STRING)
     }
 
-    /// Check whether it's Reglan
+    /// Check whether it's RegLan
     pub fn is_reglan(&self) -> bool {
         self.is_sort0(REGLAN)
     }
