@@ -725,6 +725,24 @@ fn test_datatype12() {
 }
 
 #[test]
+fn test_datatype13() {
+    let mut context = Context::new();
+    context.ensure_logic();
+    assert!(
+        UntypedAst
+            .parse_script_str(
+                "\
+        (declare-datatype Option-int ((none) (some (value Int))))
+        (declare-datatype Option-bool ((none) (some (value Bool))))
+    ",
+            )
+            .unwrap()
+            .type_check(&mut context)
+            .is_err()
+    );
+}
+
+#[test]
 fn test_bv1() {
     let mut context = Context::new();
     context.set_ctx_logic("QF_BV").unwrap();
