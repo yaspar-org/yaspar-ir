@@ -569,4 +569,185 @@ mod tests {
         assert_eq!(result.to_string(), "(forall ((x Real)) (= x x))");
         result.type_check(&mut ctx).unwrap();
     }
+
+    /// Test monomorphizing an existential quantifier.
+    /// Builds `(exists ((x X)) (= x x))` with sort variable `X`, monomorphizes with `X -> Int`,
+    /// and verifies the result is `(exists ((x Int)) (= x x))`.
+    #[test]
+    fn test_term_monomorphize_exists() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+
+        let var_sym = ctx.allocate_symbol("x");
+        let var_id = ctx.new_local();
+        let var_local = ctx.local(Local {
+            id: var_id,
+            symbol: var_sym.clone(),
+            sort: Some(x_sort.clone()),
+        });
+        let eq = ctx.eq(var_local.clone(), var_local);
+        let exists = ctx.exists(vec![VarBinding(var_sym, var_id, x_sort)], eq);
+
+        let int = ctx.int_sort();
+        let subst: SortSubst = [(x_sym, Some(int))].into_iter().collect();
+        let result = exists.monomorphize(&subst, &mut ctx);
+        assert_eq!(result.to_string(), "(exists ((x Int)) (= x x))");
+        result.type_check(&mut ctx).unwrap();
+    }
+
+    /// Test monomorphizing `not`, `ite`, and `distinct` terms.
+    #[test]
+    fn test_term_monomorphize_logical_ops() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+
+        let var_sym = ctx.allocate_symbol("a");
+        let var_id = ctx.new_local();
+        let a = ctx.local(Local {
+            id: var_id,
+            symbol: var_sym.clone(),
+            sort: Some(x_sort.clone()),
+        });
+
+        let b_sym = ctx.allocate_symbol("b");
+        let b_id = ctx.new_local();
+        let b = ctx.local(Local {
+            id: b_id,
+            symbol: b_sym.clone(),
+            sort: Some(x_sort.clone()),
+        });
+
+        // (distinct a b)
+        let dist = ctx.distinct(vec![a.clone(), b.clone()]);
+        // (not (distinct a b))
+        let neg = ctx.not(dist.clone());
+        // (ite (distinct a b) a b)
+        let ite = ctx.ite(dist, a, b);
+
+        let int = ctx.int_sort();
+        let subst: SortSubst = [(x_sym, Some(int))].into_iter().collect();
+
+        let neg_result = neg.monomorphize(&subst, &mut ctx);
+        assert_eq!(neg_result.to_string(), "(not (distinct a b))");
+
+        let ite_result = ite.monomorphize(&subst, &mut ctx);
+        assert_eq!(ite_result.to_string(), "(ite (distinct a b) a b)");
+    }
+
+    /// Test monomorphizing `and`, `or`, and `implies` terms.
+    #[test]
+    fn test_term_monomorphize_connectives() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+
+        let a_sym = ctx.allocate_symbol("a");
+        let a_id = ctx.new_local();
+        let a = ctx.local(Local {
+            id: a_id,
+            symbol: a_sym.clone(),
+            sort: Some(x_sort.clone()),
+        });
+        let b_sym = ctx.allocate_symbol("b");
+        let b_id = ctx.new_local();
+        let b = ctx.local(Local {
+            id: b_id,
+            symbol: b_sym.clone(),
+            sort: Some(x_sort.clone()),
+        });
+
+        let eq_ab = ctx.eq(a.clone(), b.clone());
+        let eq_ba = ctx.eq(b, a);
+
+        let conj = ctx.and(vec![eq_ab.clone(), eq_ba.clone()]);
+        let disj = ctx.or(vec![eq_ab.clone(), eq_ba.clone()]);
+        let imp = ctx.implies(vec![eq_ab], eq_ba);
+
+        let int = ctx.int_sort();
+        let subst: SortSubst = [(x_sym, Some(int))].into_iter().collect();
+
+        assert_eq!(
+            conj.monomorphize(&subst, &mut ctx).to_string(),
+            "(and (= a b) (= b a))"
+        );
+        assert_eq!(
+            disj.monomorphize(&subst, &mut ctx).to_string(),
+            "(or (= a b) (= b a))"
+        );
+        assert_eq!(
+            imp.monomorphize(&subst, &mut ctx).to_string(),
+            "(=> (= a b) (= b a))"
+        );
+    }
+
+    /// Test monomorphizing a match expression with sort variables.
+    #[test]
+    fn test_term_monomorphize_matching() {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+
+        UntypedAst
+            .parse_command_str(
+                "(declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))",
+            )
+            .unwrap()
+            .type_check(&mut ctx)
+            .unwrap();
+
+        // Build: (match (as nil (List X)) ((nil 0) ((cons h t) 1)))
+        // using unchecked APIs with sort variable X
+        let x_sym = ctx.allocate_symbol("X");
+        let x_sort = ctx.sort0(x_sym.clone());
+        let list_sym = ctx.allocate_symbol("List");
+        let list_x = ctx.sort_n(list_sym, vec![x_sort]);
+
+        let nil_sym = ctx.allocate_symbol("nil");
+        let nil = ctx.global(
+            alg::QualifiedIdentifier::simple_sorted(nil_sym, list_x.clone()),
+            Some(list_x),
+        );
+
+        let int_sort = ctx.int_sort();
+        let zero = ctx.constant(alg::Constant::Numeral(0u8.into()), Some(int_sort.clone()));
+        let one = ctx.constant(alg::Constant::Numeral(1u8.into()), Some(int_sort));
+
+        let nil_pattern = alg::Pattern::Ctor(ctx.allocate_symbol("nil"));
+        let h_sym = ctx.allocate_symbol("h");
+        let h_id = ctx.new_local();
+        let t_sym = ctx.allocate_symbol("t");
+        let t_id = ctx.new_local();
+        let cons_pattern = alg::Pattern::Applied {
+            ctor: ctx.allocate_symbol("cons"),
+            arguments: vec![Some((h_sym, h_id)), Some((t_sym, t_id))],
+        };
+
+        let match_term = ctx.matching(
+            nil.clone(),
+            vec![
+                alg::PatternArm {
+                    pattern: nil_pattern,
+                    body: zero,
+                },
+                alg::PatternArm {
+                    pattern: cons_pattern,
+                    body: one,
+                },
+            ],
+        );
+
+        let int = ctx.int_sort();
+        let subst: SortSubst = [(x_sym, Some(int))].into_iter().collect();
+        let result = match_term.monomorphize(&subst, &mut ctx);
+        // The match structure should be preserved with substituted sorts
+        assert!(result.to_string().contains("match"));
+        assert!(result.to_string().contains("(as nil (List Int))"));
+    }
 }
