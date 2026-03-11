@@ -36,6 +36,7 @@ impl<'a, 'b> LocalContext<'a, 'b> {
         S: AllocatableString<Arena>,
     {
         let symbol = name.allocate(self.arena());
+        self.context.check_sym_validity(&symbol)?;
         for v in &self.env {
             if v.0.as_str() == symbol.inner() {
                 return Err(format!(

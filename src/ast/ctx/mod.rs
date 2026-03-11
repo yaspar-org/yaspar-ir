@@ -34,7 +34,7 @@ pub mod utils;
 
 #[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::{ImplicantEnumerator, ImplicantIterator};
-use crate::locenv::LocEnv;
+use crate::locenv::{LocEnv, valid_char};
 pub use crate::raw::alg::{
     Command as ACommand, Constant as AConstant, Index as AIndex, SortDef as ASortDef, StrQuote,
     SymbolQuote, Term as ATerm,
@@ -236,6 +236,7 @@ impl Context {
 
     /// Check whether a given sort name can be added to the sort table
     pub fn can_add_sort(&self, symbol: &Str) -> Result<()> {
+        self.check_sym_chars(symbol)?;
         self.check_special_symbols(symbol)?;
         self.check_bv(symbol)?;
         if self.sorts.contains_key(symbol) {
@@ -296,6 +297,16 @@ impl Context {
         Ok(())
     }
 
+    fn check_sym_chars(&self, sym: &Str) -> Result<()> {
+        if sym.inner().contains(|c| !valid_char(c)) {
+            Err(format!(
+                "Symbols can only contain printable chars and white spaces, but not `\\` or `|`: {sym}!"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn check_special_symbols(&self, sym: &Str) -> Result<()> {
         if SPECIAL_SYMBOLS.contains(sym.as_str()) {
             Err("Special symbols cannot be declared!".to_string())
@@ -306,7 +317,7 @@ impl Context {
 
     fn check_bv_sym(&self, sym: &Str) -> Result<()> {
         if self.check_support_theory(Theory::Bitvectors).is_ok() && BV_RE.is_match(sym) {
-            Err("symbols of the form bvX cannot be declared!".to_string())
+            Err("Symbols of the form bvX cannot be declared!".to_string())
         } else {
             Ok(())
         }
@@ -314,13 +325,15 @@ impl Context {
 
     fn check_is_sym(&self, sym: &Str) -> Result<()> {
         if self.check_support_theory(Theory::Datatypes).is_ok() && sym.inner() == "is" {
-            Err("`is` cannot be declared!".into())
+            Err("`is` cannot be used as a symbol!".into())
         } else {
             Ok(())
         }
     }
 
-    fn check_sym_validity(&self, sym: &Str) -> Result<()> {
+    /// Check the validity of a given symbol
+    pub(crate) fn check_sym_validity(&self, sym: &Str) -> Result<()> {
+        self.check_sym_chars(sym)?;
         self.check_special_symbols(sym)?;
         self.check_bv_sym(sym)?;
         self.check_is_sym(sym)

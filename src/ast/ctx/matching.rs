@@ -188,6 +188,7 @@ impl<'a, 'b> MatchContext<'a, 'b> {
             }
             if let Some(x) = v {
                 let v = x.allocate(self.context.arena());
+                self.context.check_sym_validity(&v)?;
                 if !existing_vars.insert(v.clone()) {
                     return Err(format!(
                         "duplicate name in binding: {}{} is already used",

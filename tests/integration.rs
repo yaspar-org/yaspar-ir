@@ -1640,3 +1640,57 @@ fn test_get_value_nested_quantifier() {
     let cs = UntypedAst.parse_script_str(script).unwrap();
     assert!(cs.type_check(&mut ctx).is_err());
 }
+
+/// Test that quantifier variable names containing `\` are rejected.
+#[test]
+fn test_quantifier_rejects_invalid_symbol_chars() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let int = ctx.int_sort();
+    // `\` is not allowed in a symbol name via checked API
+    let result = ctx.build_quantifier_with_domain([("ba\\d", int)]);
+    assert!(result.is_err());
+}
+
+/// Test that match arm variable names containing `\` are rejected.
+#[test]
+fn test_match_arm_rejects_invalid_symbol_chars() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (declare-datatype Opt ((none) (some (val Int))))
+        (declare-const o Opt)
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let o = ctx.typed_symbol("o").unwrap();
+    let mut m_ctx = ctx.build_matching(o).unwrap();
+    // Try to build an arm with an invalid variable name containing backslash
+    let result = m_ctx.build_arm("some", [Some("x\\y")]);
+    assert!(result.is_err());
+}
+
+/// Test that sort names containing `\` are rejected.
+#[test]
+fn test_sort_rejects_invalid_symbol_chars() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let sym = ctx.allocate_symbol("Bad\\Sort");
+    let result = ctx.can_add_sort(&sym);
+    assert!(result.is_err());
+}
+
+/// Test that `is` cannot be used as a symbol name when datatypes are supported.
+#[test]
+fn test_is_symbol_rejected() {
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let result = ctx.typed_symbol("is");
+    // "is" is not a declared symbol, so this should fail
+    assert!(result.is_err());
+}
