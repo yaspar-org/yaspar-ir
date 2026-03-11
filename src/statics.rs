@@ -20,6 +20,6 @@ pub static BOOL: &str = "Bool";
 pub static INT: &str = "Int";
 pub static REAL: &str = "Real";
 pub static STRING: &str = "String";
-pub static REGLAN: &str = "Reglan";
+pub static REGLAN: &str = "RegLan";
 pub static ARRAY: &str = "Array";
 pub static BITVEC: &str = "BitVec";
