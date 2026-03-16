@@ -61,6 +61,8 @@
 
 mod allocator;
 pub mod ast;
+#[cfg(feature = "cvc5")]
+pub mod cvc5;
 mod locenv;
 mod macros;
 mod meta;
