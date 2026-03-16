@@ -179,8 +179,8 @@ fn ident_kind_to_cvc5(k: &alg::IdentifierKind<Str>) -> Option<Kind> {
         BvSmulo => Kind::CVC5_KIND_BITVECTOR_SMULO,
         UbvToInt => Kind::CVC5_KIND_BITVECTOR_UBV_TO_INT,
         SbvToInt => Kind::CVC5_KIND_BITVECTOR_SBV_TO_INT,
-        Bv2Nat => Kind::CVC5_KIND_BITVECTOR_UBV_TO_INT,
-        Bv2Int => Kind::CVC5_KIND_BITVECTOR_UBV_TO_INT,
+        Bv2Nat => Kind::CVC5_KIND_BITVECTOR_SBV_TO_INT,
+        Bv2Int => Kind::CVC5_KIND_BITVECTOR_SBV_TO_INT,
         BvUsubo => Kind::CVC5_KIND_BITVECTOR_USUBO,
         BvSsubo => Kind::CVC5_KIND_BITVECTOR_SSUBO,
         BvSdivo => Kind::CVC5_KIND_BITVECTOR_SDIVO,
@@ -388,24 +388,34 @@ impl Cvc5Env<'_> {
 // ── Command translation ──────────────────────────────────────
 impl Cvc5Env<'_> {
     /// Process a typed command, updating the cvc5 solver state.
-    ///
-    /// Returns the cvc5 term for `Assert` commands, or `None` for others.
-    pub fn translate_command(
-        &mut self,
-        solver: &mut cvc5_rs::Solver,
-        cmd: &Command,
-    ) -> Res<Option<CTerm>> {
+    pub fn translate_command(&mut self, solver: &mut cvc5_rs::Solver, cmd: &Command) -> Res<()> {
         use alg::Command as AC;
         match cmd.inner().repr() {
             AC::SetLogic(l) => {
                 solver.set_logic(&l);
-                Ok(None)
+                Ok(())
+            }
+            AC::SetInfo(attr) => {
+                if let alg::Attribute::Symbol(kw, val) = attr {
+                    solver.set_info(kw.symbol_of(), &val);
+                } else if let alg::Attribute::Constant(kw, alg::Constant::String(s)) = attr {
+                    solver.set_info(kw.symbol_of(), &s);
+                }
+                Ok(())
+            }
+            AC::SetOption(attr) => {
+                if let alg::Attribute::Symbol(kw, val) = attr {
+                    solver.set_option(kw.symbol_of(), &val);
+                } else if let alg::Attribute::Constant(kw, alg::Constant::String(s)) = attr {
+                    solver.set_option(kw.symbol_of(), &s);
+                }
+                Ok(())
             }
             AC::DeclareConst(name, sort) => {
                 let cs = self.translate_sort(sort)?;
                 let ct = self.tm.mk_const(cs, &name);
                 self.globals.insert(name.inner().clone(), ct);
-                Ok(None)
+                Ok(())
             }
             AC::DeclareFun(name, inp, out) => {
                 let co = self.translate_sort(out)?;
@@ -421,42 +431,244 @@ impl Cvc5Env<'_> {
                     let ct = self.tm.mk_const(fs, &name);
                     self.globals.insert(name.inner().clone(), ct);
                 }
-                Ok(None)
+                Ok(())
             }
             AC::DeclareSort(name, arity) => {
-                if arity != &0 {
-                    return Err(format!(
-                        "parametric uninterpreted sorts not supported: {name}"
-                    ));
-                }
-                let cs = self.tm.mk_uninterpreted_sort(&name);
+                let cs = if *arity == 0 {
+                    self.tm.mk_uninterpreted_sort(&name)
+                } else {
+                    self.tm
+                        .mk_uninterpreted_sort_constructor_sort(*arity, &name)
+                };
                 self.sort_cache.insert(name.inner().clone(), cs);
-                Ok(None)
+                Ok(())
+            }
+            AC::DefineSort(..) => {
+                // we don't need to do anything. typechecking will unfold all defined sorts
+                Ok(())
+            }
+            AC::DefineConst(name, _sort, body) => {
+                let cbody = self.translate_term(body)?;
+                self.globals.insert(name.inner().clone(), cbody);
+                Ok(())
+            }
+            AC::DefineFun(fd) => {
+                self.translate_define_fun(solver, fd, false)?;
+                Ok(())
+            }
+            AC::DefineFunRec(fd) => {
+                self.translate_define_fun(solver, fd, true)?;
+                Ok(())
+            }
+            AC::DefineFunsRec(fds) => {
+                self.translate_define_funs_rec(solver, fds)?;
+                Ok(())
+            }
+            AC::DeclareDatatype(name, dec) => {
+                self.translate_declare_datatypes(&[alg::DatatypeDef {
+                    name: name.clone(),
+                    dec: dec.clone(),
+                }])?;
+                Ok(())
+            }
+            AC::DeclareDatatypes(defs) => {
+                self.translate_declare_datatypes(defs)?;
+                Ok(())
             }
             AC::Assert(t) => {
                 let ct = self.translate_term(t)?;
                 solver.assert_formula(CTerm::clone(&ct));
-                Ok(Some(ct))
+                Ok(())
             }
             AC::CheckSat => {
                 let _ = solver.check_sat();
-                Ok(None)
+                Ok(())
+            }
+            AC::CheckSatAssuming(terms) => {
+                let cts = self.translate_terms(terms)?;
+                let _ = solver.check_sat_assuming(&cts);
+                Ok(())
+            }
+            AC::GetValue(terms) => {
+                let cts = self.translate_terms(terms)?;
+                let _vals = solver.get_values(&cts);
+                Ok(())
+            }
+            AC::GetModel => {
+                // get_model requires sorts and consts; just call with empty for now
+                let _ = solver.get_model(&[], &[]);
+                Ok(())
+            }
+            AC::GetAssertions => {
+                let _ = solver.get_assertions();
+                Ok(())
+            }
+            AC::GetUnsatCore => {
+                let _ = solver.get_unsat_core();
+                Ok(())
+            }
+            AC::GetUnsatAssumptions => {
+                let _ = solver.get_unsat_assumptions();
+                Ok(())
+            }
+            AC::GetInfo(kw) => {
+                let _ = solver.get_info(kw.symbol_of());
+                Ok(())
+            }
+            AC::GetOption(kw) => {
+                let _ = solver.get_option(kw.symbol_of());
+                Ok(())
             }
             AC::Push(n) => {
                 let n: u32 = n
                     .try_into()
                     .map_err(|_| "push level too large".to_string())?;
                 solver.push(n);
-                Ok(None)
+                Ok(())
             }
             AC::Pop(n) => {
                 let n: u32 = n
                     .try_into()
                     .map_err(|_| "pop level too large".to_string())?;
                 solver.pop(n);
-                Ok(None)
+                Ok(())
             }
-            _ => Ok(None),
+            AC::Reset => {
+                solver.reset_assertions();
+                Ok(())
+            }
+            AC::ResetAssertions => {
+                solver.reset_assertions();
+                Ok(())
+            }
+            AC::Echo(_) | AC::Exit | AC::GetAssignment | AC::GetProof => Ok(()),
+        }
+    }
+
+    fn translate_define_fun(
+        &mut self,
+        solver: &mut cvc5_rs::Solver,
+        fd: &alg::FunctionDef<Str, Sort, Term>,
+        recursive: bool,
+    ) -> Res<()> {
+        let out = self.translate_sort(&fd.out_sort)?;
+        let mut vars = Vec::with_capacity(fd.vars.len());
+        for v in &fd.vars {
+            let vs = self.translate_sort(&v.2)?;
+            let bv = self.tm.mk_var(vs, &v.0);
+            self.locals.insert(v.1, bv.clone());
+            vars.push(bv);
+        }
+        let body = self.translate_term(&fd.body)?;
+        for v in &fd.vars {
+            self.locals.remove(&v.1);
+        }
+        let ct = if recursive {
+            solver.define_fun_rec(&fd.name, &vars, out, body, true)
+        } else {
+            solver.define_fun(&fd.name, &vars, out, body, true)
+        };
+        self.globals.insert(fd.name.inner().clone(), ct);
+        Ok(())
+    }
+
+    fn translate_define_funs_rec(
+        &mut self,
+        solver: &mut cvc5_rs::Solver,
+        fds: &[alg::FunctionDef<Str, Sort, Term>],
+    ) -> Res<()> {
+        // First pass: declare all function constants so they can reference each other
+        let mut funs = Vec::with_capacity(fds.len());
+        let mut out_sorts = Vec::with_capacity(fds.len());
+        for fd in fds {
+            let mut inp = Vec::with_capacity(fd.vars.len());
+            for v in &fd.vars {
+                inp.push(self.translate_sort(&v.2)?);
+            }
+            let out = self.translate_sort(&fd.out_sort)?;
+            out_sorts.push(out.clone());
+            let fs = if inp.is_empty() {
+                out.clone()
+            } else {
+                self.tm.mk_fun_sort(&inp, out)
+            };
+            let ct = self.tm.mk_const(fs, &fd.name);
+            self.globals.insert(fd.name.inner().clone(), ct.clone());
+            funs.push(ct);
+        }
+        // Second pass: translate bodies
+        let mut all_vars = Vec::with_capacity(fds.len());
+        let mut bodies = Vec::with_capacity(fds.len());
+        for fd in fds {
+            let mut vars = Vec::with_capacity(fd.vars.len());
+            for v in &fd.vars {
+                let vs = self.translate_sort(&v.2)?;
+                let bv = self.tm.mk_var(vs, &v.0);
+                self.locals.insert(v.1, bv.clone());
+                vars.push(bv);
+            }
+            let body = self.translate_term(&fd.body)?;
+            for v in &fd.vars {
+                self.locals.remove(&v.1);
+            }
+            all_vars.push(vars);
+            bodies.push(body);
+        }
+        let var_refs: Vec<&[CTerm]> = all_vars.iter().map(|v| v.as_slice()).collect();
+        solver.define_funs_rec(&funs, &var_refs, &bodies, true);
+        Ok(())
+    }
+
+    fn translate_declare_datatypes(&mut self, defs: &[alg::DatatypeDef<Str, Sort>]) -> Res<()> {
+        let mut decls = Vec::with_capacity(defs.len());
+        for def in defs {
+            if !def.dec.params.is_empty() {
+                return Err(format!(
+                    "parametric datatypes not yet supported: {}",
+                    def.name
+                ));
+            }
+            let mut dt_decl = self.tm.mk_dt_decl(&def.name, false);
+            for ctor in &def.dec.constructors {
+                let mut ctor_decl = self.tm.mk_dt_cons_decl(&ctor.ctor);
+                for sel in &ctor.args {
+                    let ss = self.translate_sort(&sel.2)?;
+                    ctor_decl.add_selector(&sel.0, ss);
+                }
+                dt_decl.add_constructor(&ctor_decl);
+            }
+            decls.push(dt_decl);
+        }
+        if decls.len() == 1 {
+            let cs = self.tm.mk_dt_sort(&decls[0]);
+            self.sort_cache
+                .insert(defs[0].name.inner().clone(), cs.clone());
+            self.register_dt_functions(cs);
+        } else {
+            let sorts = self.tm.mk_dt_sorts(&decls);
+            for (def, cs) in defs.iter().zip(sorts) {
+                self.sort_cache.insert(def.name.inner().clone(), cs.clone());
+                self.register_dt_functions(cs);
+            }
+        }
+        Ok(())
+    }
+
+    fn register_dt_functions(&mut self, sort: CSort) {
+        let dt = sort.datatype();
+        for i in 0..dt.num_constructors() {
+            let ctor = dt.constructor(i);
+            let ctor_term = ctor.term();
+            let name = ctor.name();
+            self.globals.insert(name.to_string(), ctor_term);
+            let tester = ctor.tester_term();
+            // Register both (_ is Ctor) and is-Ctor style testers
+            self.globals.insert(format!("is-{name}"), tester.clone());
+            for j in 0..ctor.num_selectors() {
+                let sel = ctor.selector(j);
+                let sel_term = sel.term();
+                self.globals.insert(sel.name().to_string(), sel_term);
+            }
         }
     }
 }

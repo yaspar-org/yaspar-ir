@@ -303,14 +303,10 @@ fn translate_term_standalone() {
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::new(&tm, &mut ctx);
-    let mut asserted = None;
     for cmd in &cmds {
-        if let Some(ct) = env.translate_command(&mut solver, cmd).unwrap() {
-            asserted = Some(ct);
-        }
+        env.translate_command(&mut solver, cmd).unwrap();
     }
-    // We got a cvc5 term back from the assert command
-    assert!(asserted.is_some());
+    // All commands translated without error
 }
 
 // ── Error case tests ─────────────────────────────────────────
