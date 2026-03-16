@@ -794,6 +794,8 @@ pub struct PatternArm<Str, T> {
 pub enum SortDef<Str, So> {
     /// Arity; the sort is opaque
     Opaque(usize),
+    /// Arity; the sort is opaque and declared by users
+    OpaqueDeclared(usize),
     /// The sort is defined in terms of other sorts.
     Transparent { params: Vec<Str>, sort: So },
     /// The sort is a datatype.
@@ -804,10 +806,20 @@ impl<Str, So> SortDef<Str, So> {
     /// Return the arity of the sort definition
     pub fn arity(&self) -> usize {
         match self {
-            SortDef::Opaque(n) => *n,
+            SortDef::Opaque(n) | SortDef::OpaqueDeclared(n) => *n,
             SortDef::Transparent { params, .. } => params.len(),
             SortDef::Datatype(dt) => dt.params.len(),
         }
+    }
+
+    /// Is a builtin sort
+    pub fn is_builtin(&self) -> bool {
+        matches!(self, SortDef::Opaque(_))
+    }
+
+    /// Is a user defined sort
+    pub fn is_from_user(&self) -> bool {
+        !self.is_builtin()
     }
 }
 
