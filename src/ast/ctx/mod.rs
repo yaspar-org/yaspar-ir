@@ -252,7 +252,7 @@ impl Context {
     {
         let sort = sort.allocate(self.arena());
         self.can_add_sort(&sort)?;
-        self.sorts.insert(sort, SortDef::Opaque(arity));
+        self.sorts.insert(sort, SortDef::OpaqueDeclared(arity));
         Ok(())
     }
 
@@ -537,12 +537,54 @@ impl Context {
             .collect()
     }
 
-    /// Returns the set of all builtin function symbols in the current context
+    /// Returns the set of all builtin symbols in the current context
     pub fn builtin_symbols(&self) -> HashSet<Str> {
         self.symbol_table
             .iter()
             .filter_map(|(name, sigs)| {
                 if sigs.iter().any(|(_, meta)| meta.is_builtin()) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns the set of all user defined symbols in the current context
+    pub fn user_defined_symbols(&self) -> HashSet<Str> {
+        self.symbol_table
+            .iter()
+            .filter_map(|(name, sigs)| {
+                if sigs.iter().any(|(_, meta)| meta.is_from_user()) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns the set of all builtin sorts
+    pub fn builtin_sorts(&self) -> HashSet<Str> {
+        self.sorts
+            .iter()
+            .filter_map(|(name, def)| {
+                if def.is_builtin() {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns the set of all user-defined sorts
+    pub fn user_defined_sorts(&self) -> HashSet<Str> {
+        self.sorts
+            .iter()
+            .filter_map(|(name, def)| {
+                if def.is_from_user() {
                     Some(name.clone())
                 } else {
                     None

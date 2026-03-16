@@ -125,7 +125,7 @@ impl<'a, 'b, S> TCEnv<'a, 'b, S> {
     /// Get the sort of `s` if it's a ground sort, i.e. a sort with no parametricity.
     fn get_ground_sort(&mut self, s: &str) -> TC<Sort> {
         match self.get_sort_def(s)? {
-            SortDef::Opaque(n) => {
+            SortDef::Opaque(n) | SortDef::OpaqueDeclared(n) => {
                 if *n == 0 {
                     Ok(self.arena.simple_sort(s))
                 } else {
@@ -364,8 +364,9 @@ where
             ))
         } else {
             match d {
-                SortDef::Opaque(_) => Ok(env.arena.sort_n(id.symbol, sorts)),
-                SortDef::Datatype(_) => Ok(env.arena.sort_n(id.symbol, sorts)),
+                SortDef::Opaque(_) | SortDef::OpaqueDeclared(_) | SortDef::Datatype(_) => {
+                    Ok(env.arena.sort_n(id.symbol, sorts))
+                }
                 SortDef::Transparent { params, sort } => {
                     // when there sort is transparent, we substitute its definition
                     let subst: SortSubst = params
