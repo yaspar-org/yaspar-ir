@@ -350,7 +350,21 @@ impl Cvc5Env {
             self.locals.insert(v.1, bv.clone());
             bound.push(bv);
         }
-        let bvl = self.tm.mk_term(Kind::CVC5_KIND_VARIABLE_LIST, &bound);
+        let result = self.translate_quantifier_body(kind, vars, body, &bound);
+        for v in vars {
+            self.locals.remove(&v.1);
+        }
+        result
+    }
+
+    fn translate_quantifier_body(
+        &mut self,
+        kind: Kind,
+        vars: &[alg::VarBinding<Str, Sort>],
+        body: &Term,
+        bound: &[CTerm],
+    ) -> Res<CTerm> {
+        let bvl = self.tm.mk_term(Kind::CVC5_KIND_VARIABLE_LIST, bound);
 
         // Peel off annotations from the body to extract :pattern triggers
         let (inner_body, attrs) = match body.repr() {
@@ -372,10 +386,6 @@ impl Cvc5Env {
                 let plist = self.tm.mk_term(Kind::CVC5_KIND_INST_PATTERN_LIST, &pats);
                 return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]));
             }
-        }
-
-        for v in vars {
-            self.locals.remove(&v.1);
         }
 
         Ok(self.tm.mk_term(kind, &[bvl, cbody]))
@@ -637,10 +647,11 @@ impl Cvc5Env {
             self.locals.insert(v.1, bv.clone());
             vars.push(bv);
         }
-        let body = fd.body.to_cvc5(self)?;
+        let body = fd.body.to_cvc5(self);
         for v in &fd.vars {
             self.locals.remove(&v.1);
         }
+        let body = body?;
         let ct = if recursive {
             solver.define_fun_rec(&fd.name, &vars, out, body, true)
         } else {
@@ -685,12 +696,12 @@ impl Cvc5Env {
                 self.locals.insert(v.1, bv.clone());
                 vars.push(bv);
             }
-            let body = fd.body.to_cvc5(self)?;
+            let body = fd.body.to_cvc5(self);
             for v in &fd.vars {
                 self.locals.remove(&v.1);
             }
             all_vars.push(vars);
-            bodies.push(body);
+            bodies.push(body?);
         }
         let var_refs: Vec<&[CTerm]> = all_vars.iter().map(|v| v.as_slice()).collect();
         solver.define_funs_rec(&funs, &var_refs, &bodies, true);
