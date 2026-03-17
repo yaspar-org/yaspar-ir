@@ -76,12 +76,12 @@ impl Cvc5Env<'_> {
                 return Ok(self.tm.regexp_sort());
             }
         }
-        if name == statics::ARRAY {
-            if let [idx, elem] = s.1.as_slice() {
-                let ci = self.translate_sort(idx)?;
-                let ce = self.translate_sort(elem)?;
-                return Ok(self.tm.mk_array_sort(ci, ce));
-            }
+        if name == statics::ARRAY
+            && let [idx, elem] = s.1.as_slice()
+        {
+            let ci = self.translate_sort(idx)?;
+            let ce = self.translate_sort(elem)?;
+            return Ok(self.tm.mk_array_sort(ci, ce));
         }
         if let Some(cs) = self.sort_cache.get(name) {
             return Ok(cs.clone());
@@ -261,7 +261,7 @@ impl Cvc5Env<'_> {
             Bool(false) => Ok(self.tm.mk_false()),
             Numeral(n) => Ok(self.tm.mk_integer_from_str(&n.to_string())),
             Decimal(d) => Ok(self.tm.mk_real_from_str(&d.to_string())),
-            String(s) => Ok(self.tm.mk_string(&s, false)),
+            String(s) => Ok(self.tm.mk_string(s, false)),
             Binary(bytes, len) => {
                 let bits = binary_to_string(bytes, *len);
                 Ok(self.tm.mk_bv_from_str(*len as u32, &bits, 2))
@@ -328,10 +328,10 @@ impl Cvc5Env<'_> {
         let id = &qid.0;
         let kind = id.get_kind();
         // Handle unary minus: (- x) → NEG
-        if let Some(alg::IdentifierKind::Sub) = kind {
-            if cargs.len() == 1 {
-                return Ok(self.tm.mk_term(Kind::CVC5_KIND_NEG, &cargs));
-            }
+        if let Some(alg::IdentifierKind::Sub) = kind
+            && cargs.len() == 1
+        {
+            return Ok(self.tm.mk_term(Kind::CVC5_KIND_NEG, &cargs));
         }
         if let Some(kind) = kind.as_ref().and_then(ident_kind_to_cvc5) {
             return Ok(self.tm.mk_term(kind, &cargs));
@@ -392,35 +392,35 @@ impl Cvc5Env<'_> {
         use alg::Command as AC;
         match cmd.inner().repr() {
             AC::SetLogic(l) => {
-                solver.set_logic(&l);
+                solver.set_logic(l);
                 Ok(())
             }
             AC::SetInfo(attr) => {
                 if let alg::Attribute::Symbol(kw, val) = attr {
-                    solver.set_info(kw.symbol_of(), &val);
+                    solver.set_info(kw.symbol_of(), val);
                 } else if let alg::Attribute::Constant(kw, alg::Constant::String(s)) = attr {
-                    solver.set_info(kw.symbol_of(), &s);
+                    solver.set_info(kw.symbol_of(), s);
                 }
                 Ok(())
             }
             AC::SetOption(attr) => {
                 if let alg::Attribute::Symbol(kw, val) = attr {
-                    solver.set_option(kw.symbol_of(), &val);
+                    solver.set_option(kw.symbol_of(), val);
                 } else if let alg::Attribute::Constant(kw, alg::Constant::String(s)) = attr {
-                    solver.set_option(kw.symbol_of(), &s);
+                    solver.set_option(kw.symbol_of(), s);
                 }
                 Ok(())
             }
             AC::DeclareConst(name, sort) => {
                 let cs = self.translate_sort(sort)?;
-                let ct = self.tm.mk_const(cs, &name);
+                let ct = self.tm.mk_const(cs, name);
                 self.globals.insert(name.inner().clone(), ct);
                 Ok(())
             }
             AC::DeclareFun(name, inp, out) => {
                 let co = self.translate_sort(out)?;
                 if inp.is_empty() {
-                    let ct = self.tm.mk_const(co, &name);
+                    let ct = self.tm.mk_const(co, name);
                     self.globals.insert(name.inner().clone(), ct);
                 } else {
                     let ci: Vec<CSort> = inp
@@ -428,17 +428,16 @@ impl Cvc5Env<'_> {
                         .map(|s| self.translate_sort(s))
                         .collect::<Res<_>>()?;
                     let fs = self.tm.mk_fun_sort(&ci, co);
-                    let ct = self.tm.mk_const(fs, &name);
+                    let ct = self.tm.mk_const(fs, name);
                     self.globals.insert(name.inner().clone(), ct);
                 }
                 Ok(())
             }
             AC::DeclareSort(name, arity) => {
                 let cs = if *arity == 0 {
-                    self.tm.mk_uninterpreted_sort(&name)
+                    self.tm.mk_uninterpreted_sort(name)
                 } else {
-                    self.tm
-                        .mk_uninterpreted_sort_constructor_sort(*arity, &name)
+                    self.tm.mk_uninterpreted_sort_constructor_sort(*arity, name)
                 };
                 self.sort_cache.insert(name.inner().clone(), cs);
                 Ok(())
