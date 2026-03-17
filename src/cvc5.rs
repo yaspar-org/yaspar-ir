@@ -272,10 +272,11 @@ fn translate_term_inner(term: &Term, env: &mut Cvc5Env) -> Res<CTerm> {
         AT::Exists(vars, body) => env.translate_quantifier(Kind::CVC5_KIND_EXISTS, vars, body),
         AT::Let(bindings, body) => env.translate_let(bindings, body),
         AT::App(qid, args, _) => env.translate_app(qid, args),
-        AT::Annotated(t, _) => t.to_cvc5(env),
-        AT::Matching(_, _) => {
-            Err("match expressions not yet supported in cvc5 translation".into())
+        AT::Annotated(t, _) => {
+            // wild annotations are ignored
+            t.to_cvc5(env)
         }
+        AT::Matching(_, _) => Err("match expressions not yet supported in cvc5 translation".into()),
     }
 }
 
@@ -350,10 +351,33 @@ impl Cvc5Env {
             bound.push(bv);
         }
         let bvl = self.tm.mk_term(Kind::CVC5_KIND_VARIABLE_LIST, &bound);
-        let cbody = body.to_cvc5(self)?;
+
+        // Peel off annotations from the body to extract :pattern triggers
+        let (inner_body, attrs) = match body.repr() {
+            ATerm::Annotated(t, attrs) => (t, Some(attrs)),
+            _ => (body, None),
+        };
+        let cbody = inner_body.to_cvc5(self)?;
+
+        // Build INST_PATTERN_LIST from :pattern annotations
+        if let Some(attrs) = attrs {
+            let mut pats = Vec::new();
+            for attr in attrs {
+                if let alg::Attribute::Pattern(terms) = attr {
+                    let cterms = self.translate_terms(terms)?;
+                    pats.push(self.tm.mk_term(Kind::CVC5_KIND_INST_PATTERN, &cterms));
+                }
+            }
+            if !pats.is_empty() {
+                let plist = self.tm.mk_term(Kind::CVC5_KIND_INST_PATTERN_LIST, &pats);
+                return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]));
+            }
+        }
+
         for v in vars {
             self.locals.remove(&v.1);
         }
+
         Ok(self.tm.mk_term(kind, &[bvl, cbody]))
     }
 
