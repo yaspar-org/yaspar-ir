@@ -386,9 +386,12 @@ impl Cvc5Env {
         bindings: &[alg::VarBinding<Str, Term>],
         body: &Term,
     ) -> Res<CTerm> {
-        for b in bindings {
-            let ct = b.2.to_cvc5(self)?;
-            self.locals.insert(b.1, ct);
+        let new_bindings = bindings
+            .iter()
+            .map(|b| Ok((b.1, b.2.to_cvc5(self)?)))
+            .collect::<Res<Vec<_>>>()?;
+        for b in new_bindings {
+            self.locals.insert(b.0, b.1);
         }
         let result = body.to_cvc5(self);
         for b in bindings {
