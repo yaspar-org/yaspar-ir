@@ -305,3 +305,92 @@ fn error_unsupported_sort() {
     let mut env = Cvc5Env::new(&tm);
     assert!(custom.to_cvc5(&mut env).is_err());
 }
+
+// ── Locals cleanup tests ─────────────────────────────────────
+
+/// After a failed translation inside a quantifier body, the env should not
+/// retain stale local bindings — subsequent translations must still work.
+#[test]
+fn locals_cleaned_up_after_quantifier_error() {
+    use yaspar_ir::ast::{CheckedApi, Sig};
+
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let int = ctx.int_sort();
+
+    // Declare y in the yaspar context so type-checking succeeds
+    ctx.add_symbol("y", Sig::sort(int.clone())).unwrap();
+    let mut q = ctx
+        .build_quantifier_with_domain([("x", int.clone())])
+        .unwrap();
+    let x = q.typed_symbol("x").unwrap();
+    let y = q.typed_symbol("y").unwrap();
+    let body = q.typed_eq(x, y).unwrap();
+    let forall = q.typed_forall(body).unwrap();
+
+    let tm = TermManager::new();
+    let mut env = Cvc5Env::new(&tm);
+    // y is not registered in cvc5 — translation should fail
+    assert!(forall.to_cvc5(&mut env).is_err());
+
+    // Register y in cvc5 and retry — should succeed if locals were cleaned up
+    let cs = tm.mk_const(tm.integer_sort(), "y");
+    env.register_global("y", cs);
+    assert!(forall.to_cvc5(&mut env).is_ok());
+}
+
+/// After a failed translation inside a let body, the env should recover.
+#[test]
+fn locals_cleaned_up_after_let_error() {
+    use yaspar_ir::ast::{CheckedApi, Sig};
+
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let int = ctx.int_sort();
+
+    // Declare x in yaspar context but not in cvc5
+    ctx.add_symbol("x", Sig::sort(int.clone())).unwrap();
+    let x = ctx.typed_symbol("x").unwrap();
+    let one = ctx.numeral(1u8.into()).unwrap();
+    let mut l = ctx.build_let([("a", one)]).unwrap();
+    let a = l.typed_symbol("a").unwrap();
+    let body = l.typed_simp_app("+", [a, x]).unwrap();
+    let let_term = l.typed_let(body);
+
+    let tm = TermManager::new();
+    let mut env = Cvc5Env::new(&tm);
+    assert!(let_term.to_cvc5(&mut env).is_err());
+
+    // Register x and retry — should succeed if locals were cleaned up
+    let cx = tm.mk_const(tm.integer_sort(), "x");
+    env.register_global("x", cx);
+    assert!(let_term.to_cvc5(&mut env).is_ok());
+}
+
+/// After a failed define-fun translation, the env should recover.
+#[test]
+fn locals_cleaned_up_after_define_fun_error() {
+    let mut ctx = Context::new();
+    let cmds = UntypedAst
+        .parse_script_str(
+            "(set-logic QF_LIA)
+             (declare-const y Int)
+             (define-fun f ((x Int)) Int (+ x y))",
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm);
+    env.translate_command(&mut solver, &cmds[0]).unwrap();
+    // Skip declare-const y
+
+    // define-fun should fail because y is not registered
+    assert!(env.translate_command(&mut solver, &cmds[2]).is_err());
+
+    // Register y and retry
+    env.translate_command(&mut solver, &cmds[1]).unwrap();
+    assert!(env.translate_command(&mut solver, &cmds[2]).is_ok());
+}
