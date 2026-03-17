@@ -18,7 +18,7 @@ fn run_script(script: &str) {
         .unwrap();
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut env = Cvc5Env::new(&tm);
     for cmd in &cmds {
         env.translate_command(&mut solver, cmd).unwrap();
     }
@@ -35,7 +35,7 @@ fn check_sat(script: &str) -> bool {
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
     solver.set_option("produce-models", "true");
-    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut env = Cvc5Env::new(&tm);
     for cmd in &cmds {
         env.translate_command(&mut solver, cmd).unwrap();
     }
@@ -274,7 +274,7 @@ fn translate_term_standalone() {
         .unwrap();
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut env = Cvc5Env::new(&tm);
     for cmd in &cmds {
         env.translate_command(&mut solver, cmd).unwrap();
     }
@@ -291,7 +291,7 @@ fn error_unknown_global() {
     let int_sort = ctx.int_sort();
     let x = ctx.simple_sorted_symbol("x", int_sort);
     let tm = TermManager::new();
-    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut env = Cvc5Env::new(&tm);
     assert!(x.to_cvc5(&mut env).is_err());
 }
 
@@ -302,6 +302,6 @@ fn error_unsupported_sort() {
     // A custom sort that cvc5 doesn't know about
     let custom = ctx.simple_sort("MyCustomSort");
     let tm = TermManager::new();
-    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut env = Cvc5Env::new(&tm);
     assert!(custom.to_cvc5(&mut env).is_err());
 }

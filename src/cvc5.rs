@@ -13,6 +13,7 @@ use crate::raw::alg::CheckIdentifier;
 use crate::statics;
 use crate::traits::{Contains, Repr};
 use cvc5_rs::{Kind, TermManager};
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use yaspar::{binary_to_string, hex_to_string};
 
@@ -27,20 +28,18 @@ pub trait ConvertToCvc5<Env> {
 }
 
 /// Environment for translating yaspar-ir ASTs to cvc5-rs objects.
-pub struct Cvc5Env<'a> {
-    pub tm: &'a TermManager,
-    pub ctx: &'a mut Context,
-    sort_cache: HashMap<String, CSort>,
+pub struct Cvc5Env {
+    tm: TermManager,
+    sort: HashMap<String, CSort>,
     globals: HashMap<String, CTerm>,
     locals: HashMap<usize, CTerm>,
 }
 
-impl<'a> Cvc5Env<'a> {
-    pub fn new(tm: &'a TermManager, ctx: &'a mut Context) -> Self {
+impl Cvc5Env {
+    pub fn new(tm: impl Borrow<TermManager>) -> Self {
         Self {
-            tm,
-            ctx,
-            sort_cache: HashMap::new(),
+            tm: tm.borrow().clone(),
+            sort: HashMap::new(),
             globals: HashMap::new(),
             locals: HashMap::new(),
         }
@@ -53,7 +52,7 @@ impl<'a> Cvc5Env<'a> {
 }
 
 // ── Sort translation ─────────────────────────────────────────
-impl ConvertToCvc5<Cvc5Env<'_>> for Sort {
+impl ConvertToCvc5<Cvc5Env> for Sort {
     type Output = CSort;
 
     fn to_cvc5(&self, env: &mut Cvc5Env) -> Res<CSort> {
@@ -90,7 +89,7 @@ impl ConvertToCvc5<Cvc5Env<'_>> for Sort {
             let ce = elem.to_cvc5(env)?;
             return Ok(env.tm.mk_array_sort(ci, ce));
         }
-        if let Some(cs) = env.sort_cache.get(name) {
+        if let Some(cs) = env.sort.get(name) {
             return Ok(cs.clone());
         }
         Err(format!("unsupported sort: {self}"))
@@ -196,7 +195,7 @@ fn ident_kind_to_cvc5(k: &alg::IdentifierKind<Str>) -> Option<Kind> {
 }
 
 // ── Term translation ─────────────────────────────────────────
-impl ConvertToCvc5<Cvc5Env<'_>> for Term {
+impl ConvertToCvc5<Cvc5Env> for Term {
     type Output = CTerm;
 
     fn to_cvc5(&self, env: &mut Cvc5Env) -> Res<CTerm> {
@@ -209,20 +208,26 @@ impl ConvertToCvc5<Cvc5Env<'_>> for Term {
                 .get(&loc.id)
                 .cloned()
                 .ok_or_else(|| format!("unbound local: {}", loc.symbol)),
-            AT::Not(t) => Ok(env.tm.mk_term(Kind::CVC5_KIND_NOT, &[t.to_cvc5(env)?])),
+            AT::Not(t) => {
+                let nt = t.to_cvc5(env)?;
+                Ok(env.tm.mk_term(Kind::CVC5_KIND_NOT, &[nt]))
+            }
             AT::Eq(a, b) => {
                 let (ca, cb) = (a.to_cvc5(env)?, b.to_cvc5(env)?);
                 Ok(env.tm.mk_term(Kind::CVC5_KIND_EQUAL, &[ca, cb]))
             }
-            AT::Distinct(ts) => Ok(env
-                .tm
-                .mk_term(Kind::CVC5_KIND_DISTINCT, &env.translate_terms(ts)?)),
-            AT::And(ts) => Ok(env
-                .tm
-                .mk_term(Kind::CVC5_KIND_AND, &env.translate_terms(ts)?)),
-            AT::Or(ts) => Ok(env
-                .tm
-                .mk_term(Kind::CVC5_KIND_OR, &env.translate_terms(ts)?)),
+            AT::Distinct(ts) => {
+                let cts = env.translate_terms(ts)?;
+                Ok(env.tm.mk_term(Kind::CVC5_KIND_DISTINCT, &cts))
+            }
+            AT::And(ts) => {
+                let cts = env.translate_terms(ts)?;
+                Ok(env.tm.mk_term(Kind::CVC5_KIND_AND, &cts))
+            }
+            AT::Or(ts) => {
+                let cts = env.translate_terms(ts)?;
+                Ok(env.tm.mk_term(Kind::CVC5_KIND_OR, &cts))
+            }
             AT::Xor(ts) => {
                 let cts = env.translate_terms(ts)?;
                 let mut r = cts[0].clone();
@@ -252,7 +257,7 @@ impl ConvertToCvc5<Cvc5Env<'_>> for Term {
     }
 }
 
-impl ConvertToCvc5<Cvc5Env<'_>> for [Term] {
+impl ConvertToCvc5<Cvc5Env> for [Term] {
     type Output = Vec<CTerm>;
 
     fn to_cvc5(&self, env: &mut Cvc5Env) -> Res<Vec<CTerm>> {
@@ -260,7 +265,7 @@ impl ConvertToCvc5<Cvc5Env<'_>> for [Term] {
     }
 }
 
-impl Cvc5Env<'_> {
+impl Cvc5Env {
     fn translate_terms(&mut self, ts: &[Term]) -> Res<Vec<CTerm>> {
         ts.to_cvc5(self)
     }
@@ -409,7 +414,7 @@ impl Cvc5Env<'_> {
 }
 
 // ── Command translation ──────────────────────────────────────
-impl Cvc5Env<'_> {
+impl Cvc5Env {
     /// Process a typed command, updating the cvc5 solver state.
     pub fn translate_command(&mut self, solver: &mut cvc5_rs::Solver, cmd: &Command) -> Res<()> {
         use alg::Command as AC;
@@ -459,7 +464,7 @@ impl Cvc5Env<'_> {
                 } else {
                     self.tm.mk_uninterpreted_sort_constructor_sort(*arity, name)
                 };
-                self.sort_cache.insert(name.inner().clone(), cs);
+                self.sort.insert(name.inner().clone(), cs);
                 Ok(())
             }
             AC::DefineSort(..) => {
@@ -665,13 +670,12 @@ impl Cvc5Env<'_> {
         }
         if decls.len() == 1 {
             let cs = self.tm.mk_dt_sort(&decls[0]);
-            self.sort_cache
-                .insert(defs[0].name.inner().clone(), cs.clone());
+            self.sort.insert(defs[0].name.inner().clone(), cs.clone());
             self.register_dt_functions(cs);
         } else {
             let sorts = self.tm.mk_dt_sorts(&decls);
             for (def, cs) in defs.iter().zip(sorts) {
-                self.sort_cache.insert(def.name.inner().clone(), cs.clone());
+                self.sort.insert(def.name.inner().clone(), cs.clone());
                 self.register_dt_functions(cs);
             }
         }
