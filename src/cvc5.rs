@@ -293,7 +293,7 @@ impl Cvc5Env {
         ts.to_cvc5(self)
     }
 
-    fn translate_constant(&self, c: &alg::Constant<Str>) -> Res<CTerm> {
+    fn translate_constant(&self, c: &Constant) -> Res<CTerm> {
         use alg::Constant::*;
         match c {
             Bool(true) => Ok(self.tm.mk_true()),
@@ -350,7 +350,7 @@ impl Cvc5Env {
             self.locals.insert(v.1, bv.clone());
             bound.push(bv);
         }
-        let result = self.translate_quantifier_body(kind, vars, body, &bound);
+        let result = self.translate_quantifier_body(kind, body, &bound);
         for v in vars {
             self.locals.remove(&v.1);
         }
@@ -360,7 +360,6 @@ impl Cvc5Env {
     fn translate_quantifier_body(
         &mut self,
         kind: Kind,
-        vars: &[alg::VarBinding<Str, Sort>],
         body: &Term,
         bound: &[CTerm],
     ) -> Res<CTerm> {
@@ -377,7 +376,7 @@ impl Cvc5Env {
         if let Some(attrs) = attrs {
             let mut pats = Vec::new();
             for attr in attrs {
-                if let alg::Attribute::Pattern(terms) = attr {
+                if let Attribute::Pattern(terms) = attr {
                     let cterms = self.translate_terms(terms)?;
                     pats.push(self.tm.mk_term(Kind::CVC5_KIND_INST_PATTERN, &cterms));
                 }
