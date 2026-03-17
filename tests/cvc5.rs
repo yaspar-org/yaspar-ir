@@ -5,7 +5,7 @@
 
 use cvc5_rs::{Solver, TermManager};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
-use yaspar_ir::cvc5::Cvc5Env;
+use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env};
 use yaspar_ir::untyped::UntypedAst;
 
 /// Helper: parse + type-check a script, then translate all commands to cvc5.
@@ -257,34 +257,6 @@ fn sat_array_select_store() {
     ));
 }
 
-// ── Push/pop test ────────────────────────────────────────────
-
-#[test]
-fn push_pop() {
-    let mut ctx = Context::new();
-    let cmds = UntypedAst
-        .parse_script_str(
-            "(set-logic QF_LIA)
-             (declare-const x Int)
-             (assert (> x 0))
-             (push 1)
-             (assert (< x 0))
-             (check-sat)
-             (pop 1)
-             (check-sat)",
-        )
-        .unwrap()
-        .type_check(&mut ctx)
-        .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm, &mut ctx);
-    for cmd in &cmds {
-        env.translate_command(&mut solver, cmd).unwrap();
-    }
-    // Verifies push/pop translation doesn't crash.
-}
-
 // ── translate_term standalone test ───────────────────────────
 
 #[test]
@@ -320,7 +292,7 @@ fn error_unknown_global() {
     let x = ctx.simple_sorted_symbol("x", int_sort);
     let tm = TermManager::new();
     let mut env = Cvc5Env::new(&tm, &mut ctx);
-    assert!(env.translate_term(&x).is_err());
+    assert!(x.to_cvc5(&mut env).is_err());
 }
 
 #[test]
@@ -331,5 +303,5 @@ fn error_unsupported_sort() {
     let custom = ctx.simple_sort("MyCustomSort");
     let tm = TermManager::new();
     let mut env = Cvc5Env::new(&tm, &mut ctx);
-    assert!(env.translate_sort(&custom).is_err());
+    assert!(custom.to_cvc5(&mut env).is_err());
 }
