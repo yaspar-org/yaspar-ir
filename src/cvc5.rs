@@ -284,7 +284,12 @@ impl Cvc5Env<'_> {
         use alg::IdentifierKind::*;
         let name = qid.id_str().inner();
         match qid.get_kind() {
-            Some(Char(hex, _)) => Ok(self.tm.mk_string(&String::from_utf8_lossy(&hex), false)),
+            Some(Char(hex, _)) => Ok(self.tm.mk_string(
+                &String::from_utf8(hex).map_err(|err| {
+                    format!("symbol {qid} cannot be converted to a String: {err}")
+                })?,
+                false,
+            )),
             _ => self
                 .globals
                 .get(name.as_str())
