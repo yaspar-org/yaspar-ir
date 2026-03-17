@@ -18,14 +18,14 @@ use yaspar::{binary_to_string, hex_to_string};
 
 type CSort = cvc5_rs::Sort;
 type CTerm = cvc5_rs::Term;
-type Res<T> = std::result::Result<T, std::string::String>;
+type Res<T> = std::result::Result<T, String>;
 
 /// Environment for translating yaspar-ir ASTs to cvc5-rs objects.
 pub struct Cvc5Env<'a> {
     pub tm: &'a TermManager,
     pub ctx: &'a mut Context,
-    sort_cache: HashMap<std::string::String, CSort>,
-    globals: HashMap<std::string::String, CTerm>,
+    sort_cache: HashMap<String, CSort>,
+    globals: HashMap<String, CTerm>,
     locals: HashMap<usize, CTerm>,
 }
 
@@ -264,11 +264,18 @@ impl Cvc5Env<'_> {
             String(s) => Ok(self.tm.mk_string(s, false)),
             Binary(bytes, len) => {
                 let bits = binary_to_string(bytes, *len);
-                Ok(self.tm.mk_bv_from_str(*len as u32, &bits, 2))
+                let w: u32 = (*len)
+                    .try_into()
+                    .map_err(|_| format!("binary literal width too large: {len}"))?;
+                Ok(self.tm.mk_bv_from_str(w, &bits, 2))
             }
             Hexadecimal(bytes, len) => {
                 let hex = hex_to_string(bytes, *len);
-                Ok(self.tm.mk_bv_from_str((*len * 4) as u32, &hex, 16))
+                let w: u32 = len
+                    .checked_mul(4)
+                    .and_then(|n| n.try_into().ok())
+                    .ok_or_else(|| format!("hex literal width too large: {len}"))?;
+                Ok(self.tm.mk_bv_from_str(w, &hex, 16))
             }
         }
     }
