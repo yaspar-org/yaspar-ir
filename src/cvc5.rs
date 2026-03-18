@@ -52,7 +52,6 @@
 use crate::ast::*;
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
-use crate::statics;
 use crate::traits::{Contains, Repr};
 pub use cvc5_rs::{Kind, Solver, TermManager};
 use std::borrow::Borrow;
@@ -148,30 +147,6 @@ fn translate_sort_inner<A: HasArenaAlt>(
                 .collect::<Res<_>>()?;
         return Ok(cs.instantiate(&params));
     }
-    if s.1.is_empty() {
-        if name.inner() == statics::BOOL {
-            return Ok(env.tm.boolean_sort());
-        }
-        if name.inner() == statics::INT {
-            return Ok(env.tm.integer_sort());
-        }
-        if name.inner() == statics::REAL {
-            return Ok(env.tm.real_sort());
-        }
-        if name.inner() == statics::STRING {
-            return Ok(env.tm.string_sort());
-        }
-        if name.inner() == statics::REGLAN {
-            return Ok(env.tm.regexp_sort());
-        }
-    }
-    if name.inner() == statics::ARRAY
-        && let [idx, elem] = s.1.as_slice()
-    {
-        let ci = idx.to_cvc5(env, arena)?;
-        let ce = elem.to_cvc5(env, arena)?;
-        return Ok(env.tm.mk_array_sort(ci, ce));
-    }
     if let Some(cs) = env.sort.get(name).cloned() {
         if s.1.is_empty() {
             return Ok(cs);
@@ -183,6 +158,27 @@ fn translate_sort_inner<A: HasArenaAlt>(
                 .collect::<Res<_>>()?;
         return Ok(cs.instantiate(&params));
     }
+    if sort.is_bool() {
+        return Ok(env.tm.boolean_sort());
+    }
+    if sort.is_int() {
+        return Ok(env.tm.integer_sort());
+    }
+    if sort.is_real() {
+        return Ok(env.tm.real_sort());
+    }
+    if sort.is_string() {
+        return Ok(env.tm.string_sort());
+    }
+    if sort.is_reglan() {
+        return Ok(env.tm.regexp_sort());
+    }
+    if let Some((idx, elem)) = sort.is_array() {
+        let ci = idx.to_cvc5(env, arena)?;
+        let ce = elem.to_cvc5(env, arena)?;
+        return Ok(env.tm.mk_array_sort(ci, ce));
+    }
+
     Err(format!("unsupported sort: {sort}"))
 }
 
@@ -306,28 +302,26 @@ fn translate_term_inner<A: HasArenaAlt>(
     use alg::Term as AT;
     match term.repr() {
         AT::Constant(c, _) => env.translate_constant(c),
-        AT::Global(qid, _) => {
+        AT::Global(qid, sort) => {
+            // it's fine due to typed invariant
+            let sort = sort.as_ref().unwrap();
             // For sort-ascribed parametric constructors like (as nil (List Int)),
             // resolve via the instantiated sort using instantiated_term
-            if let Some(sort) = &qid.1 {
-                let name = qid.id_str();
-                let is_ctor = env
-                    .globals
-                    .get(name)
-                    .is_none_or(|t| t.sort().is_dt_constructor());
-                if is_ctor {
-                    let crs = sort.to_cvc5(env, arena)?;
-                    let sort_name = sort.repr().sort_name();
-                    if let Some(base_sort) = env.sort.get(sort_name).cloned() {
-                        let dt = base_sort.datatype();
-                        for i in 0..dt.num_constructors() {
-                            let ctor = dt.constructor(i);
-                            if ctor.name() == name.as_str() {
-                                let ct = ctor.instantiated_term(crs);
-                                return Ok(env
-                                    .tm
-                                    .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
-                            }
+            let name = qid.id_str();
+            let is_ctor = env
+                .globals
+                .get(name)
+                .is_none_or(|t| t.sort().is_dt_constructor());
+            if is_ctor {
+                let crs = sort.to_cvc5(env, arena)?;
+                let sort_name = sort.repr().sort_name();
+                if let Some(base_sort) = env.sort.get(sort_name).cloned() {
+                    let dt = base_sort.datatype();
+                    for i in 0..dt.num_constructors() {
+                        let ctor = dt.constructor(i);
+                        if ctor.name() == name.as_str() {
+                            let ct = ctor.instantiated_term(crs);
+                            return Ok(env.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
                         }
                     }
                 }
@@ -387,8 +381,14 @@ fn translate_term_inner<A: HasArenaAlt>(
             env.translate_quantifier(Kind::CVC5_KIND_EXISTS, vars, body, arena)
         }
         AT::Let(bindings, body) => env.translate_let(bindings, body, arena),
-        AT::App(qid, args, ret) => env.translate_app(qid, args, ret.as_ref(), arena),
-        AT::Annotated(t, _) => t.to_cvc5(env, arena),
+        AT::App(qid, args, ret) => {
+            // it's fine due to typed invariant
+            env.translate_app(qid, args, ret.as_ref().unwrap(), arena)
+        }
+        AT::Annotated(t, _) => {
+            // do not handle other annotations
+            t.to_cvc5(env, arena)
+        }
         AT::Matching(_, _) => Err("match expressions not yet supported in cvc5 translation".into()),
     }
 }
@@ -532,7 +532,7 @@ impl Cvc5Env {
         &mut self,
         qid: &QualifiedIdentifier,
         args: &[Term],
-        ret_sort: Option<&Sort>,
+        rs: &Sort,
         arena: &mut A,
     ) -> Res<CTerm> {
         let cargs = args.to_cvc5(self, arena)?;
@@ -555,21 +555,17 @@ impl Cvc5Env {
             let fs = f.sort();
             if fs.is_dt_constructor() {
                 // For parametric constructors, resolve via the instantiated return sort
-                if let Some(rs) = ret_sort {
-                    let crs = rs.to_cvc5(self, arena)?;
-                    let sort_name = rs.repr().sort_name();
-                    if let Some(base_sort) = self.sort.get(sort_name).cloned() {
-                        let dt = base_sort.datatype();
-                        for i in 0..dt.num_constructors() {
-                            let ctor = dt.constructor(i);
-                            if ctor.name() == name.as_str() {
-                                let ct = ctor.instantiated_term(crs);
-                                let mut all = vec![ct];
-                                all.extend(cargs);
-                                return Ok(self
-                                    .tm
-                                    .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &all));
-                            }
+                let crs = rs.to_cvc5(self, arena)?;
+                let sort_name = rs.repr().sort_name();
+                if let Some(base_sort) = self.sort.get(sort_name).cloned() {
+                    let dt = base_sort.datatype();
+                    for i in 0..dt.num_constructors() {
+                        let ctor = dt.constructor(i);
+                        if ctor.name() == name.as_str() {
+                            let ct = ctor.instantiated_term(crs);
+                            let mut all = vec![ct];
+                            all.extend(cargs);
+                            return Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &all));
                         }
                     }
                 }
@@ -607,7 +603,7 @@ impl Cvc5Env {
         } else {
             // Function not in globals — try resolving as a parametric datatype function
             // via the argument's or return sort
-            self.resolve_dt_app(name.as_str(), &cargs, ret_sort, arena)
+            self.resolve_dt_app(name.as_str(), &cargs, rs, arena)
         }
     }
 
@@ -617,23 +613,21 @@ impl Cvc5Env {
         &mut self,
         name: &str,
         cargs: &[CTerm],
-        ret_sort: Option<&Sort>,
+        rs: &Sort,
         arena: &mut A,
     ) -> Res<CTerm> {
         // Try constructor via return sort
-        if let Some(rs) = ret_sort {
-            let crs = rs.to_cvc5(self, arena)?;
-            let sort_name = rs.repr().sort_name();
-            if let Some(base_sort) = self.sort.get(sort_name).cloned() {
-                let dt = base_sort.datatype();
-                for i in 0..dt.num_constructors() {
-                    let ctor = dt.constructor(i);
-                    if ctor.name() == name {
-                        let ct = ctor.instantiated_term(crs);
-                        let mut all = vec![ct];
-                        all.extend_from_slice(cargs);
-                        return Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &all));
-                    }
+        let crs = rs.to_cvc5(self, arena)?;
+        let sort_name = rs.repr().sort_name();
+        if let Some(base_sort) = self.sort.get(sort_name).cloned() {
+            let dt = base_sort.datatype();
+            for i in 0..dt.num_constructors() {
+                let ctor = dt.constructor(i);
+                if ctor.name() == name {
+                    let ct = ctor.instantiated_term(crs);
+                    let mut all = vec![ct];
+                    all.extend_from_slice(cargs);
+                    return Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &all));
                 }
             }
         }
