@@ -5,7 +5,7 @@
 
 use cvc5_rs::{Solver, TermManager};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
-use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env};
+use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 use yaspar_ir::untyped::UntypedAst;
 
 /// Helper: parse + type-check a script, then translate all commands to cvc5.
@@ -19,8 +19,9 @@ fn run_script(script: &str) {
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::new(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        env.translate_command(&mut solver, cmd).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
 }
 
@@ -36,10 +37,11 @@ fn check_sat(script: &str) -> bool {
     let mut solver = Solver::new(&tm);
     solver.set_option("produce-models", "true");
     let mut env = Cvc5Env::new(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        env.translate_command(&mut solver, cmd).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
-    solver.check_sat().is_sat()
+    es.solver.check_sat().is_sat()
 }
 
 // ── Sort translation tests ───────────────────────────────────
@@ -275,8 +277,9 @@ fn translate_term_standalone() {
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::new(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        env.translate_command(&mut solver, cmd).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
     // All commands translated without error
 }
@@ -384,13 +387,14 @@ fn locals_cleaned_up_after_define_fun_error() {
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::new(&tm);
-    env.translate_command(&mut solver, &cmds[0]).unwrap();
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    cmds[0].to_cvc5(&mut es).unwrap();
     // Skip declare-const y
 
     // define-fun should fail because y is not registered
-    assert!(env.translate_command(&mut solver, &cmds[2]).is_err());
+    assert!(cmds[2].to_cvc5(&mut es).is_err());
 
     // Register y and retry
-    env.translate_command(&mut solver, &cmds[1]).unwrap();
-    assert!(env.translate_command(&mut solver, &cmds[2]).is_ok());
+    cmds[1].to_cvc5(&mut es).unwrap();
+    assert!(cmds[2].to_cvc5(&mut es).is_ok());
 }

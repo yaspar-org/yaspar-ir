@@ -55,6 +55,18 @@ impl Cvc5Env {
     }
 }
 
+/// Environment combining a [`Cvc5Env`] with a [`cvc5_rs::Solver`] for translating commands.
+pub struct Cvc5EnvSolver<'a> {
+    pub env: &'a mut Cvc5Env,
+    pub solver: &'a mut cvc5_rs::Solver,
+}
+
+impl<'a> Cvc5EnvSolver<'a> {
+    pub fn new(env: &'a mut Cvc5Env, solver: &'a mut cvc5_rs::Solver) -> Self {
+        Self { env, solver }
+    }
+}
+
 // ── Sort translation ─────────────────────────────────────────
 impl ConvertToCvc5<Cvc5Env> for Sort {
     type Output = CSort;
@@ -471,12 +483,16 @@ impl Cvc5Env {
     }
 }
 
+
 // ── Command translation ──────────────────────────────────────
-impl Cvc5Env {
-    /// Process a typed command, updating the cvc5 solver state.
-    pub fn translate_command(&mut self, solver: &mut cvc5_rs::Solver, cmd: &Command) -> Res<()> {
+impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
+    type Output = ();
+
+    fn to_cvc5(&self, es: &mut Cvc5EnvSolver) -> Res<()> {
         use alg::Command as AC;
-        match cmd.inner().repr() {
+        let env = &mut *es.env;
+        let solver = &mut *es.solver;
+        match self.inner().repr() {
             AC::SetLogic(l) => {
                 solver.set_logic(l);
                 Ok(())
@@ -498,31 +514,32 @@ impl Cvc5Env {
                 Ok(())
             }
             AC::DeclareConst(name, sort) => {
-                let cs = sort.to_cvc5(self)?;
-                let ct = self.tm.mk_const(cs, name);
-                self.globals.insert(name.inner().clone(), ct);
+                let cs = sort.to_cvc5(env)?;
+                let ct = env.tm.mk_const(cs, name);
+                env.globals.insert(name.inner().clone(), ct);
                 Ok(())
             }
             AC::DeclareFun(name, inp, out) => {
-                let co = out.to_cvc5(self)?;
+                let co = out.to_cvc5(env)?;
                 if inp.is_empty() {
-                    let ct = self.tm.mk_const(co, name);
-                    self.globals.insert(name.inner().clone(), ct);
+                    let ct = env.tm.mk_const(co, name);
+                    env.globals.insert(name.inner().clone(), ct);
                 } else {
-                    let ci: Vec<CSort> = inp.iter().map(|s| s.to_cvc5(self)).collect::<Res<_>>()?;
-                    let fs = self.tm.mk_fun_sort(&ci, co);
-                    let ct = self.tm.mk_const(fs, name);
-                    self.globals.insert(name.inner().clone(), ct);
+                    let ci: Vec<CSort> =
+                        inp.iter().map(|s| s.to_cvc5(env)).collect::<Res<_>>()?;
+                    let fs = env.tm.mk_fun_sort(&ci, co);
+                    let ct = env.tm.mk_const(fs, name);
+                    env.globals.insert(name.inner().clone(), ct);
                 }
                 Ok(())
             }
             AC::DeclareSort(name, arity) => {
                 let cs = if *arity == 0 {
-                    self.tm.mk_uninterpreted_sort(name)
+                    env.tm.mk_uninterpreted_sort(name)
                 } else {
-                    self.tm.mk_uninterpreted_sort_constructor_sort(*arity, name)
+                    env.tm.mk_uninterpreted_sort_constructor_sort(*arity, name)
                 };
-                self.sort.insert(name.inner().clone(), cs);
+                env.sort.insert(name.inner().clone(), cs);
                 Ok(())
             }
             AC::DefineSort(..) => {
@@ -530,35 +547,23 @@ impl Cvc5Env {
                 Ok(())
             }
             AC::DefineConst(name, _sort, body) => {
-                let cbody = body.to_cvc5(self)?;
-                self.globals.insert(name.inner().clone(), cbody);
+                let cbody = body.to_cvc5(env)?;
+                env.globals.insert(name.inner().clone(), cbody);
                 Ok(())
             }
-            AC::DefineFun(fd) => {
-                self.translate_define_fun(solver, fd, false)?;
-                Ok(())
-            }
-            AC::DefineFunRec(fd) => {
-                self.translate_define_fun(solver, fd, true)?;
-                Ok(())
-            }
-            AC::DefineFunsRec(fds) => {
-                self.translate_define_funs_rec(solver, fds)?;
-                Ok(())
-            }
+            AC::DefineFun(fd) => es.translate_define_fun(fd, false),
+            AC::DefineFunRec(fd) => es.translate_define_fun(fd, true),
+            AC::DefineFunsRec(fds) => es.translate_define_funs_rec(fds),
             AC::DeclareDatatype(name, dec) => {
-                self.translate_declare_datatypes(&[alg::DatatypeDef {
+                es.translate_declare_datatypes(&[alg::DatatypeDef {
                     name: name.clone(),
                     dec: dec.clone(),
                 }])?;
                 Ok(())
             }
-            AC::DeclareDatatypes(defs) => {
-                self.translate_declare_datatypes(defs)?;
-                Ok(())
-            }
+            AC::DeclareDatatypes(defs) => es.translate_declare_datatypes(defs),
             AC::Assert(t) => {
-                let ct = t.to_cvc5(self)?;
+                let ct = t.to_cvc5(env)?;
                 solver.assert_formula(CTerm::clone(&ct));
                 Ok(())
             }
@@ -567,12 +572,12 @@ impl Cvc5Env {
                 Ok(())
             }
             AC::CheckSatAssuming(terms) => {
-                let cts = self.translate_terms(terms)?;
+                let cts = env.translate_terms(terms)?;
                 let _ = solver.check_sat_assuming(&cts);
                 Ok(())
             }
             AC::GetValue(terms) => {
-                let cts = self.translate_terms(terms)?;
+                let cts = env.translate_terms(terms)?;
                 let _vals = solver.get_values(&cts);
                 Ok(())
             }
@@ -631,57 +636,60 @@ impl Cvc5Env {
             AC::Echo(_) | AC::Exit | AC::GetAssignment | AC::GetProof => Ok(()),
         }
     }
+}
 
+// ── Command helper methods ───────────────────────────────────
+impl Cvc5EnvSolver<'_> {
     fn translate_define_fun(
         &mut self,
-        solver: &mut cvc5_rs::Solver,
         fd: &alg::FunctionDef<Str, Sort, Term>,
         recursive: bool,
     ) -> Res<()> {
-        let out = fd.out_sort.to_cvc5(self)?;
+        let env = &mut *self.env;
+        let out = fd.out_sort.to_cvc5(env)?;
         let mut vars = Vec::with_capacity(fd.vars.len());
         for v in &fd.vars {
-            let vs = v.2.to_cvc5(self)?;
-            let bv = self.tm.mk_var(vs, &v.0);
-            self.locals.insert(v.1, bv.clone());
+            let vs = v.2.to_cvc5(env)?;
+            let bv = env.tm.mk_var(vs, &v.0);
+            env.locals.insert(v.1, bv.clone());
             vars.push(bv);
         }
-        let body = fd.body.to_cvc5(self);
+        let body = fd.body.to_cvc5(env);
         for v in &fd.vars {
-            self.locals.remove(&v.1);
+            env.locals.remove(&v.1);
         }
         let body = body?;
         let ct = if recursive {
-            solver.define_fun_rec(&fd.name, &vars, out, body, true)
+            self.solver.define_fun_rec(&fd.name, &vars, out, body, true)
         } else {
-            solver.define_fun(&fd.name, &vars, out, body, true)
+            self.solver.define_fun(&fd.name, &vars, out, body, true)
         };
-        self.globals.insert(fd.name.inner().clone(), ct);
+        self.env.globals.insert(fd.name.inner().clone(), ct);
         Ok(())
     }
 
     fn translate_define_funs_rec(
         &mut self,
-        solver: &mut cvc5_rs::Solver,
         fds: &[alg::FunctionDef<Str, Sort, Term>],
     ) -> Res<()> {
+        let env = &mut *self.env;
         // First pass: declare all function constants so they can reference each other
         let mut funs = Vec::with_capacity(fds.len());
         let mut out_sorts = Vec::with_capacity(fds.len());
         for fd in fds {
             let mut inp = Vec::with_capacity(fd.vars.len());
             for v in &fd.vars {
-                inp.push(v.2.to_cvc5(self)?);
+                inp.push(v.2.to_cvc5(env)?);
             }
-            let out = fd.out_sort.to_cvc5(self)?;
+            let out = fd.out_sort.to_cvc5(env)?;
             out_sorts.push(out.clone());
             let fs = if inp.is_empty() {
                 out.clone()
             } else {
-                self.tm.mk_fun_sort(&inp, out)
+                env.tm.mk_fun_sort(&inp, out)
             };
-            let ct = self.tm.mk_const(fs, &fd.name);
-            self.globals.insert(fd.name.inner().clone(), ct.clone());
+            let ct = env.tm.mk_const(fs, &fd.name);
+            env.globals.insert(fd.name.inner().clone(), ct.clone());
             funs.push(ct);
         }
         // Second pass: translate bodies
@@ -690,24 +698,25 @@ impl Cvc5Env {
         for fd in fds {
             let mut vars = Vec::with_capacity(fd.vars.len());
             for v in &fd.vars {
-                let vs = v.2.to_cvc5(self)?;
-                let bv = self.tm.mk_var(vs, &v.0);
-                self.locals.insert(v.1, bv.clone());
+                let vs = v.2.to_cvc5(env)?;
+                let bv = env.tm.mk_var(vs, &v.0);
+                env.locals.insert(v.1, bv.clone());
                 vars.push(bv);
             }
-            let body = fd.body.to_cvc5(self);
+            let body = fd.body.to_cvc5(env);
             for v in &fd.vars {
-                self.locals.remove(&v.1);
+                env.locals.remove(&v.1);
             }
             all_vars.push(vars);
             bodies.push(body?);
         }
         let var_refs: Vec<&[CTerm]> = all_vars.iter().map(|v| v.as_slice()).collect();
-        solver.define_funs_rec(&funs, &var_refs, &bodies, true);
+        self.solver.define_funs_rec(&funs, &var_refs, &bodies, true);
         Ok(())
     }
 
     fn translate_declare_datatypes(&mut self, defs: &[alg::DatatypeDef<Str, Sort>]) -> Res<()> {
+        let env = &mut *self.env;
         let mut decls = Vec::with_capacity(defs.len());
         for def in defs {
             if !def.dec.params.is_empty() {
@@ -716,11 +725,11 @@ impl Cvc5Env {
                     def.name
                 ));
             }
-            let mut dt_decl = self.tm.mk_dt_decl(&def.name, false);
+            let mut dt_decl = env.tm.mk_dt_decl(&def.name, false);
             for ctor in &def.dec.constructors {
-                let mut ctor_decl = self.tm.mk_dt_cons_decl(&ctor.ctor);
+                let mut ctor_decl = env.tm.mk_dt_cons_decl(&ctor.ctor);
                 for sel in &ctor.args {
-                    let ss = sel.2.to_cvc5(self)?;
+                    let ss = sel.2.to_cvc5(env)?;
                     ctor_decl.add_selector(&sel.0, ss);
                 }
                 dt_decl.add_constructor(&ctor_decl);
@@ -728,33 +737,33 @@ impl Cvc5Env {
             decls.push(dt_decl);
         }
         if decls.len() == 1 {
-            let cs = self.tm.mk_dt_sort(&decls[0]);
-            self.sort.insert(defs[0].name.inner().clone(), cs.clone());
-            self.register_dt_functions(cs);
+            let cs = env.tm.mk_dt_sort(&decls[0]);
+            env.sort.insert(defs[0].name.inner().clone(), cs.clone());
+            Self::register_dt_functions(env, cs);
         } else {
-            let sorts = self.tm.mk_dt_sorts(&decls);
+            let sorts = env.tm.mk_dt_sorts(&decls);
             for (def, cs) in defs.iter().zip(sorts) {
-                self.sort.insert(def.name.inner().clone(), cs.clone());
-                self.register_dt_functions(cs);
+                env.sort.insert(def.name.inner().clone(), cs.clone());
+                Self::register_dt_functions(env, cs);
             }
         }
         Ok(())
     }
 
-    fn register_dt_functions(&mut self, sort: CSort) {
+    fn register_dt_functions(env: &mut Cvc5Env, sort: CSort) {
         let dt = sort.datatype();
         for i in 0..dt.num_constructors() {
             let ctor = dt.constructor(i);
             let ctor_term = ctor.term();
             let name = ctor.name();
-            self.globals.insert(name.to_string(), ctor_term);
+            env.globals.insert(name.to_string(), ctor_term);
             let tester = ctor.tester_term();
             // Register both (_ is Ctor) and is-Ctor style testers
-            self.globals.insert(format!("is-{name}"), tester.clone());
+            env.globals.insert(format!("is-{name}"), tester.clone());
             for j in 0..ctor.num_selectors() {
                 let sel = ctor.selector(j);
                 let sel_term = sel.term();
-                self.globals.insert(sel.name().to_string(), sel_term);
+                env.globals.insert(sel.name().to_string(), sel_term);
             }
         }
     }
