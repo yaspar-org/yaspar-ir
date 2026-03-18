@@ -1,24 +1,66 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Translation from yaspar-ir typed ASTs to cvc5-rs `Sort` and `Term`.
+//! Translation from yaspar-ir typed ASTs to cvc5-rs objects.
 //!
-//! The entry point is [`Cvc5Env`], which wraps a [`cvc5_rs::TermManager`] reference and a
-//! [`Context`] reference. The [`ConvertToCvc5`] trait provides `to_cvc5` for [`Sort`] and
-//! [`Term`].
+//! This module provides the [`ConvertToCvc5`] trait and two environment types for translating
+//! yaspar-ir typed ASTs into their cvc5-rs counterparts. It requires the `cvc5` feature.
+//!
+//! # Overview
+//!
+//! - [`ConvertToCvc5<Env>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
+//! - [`Cvc5Env`] — holds a [`cvc5_rs::TermManager`] and caches for sort/term/symbol translation.
+//!   Used as the environment for `Sort::to_cvc5` and `Term::to_cvc5`.
+//! - [`Cvc5EnvSolver`] — wraps a [`Cvc5Env`] and a [`Solver`]. Used as the environment
+//!   for `Command::to_cvc5`, since commands may interact with the solver (e.g. `assert`,
+//!   `check-sat`, `define-fun`).
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use cvc5_rs::{Solver, TermManager};
+//! use yaspar_ir::ast::{Context, Typecheck};
+//! use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
+//! use yaspar_ir::untyped::UntypedAst;
+//!
+//! let mut ctx = Context::new();
+//! let cmds = UntypedAst
+//!     .parse_script_str("(set-logic QF_LIA) (declare-const x Int) (assert (> x 0)) (check-sat)")
+//!     .unwrap()
+//!     .type_check(&mut ctx)
+//!     .unwrap();
+//!
+//! let tm = TermManager::new();
+//! let mut solver = Solver::new(&tm);
+//! let mut env = Cvc5Env::new(&tm);
+//! let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+//! for cmd in &cmds {
+//!     cmd.to_cvc5(&mut es).unwrap();
+//! }
+//! ```
+//!
+//! # Caching
+//!
+//! `Cvc5Env` caches translated sorts and terms so that repeated translations of the same
+//! hashconsed object return the cached cvc5 object directly.
+//!
+//! # Annotations
+//!
+//! Quantifier `:pattern` annotations are translated to cvc5 `INST_PATTERN` / `INST_PATTERN_LIST`
+//! terms, which guide quantifier instantiation. Other annotations are ignored.
 
 use crate::ast::*;
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::statics;
 use crate::traits::{Contains, Repr};
-use cvc5_rs::{Kind, TermManager};
+pub use cvc5_rs::{Kind, Solver, TermManager};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use yaspar::{binary_to_string, hex_to_string};
 
-type CSort = cvc5_rs::Sort;
-type CTerm = cvc5_rs::Term;
+pub type CSort = cvc5_rs::Sort;
+pub type CTerm = cvc5_rs::Term;
 type Res<T> = std::result::Result<T, String>;
 
 /// Convert a yaspar-ir typed AST node to its cvc5-rs counterpart.
@@ -55,14 +97,14 @@ impl Cvc5Env {
     }
 }
 
-/// Environment combining a [`Cvc5Env`] with a [`cvc5_rs::Solver`] for translating commands.
+/// Environment combining a [`Cvc5Env`] with a [`Solver`] for translating commands.
 pub struct Cvc5EnvSolver<'a> {
     pub env: &'a mut Cvc5Env,
-    pub solver: &'a mut cvc5_rs::Solver,
+    pub solver: &'a mut Solver,
 }
 
 impl<'a> Cvc5EnvSolver<'a> {
-    pub fn new(env: &'a mut Cvc5Env, solver: &'a mut cvc5_rs::Solver) -> Self {
+    pub fn new(env: &'a mut Cvc5Env, solver: &'a mut Solver) -> Self {
         Self { env, solver }
     }
 }
@@ -426,7 +468,7 @@ impl Cvc5Env {
         let id = &qid.0;
         let kind = id.get_kind();
         // Handle unary minus: (- x) → NEG
-        if let Some(alg::IdentifierKind::Sub) = kind
+        if let Some(IdentifierKind::Sub) = kind
             && cargs.len() == 1
         {
             return Ok(self.tm.mk_term(Kind::CVC5_KIND_NEG, &cargs));
@@ -483,7 +525,6 @@ impl Cvc5Env {
     }
 }
 
-
 // ── Command translation ──────────────────────────────────────
 impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
     type Output = ();
@@ -498,17 +539,17 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
                 Ok(())
             }
             AC::SetInfo(attr) => {
-                if let alg::Attribute::Symbol(kw, val) = attr {
+                if let Attribute::Symbol(kw, val) = attr {
                     solver.set_info(kw.symbol_of(), val);
-                } else if let alg::Attribute::Constant(kw, alg::Constant::String(s)) = attr {
+                } else if let Attribute::Constant(kw, Constant::String(s)) = attr {
                     solver.set_info(kw.symbol_of(), s);
                 }
                 Ok(())
             }
             AC::SetOption(attr) => {
-                if let alg::Attribute::Symbol(kw, val) = attr {
+                if let Attribute::Symbol(kw, val) = attr {
                     solver.set_option(kw.symbol_of(), val);
-                } else if let alg::Attribute::Constant(kw, alg::Constant::String(s)) = attr {
+                } else if let Attribute::Constant(kw, Constant::String(s)) = attr {
                     solver.set_option(kw.symbol_of(), s);
                 }
                 Ok(())
@@ -525,8 +566,7 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
                     let ct = env.tm.mk_const(co, name);
                     env.globals.insert(name.inner().clone(), ct);
                 } else {
-                    let ci: Vec<CSort> =
-                        inp.iter().map(|s| s.to_cvc5(env)).collect::<Res<_>>()?;
+                    let ci: Vec<CSort> = inp.iter().map(|s| s.to_cvc5(env)).collect::<Res<_>>()?;
                     let fs = env.tm.mk_fun_sort(&ci, co);
                     let ct = env.tm.mk_const(fs, name);
                     env.globals.insert(name.inner().clone(), ct);
@@ -668,10 +708,7 @@ impl Cvc5EnvSolver<'_> {
         Ok(())
     }
 
-    fn translate_define_funs_rec(
-        &mut self,
-        fds: &[alg::FunctionDef<Str, Sort, Term>],
-    ) -> Res<()> {
+    fn translate_define_funs_rec(&mut self, fds: &[alg::FunctionDef<Str, Sort, Term>]) -> Res<()> {
         let env = &mut *self.env;
         // First pass: declare all function constants so they can reference each other
         let mut funs = Vec::with_capacity(fds.len());
