@@ -49,6 +49,7 @@
 //! - `cnf` — enables NNF/CNF conversion (see `ast::cnf` module).
 //! - `implicant-generation` — enables implicant computation (see `ast::implicant` module).
 //! - `cache` — enables caching infrastructure for CNF and other algorithms.
+//! - `cvc5` — enables translation to cvc5 (see [`cvc5`] module and the [`ConvertToCvc5`](cvc5::ConvertToCvc5) trait).
 //!
 //! # Modules
 //!
@@ -58,6 +59,7 @@
 //! | [`untyped`] | Untyped ASTs with location information, and the parser entry point [`UntypedAst`](untyped::UntypedAst) |
 //! | [`traits`] | Core abstraction traits ([`Contains`](traits::Contains), [`Repr`](traits::Repr), [`AllocatableString`](traits::AllocatableString)) |
 //! | [`statics`] | Static constants (sort name strings, regex patterns) |
+//! | [`cvc5`] | Translation to cvc5-rs objects (`Sort`, `Term`, `Command`). Requires the `cvc5` feature. |
 
 mod allocator;
 pub mod ast;

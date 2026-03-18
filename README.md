@@ -151,61 +151,61 @@ the following categories of functions:
 
 **Symbols and identifiers:**
 
-| Method | Description |
-|---|---|
-| `typed_symbol(name)` | Look up a declared/defined symbol by name. Returns `Err` if not in scope or ambiguous (e.g. overloaded). |
-| `typed_symbol_with_sort(name, sort)` | Look up a symbol and disambiguate by sort. Useful for polymorphic constructors like `nil`. |
-| `typed_identifier(qid)` | Look up a fully qualified identifier. |
+| Method                               | Description                                                                                              |
+|--------------------------------------|----------------------------------------------------------------------------------------------------------|
+| `typed_symbol(name)`                 | Look up a declared/defined symbol by name. Returns `Err` if not in scope or ambiguous (e.g. overloaded). |
+| `typed_symbol_with_sort(name, sort)` | Look up a symbol and disambiguate by sort. Useful for polymorphic constructors like `nil`.               |
+| `typed_identifier(qid)`              | Look up a fully qualified identifier.                                                                    |
 
 **Function application:**
 
-| Method | Description |
-|---|---|
-| `typed_app(qid, args)` | Apply a qualified identifier to arguments. Checks arity and argument sorts. |
-| `typed_simp_app(name, args)` | Convenience wrapper: apply a function by name string. |
-| `typed_app_with_kind(kind, args)` | Apply a builtin `IdentifierKind` (e.g. indexed operators). |
+| Method                            | Description                                                                 |
+|-----------------------------------|-----------------------------------------------------------------------------|
+| `typed_app(qid, args)`            | Apply a qualified identifier to arguments. Checks arity and argument sorts. |
+| `typed_simp_app(name, args)`      | Convenience wrapper: apply a function by name string.                       |
+| `typed_app_with_kind(kind, args)` | Apply a builtin `IdentifierKind` (e.g. indexed operators).                  |
 
 **Literals:**
 
-| Method | Description |
-|---|---|
-| `numeral(n)` | Build a numeral literal from a `UBig`. |
-| `integer(i)` | Build an integer literal from an `IBig` (wraps negation if needed). |
-| `typed_constant(c)` | Build a typed constant from a `Constant` value. |
+| Method              | Description                                                         |
+|---------------------|---------------------------------------------------------------------|
+| `numeral(n)`        | Build a numeral literal from a `UBig`.                              |
+| `integer(i)`        | Build an integer literal from an `IBig` (wraps negation if needed). |
+| `typed_constant(c)` | Build a typed constant from a `Constant` value.                     |
 
 **Logical connectives (all arguments must be `Bool`):**
 
-| Method | Description |
-|---|---|
-| `typed_eq(a, b)` | Equality `(= a b)`. Both arguments must have the same sort. |
-| `typed_distinct(ts)` | `(distinct ...)`. At least two arguments required. |
-| `typed_and(ts)` | `(and ...)`. At least one argument. |
-| `typed_or(ts)` | `(or ...)`. At least one argument. |
-| `typed_xor(ts)` | `(xor ...)`. At least two arguments. |
-| `typed_not(t)` | `(not t)`. |
-| `typed_implies(premises, concl)` | `(=> p1 p2 ... concl)`. |
-| `typed_ite(cond, then, else)` | `(ite c t e)`. Condition must be `Bool`; branches must have the same sort. |
+| Method                           | Description                                                                |
+|----------------------------------|----------------------------------------------------------------------------|
+| `typed_eq(a, b)`                 | Equality `(= a b)`. Both arguments must have the same sort.                |
+| `typed_distinct(ts)`             | `(distinct ...)`. At least two arguments required.                         |
+| `typed_and(ts)`                  | `(and ...)`. At least one argument.                                        |
+| `typed_or(ts)`                   | `(or ...)`. At least one argument.                                         |
+| `typed_xor(ts)`                  | `(xor ...)`. At least two arguments.                                       |
+| `typed_not(t)`                   | `(not t)`.                                                                 |
+| `typed_implies(premises, concl)` | `(=> p1 p2 ... concl)`.                                                    |
+| `typed_ite(cond, then, else)`    | `(ite c t e)`. Condition must be `Bool`; branches must have the same sort. |
 
 **Builder contexts (scoped sub-environments):**
 
-| Method | Returns | Purpose |
-|---|---|---|
-| `build_quantifier()` | `TC<QuantifierContext>` | Enter a scope for building `forall`/`exists`. |
+| Method                                   | Returns                 | Purpose                                                          |
+|------------------------------------------|-------------------------|------------------------------------------------------------------|
+| `build_quantifier()`                     | `TC<QuantifierContext>` | Enter a scope for building `forall`/`exists`.                    |
 | `build_quantifier_with_domain(bindings)` | `TC<QuantifierContext>` | Shorthand: enter a quantifier scope with pre-declared variables. |
-| `build_let(bindings)` | `TC<LetContext>` | Enter a scope for building `let` bindings. |
-| `build_matching(scrutinee)` | `TC<MatchContext>` | Enter a scope for building `match` expressions. |
+| `build_let(bindings)`                    | `TC<LetContext>`        | Enter a scope for building `let` bindings.                       |
+| `build_matching(scrutinee)`              | `TC<MatchContext>`      | Enter a scope for building `match` expressions.                  |
 
 #### The `ScopedSortApi` trait — building sorts
 
 `ScopedSortApi` is automatically implemented for any type that implements `CheckedApi`. It provides
 well-formedness-checked sort construction:
 
-| Method | Description |
-|---|---|
-| `wf_sort(name)` | Look up a sort by name (e.g. `"Int"`, `"Bool"`, a user-defined sort). |
-| `wf_sort_n(name, params)` | Parameterized sort (e.g. `wf_sort_n("List", [int])` for `(List Int)`). |
-| `wf_sort_id(id, params)` | Sort from an `Identifier` and parameters. |
-| `wf_bv_sort(len)` | Bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds. |
+| Method                    | Description                                                              |
+|---------------------------|--------------------------------------------------------------------------|
+| `wf_sort(name)`           | Look up a sort by name (e.g. `"Int"`, `"Bool"`, a user-defined sort).    |
+| `wf_sort_n(name, params)` | Parameterized sort (e.g. `wf_sort_n("List", [int])` for `(List Int)`).   |
+| `wf_sort_id(id, params)`  | Sort from an `Identifier` and parameters.                                |
+| `wf_bv_sort(len)`         | Bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds. |
 
 These return `Err` when the sort doesn't exist in the current logic, has the wrong number of
 parameters, or is otherwise invalid.
@@ -224,20 +224,20 @@ context.ensure_logic();
 
 let int = context.int_sort();
 // Option 1: extend incrementally
-let mut q_ctx = context.build_quantifier()?;
-q_ctx.extend("x", int.clone())?.extend("y", int)?;
+let mut q_ctx = context.build_quantifier() ?;
+q_ctx.extend("x", int.clone()) ?.extend("y", int) ?;
 
 // Option 2: provide domain upfront (equivalent)
-let mut q_ctx = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)])?;
+let mut q_ctx = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)]) ?;
 
 // Build terms using the local variables
 let body = q_ctx.typed_simp_app(">", [
-    q_ctx.typed_symbol("x")?,
-    q_ctx.typed_symbol("y")?,
-])?;
+q_ctx.typed_symbol("x") ?,
+q_ctx.typed_symbol("y") ?,
+]) ?;
 
 // Finalize — consumes the context
-let forall_term = q_ctx.typed_forall(body)?;  // or .typed_exists(body)?
+let forall_term = q_ctx.typed_forall(body) ?;  // or .typed_exists(body)?
 ```
 
 The body must be a `Bool`-sorted term. Duplicate variable names are rejected.
@@ -246,14 +246,14 @@ The body must be a `Bool`-sorted term. Duplicate variable names are rejected.
 
 ```rust
 // Bindings are provided at creation time (they are well-formed in the parent scope)
-let bound_term = context.typed_simp_app("+", [a.clone(), b.clone()])?;
-let mut l_ctx = context.build_let([("sum", bound_term)])?;
+let bound_term = context.typed_simp_app("+", [a.clone(), b.clone()]) ?;
+let mut l_ctx = context.build_let([("sum", bound_term)]) ?;
 
 // "sum" is now available as a local variable
 let body = l_ctx.typed_simp_app("*", [
-    l_ctx.typed_symbol("sum")?,
-    l_ctx.typed_symbol("sum")?,
-])?;
+l_ctx.typed_symbol("sum") ?,
+l_ctx.typed_symbol("sum") ?,
+]) ?;
 
 // Finalize
 let let_term = l_ctx.typed_let(body);
@@ -266,22 +266,22 @@ validated at context creation.
 
 ```rust
 // Assume List datatype is declared and l1 : (List Int)
-let mut m_ctx = context.build_matching(l1)?;
+let mut m_ctx = context.build_matching(l1) ?;
 
 // Build the nil arm (nullary constructor)
-let nil_arm = m_ctx.build_arm_nullary("nil")?;
-nil_arm.typed_arm(some_body)?;
+let nil_arm = m_ctx.build_arm_nullary("nil") ?;
+nil_arm.typed_arm(some_body) ?;
 
 // Build the cons arm with named variables
-let mut cons_arm = m_ctx.build_arm("cons", [Some("h"), Some("t")])?;
+let mut cons_arm = m_ctx.build_arm("cons", [Some("h"), Some("t")]) ?;
 // "h" and "t" are now in scope within cons_arm
-let h = cons_arm.typed_symbol("h")?;
-let t = cons_arm.typed_symbol("t")?;
+let h = cons_arm.typed_symbol("h") ?;
+let t = cons_arm.typed_symbol("t") ?;
 let body = /* ... build body using h and t ... */;
-cons_arm.typed_arm(body)?;
+cons_arm.typed_arm(body) ?;
 
 // Finalize — all constructors must be covered (or a wildcard must be present)
-let match_term = m_ctx.typed_matching()?;
+let match_term = m_ctx.typed_matching() ?;
 ```
 
 The match context tracks constructor coverage. `typed_matching()` returns `Err` if not all
@@ -293,11 +293,11 @@ arms. All arm bodies must have the same sort.
 ```rust
 let int = context.int_sort();
 let mut f_ctx = context.build_fun_out_sort(
-    "double", [("x", int.clone())], int
-)?;
-let x = f_ctx.typed_symbol("x")?;
-let body = f_ctx.typed_simp_app("+", [x.clone(), x])?;
-let cmd = f_ctx.typed_define_fun(body)?;
+"double", [("x", int.clone())], int
+) ?;
+let x = f_ctx.typed_symbol("x") ?;
+let body = f_ctx.typed_simp_app("+", [x.clone(), x]) ?;
+let cmd = f_ctx.typed_define_fun(body) ?;
 // "double" is now in the global context
 ```
 
@@ -307,15 +307,15 @@ Use `build_fun` (without output sort) to let the sort be inferred from the body.
 
 ```rust
 let int = context.int_sort();
-let list_int = context.wf_sort_n("List", [int.clone()])?;
+let list_int = context.wf_sort_n("List", [int.clone()]) ?;
 let mut ctx = context.build_rec_funs([
-    RecFunc::new("length", [("l", list_int.clone())], int.clone()),
-])?;
-let mut f_ctx = ctx.build_function("length")?;
+RecFunc::new("length", [("l", list_int.clone())], int.clone()),
+]) ?;
+let mut f_ctx = ctx.build_function("length") ?;
 // The function "length" is already in scope (for recursive calls)
 let body = /* ... */;
-f_ctx.typed_function(body)?;
-let cmd = ctx.typed_define_funs_rec()?;
+f_ctx.typed_function(body) ?;
+let cmd = ctx.typed_define_funs_rec() ?;
 ```
 
 All declared functions must be given a body before calling `typed_define_funs_rec()`.
@@ -324,17 +324,17 @@ All declared functions must be given a body before calling `typed_define_funs_re
 
 ```rust
 // Simple enum
-let cmd = context.typed_enum("Color", ["red", "green", "blue"])?;
+let cmd = context.typed_enum("Color", ["red", "green", "blue"]) ?;
 
 // Polymorphic datatype
-let mut d_ctx = context.build_datatypes([("List", ["X"])])?;
-let mut c_ctx = d_ctx.build_datatype("List")?;
-c_ctx.build_datatype_constructor_nullary("nil")?;
-let xvar = c_ctx.wf_sort("X")?;  // sort parameter is in scope
-let list_x = c_ctx.wf_sort_n("List", [xvar.clone()])?;
-c_ctx.build_datatype_constructor("cons", [("car", xvar), ("cdr", list_x)])?;
-c_ctx.typed_datatype()?;
-let cmd = d_ctx.typed_declare_datatypes()?;
+let mut d_ctx = context.build_datatypes([("List", ["X"])]) ?;
+let mut c_ctx = d_ctx.build_datatype("List") ?;
+c_ctx.build_datatype_constructor_nullary("nil") ?;
+let xvar = c_ctx.wf_sort("X") ?;  // sort parameter is in scope
+let list_x = c_ctx.wf_sort_n("List", [xvar.clone()]) ?;
+c_ctx.build_datatype_constructor("cons", [("car", xvar), ("cdr", list_x)]) ?;
+c_ctx.typed_datatype() ?;
+let cmd = d_ctx.typed_declare_datatypes() ?;
 ```
 
 Datatype contexts validate non-emptiness, constructor uniqueness, and selector name uniqueness.
@@ -345,8 +345,8 @@ global context (the operation is transactional).
 
 ```rust
 let int = context.int_sort();
-let s_ctx = context.build_sort_alias("MyInt", [])?;
-let cmd = s_ctx.typed_define_sort(int)?;
+let s_ctx = context.build_sort_alias("MyInt", []) ?;
+let cmd = s_ctx.typed_define_sort(int) ?;
 // "MyInt" is now an alias for Int
 ```
 
@@ -354,13 +354,13 @@ For parameterized sort aliases, the sort parameters are available via `wf_sort` 
 
 **Top-level command helpers on `Context`:**
 
-| Method | Description |
-|---|---|
-| `typed_assert(t)` | Build `(assert t)`. Validates `t` is `Bool` and processes `:named` annotations. |
-| `typed_define_const(name, body)` | Build `(define-const name sort body)` with inferred sort. |
-| `typed_define_const_sorted(name, sort, body)` | Same, but validates the body matches the declared sort. |
-| `typed_set_option(opt)` | Build `(set-option ...)` with keyword-specific validation. |
-| `typed_check_sat_assuming(assumptions)` | Build `(check-sat-assuming ...)`. All assumptions must be `Bool`. |
+| Method                                        | Description                                                                     |
+|-----------------------------------------------|---------------------------------------------------------------------------------|
+| `typed_assert(t)`                             | Build `(assert t)`. Validates `t` is `Bool` and processes `:named` annotations. |
+| `typed_define_const(name, body)`              | Build `(define-const name sort body)` with inferred sort.                       |
+| `typed_define_const_sorted(name, sort, body)` | Same, but validates the body matches the declared sort.                         |
+| `typed_set_option(opt)`                       | Build `(set-option ...)` with keyword-specific validation.                      |
+| `typed_check_sat_assuming(assumptions)`       | Build `(check-sat-assuming ...)`. All assumptions must be `Bool`.               |
 
 #### Context nesting
 
@@ -369,16 +369,16 @@ can create another `QuantifierContext`, and so on. Each nested context sees all 
 ancestors:
 
 ```rust
-let mut q_ctx = context.build_quantifier_with_domain([("x", int)])?;
-let inc_x = q_ctx.typed_simp_app("+", [q_ctx.typed_symbol("x")?, one])?;
-let mut l_ctx = q_ctx.build_let([("y", inc_x)])?;
+let mut q_ctx = context.build_quantifier_with_domain([("x", int)]) ?;
+let inc_x = q_ctx.typed_simp_app("+", [q_ctx.typed_symbol("x") ?, one]) ?;
+let mut l_ctx = q_ctx.build_let([("y", inc_x)]) ?;
 // "y" and "x" are both in scope here
 let body = l_ctx.typed_simp_app("*", [
-    l_ctx.typed_symbol("x")?,
-    l_ctx.typed_symbol("y")?,
-])?;
+l_ctx.typed_symbol("x") ?,
+l_ctx.typed_symbol("y") ?,
+]) ?;
 let let_term = l_ctx.typed_let(body);
-let forall = q_ctx.typed_forall(let_term)?;
+let forall = q_ctx.typed_forall(let_term) ?;
 ```
 
 ### Analyzing hashconsed objects
@@ -486,7 +486,7 @@ Currently, the crate provides the following functionalities:
 
 ### Translation to cvc5
 
-The `cvc5` module exposes the `ConvertToCvc5<Env>` trait, which provides a uniform `.to_cvc5(env)` method for
+The `cvc5` module exposes the `ConvertToCvc5<Env, A>` trait, which provides a uniform `.to_cvc5(env, ctx)` method for
 translating sorts, terms, and commands. Two environment types are used:
 
 - `Cvc5Env` — wraps a `TermManager` and caches. Used for translating `Sort`s and `Term`s.
@@ -518,15 +518,15 @@ fn main() {
     // translate commands (which internally translate sorts and terms)
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        cmd.to_cvc5(&mut es).unwrap();
+        cmd.to_cvc5(&mut es, &mut ctx).unwrap();
     }
 
     // sorts and terms can also be translated individually
     let int = ctx.int_sort();
-    let cvc5_int = int.to_cvc5(&mut env).unwrap();
+    let cvc5_int = int.to_cvc5(&mut env, &mut ctx).unwrap();
 
     let term = UntypedAst.parse_term_str("(+ x 1)").unwrap().type_check(&mut ctx).unwrap();
-    let cvc5_term = term.to_cvc5(&mut env).unwrap();
+    let cvc5_term = term.to_cvc5(&mut env, &mut ctx).unwrap();
 }
 ```
 

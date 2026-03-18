@@ -8,7 +8,7 @@
 //!
 //! # Overview
 //!
-//! - [`ConvertToCvc5<Env>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
+//! - [`ConvertToCvc5<Env, A>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
 //! - [`Cvc5Env`] — holds a [`cvc5_rs::TermManager`] and caches for sort/term/symbol translation.
 //!   Used as the environment for `Sort::to_cvc5` and `Term::to_cvc5`.
 //! - [`Cvc5EnvSolver`] — wraps a [`Cvc5Env`] and a [`Solver`]. Used as the environment
@@ -17,7 +17,7 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use cvc5_rs::{Solver, TermManager};
 //! use yaspar_ir::ast::{Context, Typecheck};
 //! use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
@@ -35,7 +35,7 @@
 //! let mut env = Cvc5Env::new(&tm);
 //! let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
 //! for cmd in &cmds {
-//!     cmd.to_cvc5(&mut es).unwrap();
+//!     cmd.to_cvc5(&mut es, &mut ctx).unwrap();
 //! }
 //! ```
 //!

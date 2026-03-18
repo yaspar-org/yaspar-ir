@@ -331,7 +331,9 @@ fn locals_cleaned_up_after_quantifier_error() {
     let mut env = Cvc5Env::new(&tm);
 
     // Translate set-logic only — skip declare-const y
-    cmds[0].to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver), &mut ctx).unwrap();
+    cmds[0]
+        .to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver), &mut ctx)
+        .unwrap();
 
     // Extract the forall term from the assert command and translate it directly
     use yaspar_ir::traits::Repr;
@@ -344,7 +346,9 @@ fn locals_cleaned_up_after_quantifier_error() {
     assert!(forall.to_cvc5(&mut env, &mut ctx).is_err());
 
     // Now register y and retry — env should be clean (no stale locals from x)
-    cmds[1].to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver), &mut ctx).unwrap();
+    cmds[1]
+        .to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver), &mut ctx)
+        .unwrap();
     assert!(forall.to_cvc5(&mut env, &mut ctx).is_ok());
 }
 
