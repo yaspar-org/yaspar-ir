@@ -91,10 +91,10 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install cmake
 
-      - name: Resolve cvc5-sys version
+      - name: Resolve cvc5-rs version
         id: cvc5-version
         run: |
-          version=$(awk -F'"' '/^name = "cvc5-sys"/{getline; print $2}' Cargo.lock)
+          version=$(awk -F'"' '/^cvc5-rs/{print $2}' Cargo.toml)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache cvc5 build
@@ -102,7 +102,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cvc5-built
-          key: ${{ runner.os }}-cvc5-sys-${{ steps.cvc5-version.outputs.version }}
+          key: ${{ runner.os }}-cvc5-rs-${{ steps.cvc5-version.outputs.version }}
 
       - name: Clone and build cvc5
         if: steps.cache-cvc5.outputs.cache-hit != 'true'
@@ -147,10 +147,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 
-      - name: Resolve cvc5-sys version
+      - name: Resolve cvc5-rs version
         id: cvc5-version
         run: |
-          version=$(awk -F'"' '/^name = "cvc5-sys"/{getline; print $2}' Cargo.lock)
+          version=$(awk -F'"' '/^cvc5-rs/{print $2}' Cargo.toml)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache cvc5 build
@@ -158,7 +158,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cvc5-built
-          key: ${{ runner.os }}-cvc5-sys-${{ steps.cvc5-version.outputs.version }}
+          key: ${{ runner.os }}-cvc5-rs-${{ steps.cvc5-version.outputs.version }}
 
       - name: Clone and build cvc5
         if: steps.cache-cvc5.outputs.cache-hit != 'true'
@@ -208,10 +208,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 
-      - name: Resolve cvc5-sys version
+      - name: Resolve cvc5-rs version
         id: cvc5-version
         run: |
-          version=$(awk -F'"' '/^name = "cvc5-sys"/{getline; print $2}' Cargo.lock)
+          version=$(awk -F'"' '/^cvc5-rs/{print $2}' Cargo.toml)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache cvc5 build
@@ -219,7 +219,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cvc5-built
-          key: ${{ runner.os }}-cvc5-sys-${{ steps.cvc5-version.outputs.version }}
+          key: ${{ runner.os }}-cvc5-rs-${{ steps.cvc5-version.outputs.version }}
 
       - name: Clone and build cvc5
         if: steps.cache-cvc5.outputs.cache-hit != 'true'
