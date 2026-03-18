@@ -1,6 +1,6 @@
 [package]
 name = "yaspar-ir"
-version = "2.7.2"
+version = "2.7.3"
 edition = "2024"
 readme = "README.md"
 license = "Apache-2.0"
