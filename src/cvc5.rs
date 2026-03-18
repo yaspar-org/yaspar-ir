@@ -313,15 +313,19 @@ fn translate_term_inner<A: HasArenaAlt>(
                 .get(name)
                 .is_none_or(|t| t.sort().is_dt_constructor());
             if is_ctor {
-                let crs = sort.to_cvc5(env, arena)?;
                 let sort_name = sort.repr().sort_name();
                 if let Some(base_sort) = env.sort.get(sort_name).cloned() {
                     let dt = base_sort.datatype();
-                    for i in 0..dt.num_constructors() {
-                        let ctor = dt.constructor(i);
-                        if ctor.name() == name.as_str() {
-                            let ct = ctor.instantiated_term(crs);
-                            return Ok(env.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
+                    if dt.is_parametric() {
+                        let crs = sort.to_cvc5(env, arena)?;
+                        for i in 0..dt.num_constructors() {
+                            let ctor = dt.constructor(i);
+                            if ctor.name() == name.as_str() {
+                                let ct = ctor.instantiated_term(crs);
+                                return Ok(env
+                                    .tm
+                                    .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
+                            }
                         }
                     }
                 }
@@ -389,7 +393,7 @@ fn translate_term_inner<A: HasArenaAlt>(
             // do not handle other annotations
             t.to_cvc5(env, arena)
         }
-        AT::Matching(_, _) => Err("match expressions not yet supported in cvc5 translation".into()),
+        AT::Matching(scrutinee, arms) => env.translate_matching(scrutinee, arms, arena),
     }
 }
 
@@ -528,6 +532,107 @@ impl Cvc5Env {
         result
     }
 
+    fn translate_matching<A: HasArenaAlt>(
+        &mut self,
+        scrutinee: &Term,
+        arms: &[alg::PatternArm<Str, Term>],
+        arena: &mut A,
+    ) -> Res<CTerm> {
+        let cscrutinee = scrutinee.to_cvc5(self, arena)?;
+        let scr_sort = cscrutinee.sort();
+        let dt = scr_sort.datatype();
+        // For parametric datatypes, selector codomain sorts are uninstantiated (e.g. X).
+        // We need to substitute the sort parameters with the actual instantiated parameters.
+        let subst: Option<(Vec<CSort>, Vec<CSort>)> = if dt.is_parametric() {
+            let params = dt.parameters();
+            let inst_params = scr_sort.instantiated_parameters();
+            Some((params, inst_params))
+        } else {
+            None
+        };
+
+        let mut cases = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let case = match &arm.pattern {
+                alg::Pattern::Ctor(name) => {
+                    let ctor = dt.constructor_by_name(name);
+                    let ctor_term = if dt.is_parametric() {
+                        ctor.instantiated_term(scr_sort.clone())
+                    } else {
+                        ctor.term()
+                    };
+                    let ctor_app = self
+                        .tm
+                        .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ctor_term]);
+                    let cbody = arm.body.to_cvc5(self, arena)?;
+                    self.tm
+                        .mk_term(Kind::CVC5_KIND_MATCH_CASE, &[ctor_app, cbody])
+                }
+                alg::Pattern::Applied {
+                    ctor: name,
+                    arguments,
+                } => {
+                    // Use the scrutinee's (instantiated) datatype for pattern constructors
+                    // and selector sorts.
+                    let ctor = dt.constructor_by_name(name);
+                    let mut vars = Vec::with_capacity(arguments.len());
+                    let mut pattern_args = Vec::new();
+                    for (i, arg) in arguments.iter().enumerate() {
+                        let mut sel_sort = ctor.selector(i).codomain_sort();
+                        if let Some((ref params, ref inst)) = subst {
+                            sel_sort = sel_sort.substitute_sorts(params, inst);
+                        }
+                        let bv = match arg {
+                            Some((_, id)) => {
+                                let bv = self.tm.mk_var(sel_sort, &format!("_m{id}"));
+                                self.locals.insert(*id, bv.clone());
+                                bv
+                            }
+                            None => self.tm.mk_var(sel_sort, "_"),
+                        };
+                        vars.push(bv.clone());
+                        pattern_args.push(bv);
+                    }
+                    let mut pat_children = vec![ctor.term()];
+                    pat_children.extend(pattern_args);
+                    let pattern = self
+                        .tm
+                        .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &pat_children);
+                    let vlist = self.tm.mk_term(Kind::CVC5_KIND_VARIABLE_LIST, &vars);
+                    let cbody = arm.body.to_cvc5(self, arena);
+                    for (_, id) in arguments.iter().flatten() {
+                        self.locals.remove(id);
+                    }
+                    let cbody = cbody?;
+                    self.tm
+                        .mk_term(Kind::CVC5_KIND_MATCH_BIND_CASE, &[vlist, pattern, cbody])
+                }
+                alg::Pattern::Wildcard(binding) => {
+                    let fresh = arena.arena_alt().fresh_x().to_string();
+                    let bv = self.tm.mk_var(scr_sort.clone(), &fresh);
+                    if let Some((_, id)) = binding {
+                        self.locals.insert(*id, bv.clone());
+                    }
+                    let vlist = self
+                        .tm
+                        .mk_term(Kind::CVC5_KIND_VARIABLE_LIST, std::slice::from_ref(&bv));
+                    let cbody = arm.body.to_cvc5(self, arena);
+                    if let Some((_, id)) = binding {
+                        self.locals.remove(id);
+                    }
+                    let cbody = cbody?;
+                    self.tm
+                        .mk_term(Kind::CVC5_KIND_MATCH_BIND_CASE, &[vlist, bv, cbody])
+                }
+            };
+            cases.push(case);
+        }
+
+        let mut match_children = vec![cscrutinee];
+        match_children.extend(cases);
+        Ok(self.tm.mk_term(Kind::CVC5_KIND_MATCH, &match_children))
+    }
+
     fn translate_app<A: HasArenaAlt>(
         &mut self,
         qid: &QualifiedIdentifier,
@@ -555,17 +660,21 @@ impl Cvc5Env {
             let fs = f.sort();
             if fs.is_dt_constructor() {
                 // For parametric constructors, resolve via the instantiated return sort
-                let crs = rs.to_cvc5(self, arena)?;
                 let sort_name = rs.repr().sort_name();
                 if let Some(base_sort) = self.sort.get(sort_name).cloned() {
                     let dt = base_sort.datatype();
-                    for i in 0..dt.num_constructors() {
-                        let ctor = dt.constructor(i);
-                        if ctor.name() == name.as_str() {
-                            let ct = ctor.instantiated_term(crs);
-                            let mut all = vec![ct];
-                            all.extend(cargs);
-                            return Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &all));
+                    if dt.is_parametric() {
+                        let crs = rs.to_cvc5(self, arena)?;
+                        for i in 0..dt.num_constructors() {
+                            let ctor = dt.constructor(i);
+                            if ctor.name() == name.as_str() {
+                                let ct = ctor.instantiated_term(crs);
+                                let mut all = vec![ct];
+                                all.extend(cargs);
+                                return Ok(self
+                                    .tm
+                                    .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &all));
+                            }
                         }
                     }
                 }
@@ -1026,7 +1135,7 @@ impl Cvc5EnvSolver<'_> {
             let ctor = dt.constructor(i);
             env.globals.insert(ctor_dec.ctor.clone(), ctor.term());
             let tester = ctor.tester_term();
-            let is_name = a.allocate_str(&format!("is-{}", ctor.name()));
+            let is_name = a.allocate_symbol(&format!("is-{}", ctor.name()));
             env.globals.insert(is_name, tester);
             for (j, sel_dec) in ctor_dec.args.iter().enumerate() {
                 let sel = ctor.selector(j);

@@ -530,3 +530,70 @@ fn parametric_list_constructors_selectors() {
          (assert ((_ is nil) (cdr (cdr l))))"
     ));
 }
+
+// ── Match expression tests ───────────────────────────────────
+
+/// Simple match on a monomorphic enum datatype.
+#[test]
+fn match_mono_enum() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((Color 0)) (((red) (green) (blue))))
+         (declare-const c Color)
+         (assert (= c green))
+         (assert (= 2 (match c ((red 1) (green 2) (blue 3)))))"
+    ));
+}
+
+/// Match on a datatype with constructors that have selectors.
+#[test]
+fn match_mono_applied() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((Option 1))
+           ((par (X) ((none) (some (val X))))))
+         (declare-const o (Option Int))
+         (assert (= o (some 42)))
+         (assert (= 42 (match o (((some v) v) (none 0)))))"
+    ));
+}
+
+/// Match on a parametric datatype (List Int).
+#[test]
+fn match_parametric() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1))
+           ((par (X) ((nil) (cons (car X) (cdr (List X)))))))
+         (declare-const l (List Int))
+         (assert (= l (cons 5 (as nil (List Int)))))
+         (assert (= 5 (match l (((cons h t) h) (nil 0)))))"
+    ));
+}
+
+/// Match with a wildcard arm.
+#[test]
+fn match_wildcard() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((Color 0)) (((red) (green) (blue))))
+         (declare-const c Color)
+         (assert (= c blue))
+         (assert (= 99 (match c ((red 1) (x 99)))))"
+    ));
+}
+
+/// Match used inside a define-fun with a non-recursive body.
+#[test]
+fn match_in_define_fun_rec() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((Option 1))
+           ((par (X) ((none) (some (val X))))))
+         (define-fun unwrap-or ((o (Option Int)) (d Int)) Int
+           (match o (((some v) v) (none d))))
+         (declare-const o (Option Int))
+         (assert (= o (some 42)))
+         (assert (= (unwrap-or o 0) 42))"
+    ));
+}
