@@ -424,3 +424,16 @@ fn named_annotation_registers_global() {
         cmd.to_cvc5(&mut es).unwrap();
     }
 }
+
+/// Parametric datatypes should translate correctly via mk_param_sort.
+#[test]
+fn parametric_datatype() {
+    run_script(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1))
+           ((par (X) ((nil) (cons (car X) (cdr (List X)))))))
+         (declare-const l1 (List Int))
+         (declare-const l2 (List Bool))
+         (check-sat)",
+    );
+}

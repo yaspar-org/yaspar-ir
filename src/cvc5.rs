@@ -77,6 +77,9 @@ pub struct Cvc5Env {
     locals: HashMap<usize, CTerm>,
     sort_cache: HashMap<Sort, CSort>,
     term_cache: HashMap<Term, CTerm>,
+    /// Temporary sort bindings for datatype sort parameters and unresolved sorts.
+    /// Consulted during datatype declaration translation and cleaned up afterwards.
+    dt_sorts: HashMap<String, CSort>,
 }
 
 impl Cvc5Env {
@@ -88,6 +91,7 @@ impl Cvc5Env {
             locals: HashMap::new(),
             sort_cache: HashMap::new(),
             term_cache: HashMap::new(),
+            dt_sorts: HashMap::new(),
         }
     }
 
@@ -133,6 +137,17 @@ fn translate_sort_inner(sort: &Sort, env: &mut Cvc5Env) -> Res<CSort> {
             .map_err(|_| format!("bv width too large: {n}"))?;
         return Ok(env.tm.mk_bv_sort(w));
     }
+    if !s.0.indices.is_empty() {
+        return Err(format!("unknown sort with indices: {s}"));
+    }
+    // Check temporary datatype sorts (params and unresolved self-references)
+    if let Some(cs) = env.dt_sorts.get(name).cloned() {
+        if s.1.is_empty() {
+            return Ok(cs);
+        }
+        let params: Vec<CSort> = s.1.iter().map(|p| p.to_cvc5(env)).collect::<Res<_>>()?;
+        return Ok(cs.instantiate(&params));
+    }
     if s.1.is_empty() {
         if name == statics::BOOL {
             return Ok(env.tm.boolean_sort());
@@ -157,8 +172,13 @@ fn translate_sort_inner(sort: &Sort, env: &mut Cvc5Env) -> Res<CSort> {
         let ce = elem.to_cvc5(env)?;
         return Ok(env.tm.mk_array_sort(ci, ce));
     }
-    if let Some(cs) = env.sort.get(name) {
-        return Ok(cs.clone());
+    if let Some(cs) = env.sort.get(name).cloned() {
+        if s.1.is_empty() {
+            return Ok(cs);
+        }
+        // Parametric sort: instantiate with translated parameters
+        let params: Vec<CSort> = s.1.iter().map(|p| p.to_cvc5(env)).collect::<Res<_>>()?;
+        return Ok(cs.instantiate(&params));
     }
     Err(format!("unsupported sort: {sort}"))
 }
@@ -591,13 +611,10 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
             AC::DefineFun(fd) => es.translate_define_fun(fd, false),
             AC::DefineFunRec(fd) => es.translate_define_fun(fd, true),
             AC::DefineFunsRec(fds) => es.translate_define_funs_rec(fds),
-            AC::DeclareDatatype(name, dec) => {
-                es.translate_declare_datatypes(&[alg::DatatypeDef {
-                    name: name.clone(),
-                    dec: dec.clone(),
-                }])?;
-                Ok(())
-            }
+            AC::DeclareDatatype(name, dec) => es.translate_declare_datatypes(&[alg::DatatypeDef {
+                name: name.clone(),
+                dec: dec.clone(),
+            }]),
             AC::DeclareDatatypes(defs) => es.translate_declare_datatypes(defs),
             AC::Assert(t) => {
                 // Peel outermost :named annotations
@@ -765,25 +782,15 @@ impl Cvc5EnvSolver<'_> {
 
     fn translate_declare_datatypes(&mut self, defs: &[alg::DatatypeDef<Str, Sort>]) -> Res<()> {
         let env = &mut *self.env;
-        let mut decls = Vec::with_capacity(defs.len());
+        // Pre-register unresolved sorts in dt_sorts so self/mutual references resolve
         for def in defs {
-            if !def.dec.params.is_empty() {
-                return Err(format!(
-                    "parametric datatypes not yet supported: {}",
-                    def.name
-                ));
-            }
-            let mut dt_decl = env.tm.mk_dt_decl(&def.name, false);
-            for ctor in &def.dec.constructors {
-                let mut ctor_decl = env.tm.mk_dt_cons_decl(&ctor.ctor);
-                for sel in &ctor.args {
-                    let ss = sel.2.to_cvc5(env)?;
-                    ctor_decl.add_selector(&sel.0, ss);
-                }
-                dt_decl.add_constructor(&ctor_decl);
-            }
-            decls.push(dt_decl);
+            let arity = def.dec.params.len();
+            let us = env.tm.mk_unresolved_dt_sort(&def.name, arity);
+            env.dt_sorts.insert(def.name.inner().clone(), us);
         }
+        let result = Self::build_dt_decls(env, defs);
+        env.dt_sorts.clear();
+        let decls = result?;
         if decls.len() == 1 {
             let cs = env.tm.mk_dt_sort(&decls[0]);
             env.sort.insert(defs[0].name.inner().clone(), cs.clone());
@@ -796,6 +803,39 @@ impl Cvc5EnvSolver<'_> {
             }
         }
         Ok(())
+    }
+
+    fn build_dt_decls(
+        env: &mut Cvc5Env,
+        defs: &[alg::DatatypeDef<Str, Sort>],
+    ) -> Res<Vec<cvc5_rs::DatatypeDecl>> {
+        let mut decls = Vec::with_capacity(defs.len());
+        for def in defs {
+            let params = &def.dec.params;
+            let cvc5_params: Vec<CSort> = params.iter().map(|p| env.tm.mk_param_sort(p)).collect();
+            for (p, cs) in params.iter().zip(&cvc5_params) {
+                env.dt_sorts.insert(p.inner().clone(), cs.clone());
+            }
+            let mut dt_decl = if cvc5_params.is_empty() {
+                env.tm.mk_dt_decl(&def.name, false)
+            } else {
+                env.tm
+                    .mk_dt_decl_with_params(&def.name, &cvc5_params, false)
+            };
+            for ctor in &def.dec.constructors {
+                let mut ctor_decl = env.tm.mk_dt_cons_decl(&ctor.ctor);
+                for sel in &ctor.args {
+                    let ss = sel.2.to_cvc5(env)?;
+                    ctor_decl.add_selector(&sel.0, ss);
+                }
+                dt_decl.add_constructor(&ctor_decl);
+            }
+            for p in params {
+                env.dt_sorts.remove(p.inner().as_str());
+            }
+            decls.push(dt_decl);
+        }
+        Ok(decls)
     }
 
     fn register_dt_functions(env: &mut Cvc5Env, sort: CSort) {
