@@ -437,3 +437,89 @@ fn parametric_datatype() {
          (check-sat)",
     );
 }
+
+/// Parametric datatype with multiple sort parameters.
+#[test]
+fn parametric_datatype_multi_param() {
+    run_script(
+        "(set-logic ALL)
+         (declare-datatypes ((Pair 2))
+           ((par (A B) ((mk-pair (fst A) (snd B))))))
+         (declare-const p (Pair Int Bool))
+         (assert (= (fst p) 42))
+         (assert (snd p))
+         (check-sat)",
+    );
+}
+
+/// Nested parametric instantiation: List of Pairs.
+#[test]
+fn parametric_datatype_nested() {
+    run_script(
+        "(set-logic ALL)
+         (declare-datatypes ((Pair 2) (List 1))
+           ((par (A B) ((mk-pair (fst A) (snd B))))
+            (par (X) ((nil) (cons (car X) (cdr (List X)))))))
+         (declare-const ps (List (Pair Int Bool)))
+         (declare-const nested (Pair (List Int) Bool))
+         (check-sat)",
+    );
+}
+
+/// Monomorphic and parametric datatypes declared together.
+#[test]
+fn parametric_datatype_mixed() {
+    run_script(
+        "(set-logic ALL)
+         (declare-datatypes ((Color 0) (Option 1))
+           (((red) (green) (blue))
+            (par (X) ((none) (some (val X))))))
+         (declare-const c Color)
+         (declare-const o1 (Option Int))
+         (declare-const o2 (Option Color))
+         (assert (= c red))
+         (check-sat)",
+    );
+}
+
+/// Parametric datatype: constructors, selectors, and (_ is X) tester.
+#[test]
+fn parametric_datatype_constructor_selector_tester() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((Option 1))
+           ((par (X) ((none) (some (val X))))))
+         (declare-const o (Option Int))
+         (assert (= o (some 42)))
+         (assert ((_ is some) o))
+         (assert (= (val o) 42))"
+    ));
+}
+
+/// Parametric datatype: is-X style tester.
+#[test]
+fn parametric_datatype_is_dash_tester() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((Option 1))
+           ((par (X) ((none) (some (val X))))))
+         (declare-const o (Option Int))
+         (assert (= o (as none (Option Int))))
+         (assert (is-none o))"
+    ));
+}
+
+/// Parametric List: cons constructor, car/cdr selectors, nil tester.
+#[test]
+fn parametric_list_constructors_selectors() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1))
+           ((par (X) ((nil) (cons (car X) (cdr (List X)))))))
+         (declare-const l (List Int))
+         (assert (= l (cons 1 (cons 2 (as nil (List Int))))))
+         (assert (= (car l) 1))
+         (assert (= (car (cdr l)) 2))
+         (assert ((_ is nil) (cdr (cdr l))))"
+    ));
+}
