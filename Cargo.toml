@@ -23,7 +23,7 @@ none = []
 [dependencies]
 yaspar = "2.7"
 sat-interface = { version = "0.1", optional = true }
-cvc5-rs = { version = "0.2", optional = true }
+cvc5-rs = { version = "0.3", optional = true }
 dashu = { version = "0.4.2", features = ["serde", "num-traits", "num-order"] }
 hashconsing = "1.6"
 paste = "1"

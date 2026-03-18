@@ -305,32 +305,7 @@ fn translate_term_inner<A: HasArenaAlt>(
         AT::Global(qid, sort) => {
             // it's fine due to typed invariant
             let sort = sort.as_ref().unwrap();
-            // For sort-ascribed parametric constructors like (as nil (List Int)),
-            // resolve via the instantiated sort using instantiated_term
-            let name = qid.id_str();
-            let is_ctor = env
-                .globals
-                .get(name)
-                .is_none_or(|t| t.sort().is_dt_constructor());
-            if is_ctor {
-                let sort_name = sort.repr().sort_name();
-                if let Some(base_sort) = env.sort.get(sort_name).cloned() {
-                    let dt = base_sort.datatype();
-                    if dt.is_parametric() {
-                        let crs = sort.to_cvc5(env, arena)?;
-                        for i in 0..dt.num_constructors() {
-                            let ctor = dt.constructor(i);
-                            if ctor.name() == name.as_str() {
-                                let ct = ctor.instantiated_term(crs);
-                                return Ok(env
-                                    .tm
-                                    .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
-                            }
-                        }
-                    }
-                }
-            }
-            env.translate_global(qid)
+            env.translate_global(qid, sort, arena)
         }
         AT::Local(loc) => env
             .locals
@@ -432,7 +407,12 @@ impl Cvc5Env {
         }
     }
 
-    fn translate_global(&self, qid: &QualifiedIdentifier) -> Res<CTerm> {
+    fn translate_global<A: HasArenaAlt>(
+        &mut self,
+        qid: &QualifiedIdentifier,
+        sort: &Sort,
+        arena: &mut A,
+    ) -> Res<CTerm> {
         use alg::IdentifierKind::*;
         let name = qid.id_str();
         match qid.get_kind() {
@@ -443,6 +423,30 @@ impl Cvc5Env {
                 false,
             )),
             _ => {
+                // For sort-ascribed parametric constructors like (as nil (List Int)),
+                // resolve via the instantiated sort using instantiated_term
+                let is_ctor = self
+                    .globals
+                    .get(name)
+                    .is_none_or(|t| t.sort().is_dt_constructor());
+                if is_ctor {
+                    let sort_name = sort.repr().sort_name();
+                    if let Some(base_sort) = self.sort.get(sort_name).cloned() {
+                        let dt = base_sort.datatype();
+                        if dt.is_parametric() {
+                            let crs = sort.to_cvc5(self, arena)?;
+                            for i in 0..dt.num_constructors() {
+                                let ctor = dt.constructor(i);
+                                if ctor.name() == name.as_str() {
+                                    let ct = ctor.instantiated_term(crs);
+                                    return Ok(self
+                                        .tm
+                                        .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
+                                }
+                            }
+                        }
+                    }
+                }
                 let t = self
                     .globals
                     .get(name)

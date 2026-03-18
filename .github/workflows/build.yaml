@@ -20,22 +20,16 @@ jobs:
       contents: read
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
 
       - name: Run cargo check
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
+        run: cargo check
 
       - name: Run copyright check
         run: |
@@ -58,44 +52,79 @@ jobs:
       contents: read
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --no-default-features --features "${{ matrix.features }}"
+
+  test-cvc5:
+    name: Test Suite (cvc5)
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install build dependencies (Ubuntu)
-        if: ${{ matrix.os == 'ubuntu-latest' }}
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 
-      - name: Install Homebrew dependencies (Mac)
-        if: ${{ matrix.os == 'macos-latest' }}
+      - name: Install build dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install cmake
+
+      - name: Resolve cvc5-sys version
+        id: cvc5-version
         run: |
-          brew update
-          brew install cmake
+          version=$(awk -F'"' '/^name = "cvc5-sys"/{getline; print $2}' Cargo.lock)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Sanitize feature name for cache key
-        id: cache-key
-        run: echo "features=$(echo '${{ matrix.features }}' | tr ',' '_')" >> $GITHUB_OUTPUT
-
-      - name: Cache solver builds
+      - name: Cache cvc5 build
+        id: cache-cvc5
         uses: actions/cache@v4
         with:
-          path: |
-            target/debug/build
-          key: ${{ runner.os }}-solver-${{ steps.cache-key.outputs.features }}-${{ hashFiles('lib/**') }}
-          restore-keys: |
-            ${{ runner.os }}-solver-${{ steps.cache-key.outputs.features }}-
-            ${{ runner.os }}-solver-
+          path: cvc5-built
+          key: ${{ runner.os }}-cvc5-sys-${{ steps.cvc5-version.outputs.version }}
 
-      - name: Run tests
-        run: cargo test --no-default-features --features "${{ matrix.features }}"
+      - name: Clone and build cvc5
+        if: steps.cache-cvc5.outputs.cache-hit != 'true'
+        run: |
+          # Fetch cvc5-sys source to read the expected cvc5 version
+          cargo fetch
+          cvc5_sys_dir=$(find $HOME/.cargo/registry/src -type d -name "cvc5-sys-*" | head -1)
+          cvc5_ver=$(awk -F'"' '/\[package.metadata.cvc5\]/{found=1} found && /version/{print $2; exit}' "$cvc5_sys_dir/Cargo.toml")
+          echo "Building cvc5 $cvc5_ver"
+          git clone --depth 1 --branch "cvc5-$cvc5_ver" \
+            https://github.com/cvc5/cvc5.git cvc5-built
+          cd cvc5-built
+          ./configure.sh --static --auto-download \
+            --prefix="$(pwd)/build/install" -DBUILD_GMP=1
+          cd build && make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run cvc5 tests
+        run: cargo test --features cvc5
+        env:
+          CVC5_DIR: ${{ github.workspace }}/cvc5-built
 
   lints:
     name: Lints
@@ -104,39 +133,62 @@ jobs:
       contents: read
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v1
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Resolve cvc5-sys version
+        id: cvc5-version
+        run: |
+          version=$(awk -F'"' '/^name = "cvc5-sys"/{getline; print $2}' Cargo.lock)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cvc5 build
+        id: cache-cvc5
+        uses: actions/cache@v4
+        with:
+          path: cvc5-built
+          key: ${{ runner.os }}-cvc5-sys-${{ steps.cvc5-version.outputs.version }}
+
+      - name: Clone and build cvc5
+        if: steps.cache-cvc5.outputs.cache-hit != 'true'
+        run: |
+          cargo fetch
+          cvc5_sys_dir=$(find $HOME/.cargo/registry/src -type d -name "cvc5-sys-*" | head -1)
+          cvc5_ver=$(awk -F'"' '/\[package.metadata.cvc5\]/{found=1} found && /version/{print $2; exit}' "$cvc5_sys_dir/Cargo.toml")
+          echo "Building cvc5 $cvc5_ver"
+          git clone --depth 1 --branch "cvc5-$cvc5_ver" \
+            https://github.com/cvc5/cvc5.git cvc5-built
+          cd cvc5-built
+          ./configure.sh --static --auto-download \
+            --prefix="$(pwd)/build/install" -DBUILD_GMP=1
+          cd build && make -j$(nproc)
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+        run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --all-features --tests -- -D warnings
+        run: cargo clippy --all-features --tests -- -D warnings
+        env:
+          CVC5_DIR: ${{ github.workspace }}/cvc5-built
 
       - name: Run rustdoc lints
-        uses: actions-rs/cargo@v1
+        run: cargo doc --workspace --all-features --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: ""
-        with:
-          command: doc
-          args: --workspace --all-features --no-deps --document-private-items
+          CVC5_DIR: ${{ github.workspace }}/cvc5-built
 
   docs:
     name: Documentation
@@ -156,7 +208,35 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 
+      - name: Resolve cvc5-sys version
+        id: cvc5-version
+        run: |
+          version=$(awk -F'"' '/^name = "cvc5-sys"/{getline; print $2}' Cargo.lock)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cvc5 build
+        id: cache-cvc5
+        uses: actions/cache@v4
+        with:
+          path: cvc5-built
+          key: ${{ runner.os }}-cvc5-sys-${{ steps.cvc5-version.outputs.version }}
+
+      - name: Clone and build cvc5
+        if: steps.cache-cvc5.outputs.cache-hit != 'true'
+        run: |
+          cargo fetch
+          cvc5_sys_dir=$(find $HOME/.cargo/registry/src -type d -name "cvc5-sys-*" | head -1)
+          cvc5_ver=$(awk -F'"' '/\[package.metadata.cvc5\]/{found=1} found && /version/{print $2; exit}' "$cvc5_sys_dir/Cargo.toml")
+          echo "Building cvc5 $cvc5_ver"
+          git clone --depth 1 --branch "cvc5-$cvc5_ver" \
+            https://github.com/cvc5/cvc5.git cvc5-built
+          cd cvc5-built
+          ./configure.sh --static --auto-download \
+            --prefix="$(pwd)/build/install" -DBUILD_GMP=1
+          cd build && make -j$(nproc)
+
       - name: Build documentation
         run: cargo doc --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+          CVC5_DIR: ${{ github.workspace }}/cvc5-built
