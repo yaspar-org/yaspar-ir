@@ -64,9 +64,9 @@ pub type CTerm = cvc5_rs::Term;
 type Res<T> = std::result::Result<T, String>;
 
 /// Convert a yaspar-ir typed AST node to its cvc5-rs counterpart.
-pub trait ConvertToCvc5<Env> {
+pub trait ConvertToCvc5<Env, A> {
     type Output;
-    fn to_cvc5(&self, env: &mut Env) -> Res<Self::Output>;
+    fn to_cvc5(&self, env: &mut Env, arena: &mut A) -> Res<Self::Output>;
 }
 
 /// Environment for translating yaspar-ir ASTs to cvc5-rs objects.
@@ -77,8 +77,6 @@ pub struct Cvc5Env {
     locals: HashMap<usize, CTerm>,
     sort_cache: HashMap<Sort, CSort>,
     term_cache: HashMap<Term, CTerm>,
-    /// Temporary sort bindings for datatype sort parameters and unresolved sorts.
-    /// Consulted during datatype declaration translation and cleaned up afterwards.
     dt_sorts: HashMap<String, CSort>,
 }
 
@@ -93,11 +91,6 @@ impl Cvc5Env {
             term_cache: HashMap::new(),
             dt_sorts: HashMap::new(),
         }
-    }
-
-    /// Register a global symbol that has already been created in cvc5.
-    pub fn register_global(&mut self, name: &str, term: CTerm) {
-        self.globals.insert(name.to_string(), term);
     }
 }
 
@@ -114,20 +107,24 @@ impl<'a> Cvc5EnvSolver<'a> {
 }
 
 // ── Sort translation ─────────────────────────────────────────
-impl ConvertToCvc5<Cvc5Env> for Sort {
+impl<A: HasArenaAlt> ConvertToCvc5<Cvc5Env, A> for Sort {
     type Output = CSort;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env) -> Res<CSort> {
+    fn to_cvc5(&self, env: &mut Cvc5Env, arena: &mut A) -> Res<CSort> {
         if let Some(cs) = env.sort_cache.get(self) {
             return Ok(cs.clone());
         }
-        let cs = translate_sort_inner(self, env)?;
+        let cs = translate_sort_inner(self, env, arena)?;
         env.sort_cache.insert(self.clone(), cs.clone());
         Ok(cs)
     }
 }
 
-fn translate_sort_inner(sort: &Sort, env: &mut Cvc5Env) -> Res<CSort> {
+fn translate_sort_inner<A: HasArenaAlt>(
+    sort: &Sort,
+    env: &mut Cvc5Env,
+    arena: &mut A,
+) -> Res<CSort> {
     let s = sort.repr();
     let name = s.sort_name().inner().as_str();
     if let Some(n) = s.is_bv() {
@@ -145,7 +142,10 @@ fn translate_sort_inner(sort: &Sort, env: &mut Cvc5Env) -> Res<CSort> {
         if s.1.is_empty() {
             return Ok(cs);
         }
-        let params: Vec<CSort> = s.1.iter().map(|p| p.to_cvc5(env)).collect::<Res<_>>()?;
+        let params: Vec<CSort> =
+            s.1.iter()
+                .map(|p| p.to_cvc5(env, arena))
+                .collect::<Res<_>>()?;
         return Ok(cs.instantiate(&params));
     }
     if s.1.is_empty() {
@@ -168,8 +168,8 @@ fn translate_sort_inner(sort: &Sort, env: &mut Cvc5Env) -> Res<CSort> {
     if name == statics::ARRAY
         && let [idx, elem] = s.1.as_slice()
     {
-        let ci = idx.to_cvc5(env)?;
-        let ce = elem.to_cvc5(env)?;
+        let ci = idx.to_cvc5(env, arena)?;
+        let ce = elem.to_cvc5(env, arena)?;
         return Ok(env.tm.mk_array_sort(ci, ce));
     }
     if let Some(cs) = env.sort.get(name).cloned() {
@@ -177,7 +177,10 @@ fn translate_sort_inner(sort: &Sort, env: &mut Cvc5Env) -> Res<CSort> {
             return Ok(cs);
         }
         // Parametric sort: instantiate with translated parameters
-        let params: Vec<CSort> = s.1.iter().map(|p| p.to_cvc5(env)).collect::<Res<_>>()?;
+        let params: Vec<CSort> =
+            s.1.iter()
+                .map(|p| p.to_cvc5(env, arena))
+                .collect::<Res<_>>()?;
         return Ok(cs.instantiate(&params));
     }
     Err(format!("unsupported sort: {sort}"))
@@ -282,20 +285,24 @@ fn ident_kind_to_cvc5(k: &alg::IdentifierKind<Str>) -> Option<Kind> {
 }
 
 // ── Term translation ─────────────────────────────────────────
-impl ConvertToCvc5<Cvc5Env> for Term {
+impl<A: HasArenaAlt> ConvertToCvc5<Cvc5Env, A> for Term {
     type Output = CTerm;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env) -> Res<CTerm> {
+    fn to_cvc5(&self, env: &mut Cvc5Env, arena: &mut A) -> Res<CTerm> {
         if let Some(ct) = env.term_cache.get(self) {
             return Ok(ct.clone());
         }
-        let ct = translate_term_inner(self, env)?;
+        let ct = translate_term_inner(self, env, arena)?;
         env.term_cache.insert(self.clone(), ct.clone());
         Ok(ct)
     }
 }
 
-fn translate_term_inner(term: &Term, env: &mut Cvc5Env) -> Res<CTerm> {
+fn translate_term_inner<A: HasArenaAlt>(
+    term: &Term,
+    env: &mut Cvc5Env,
+    arena: &mut A,
+) -> Res<CTerm> {
     use alg::Term as AT;
     match term.repr() {
         AT::Constant(c, _) => env.translate_constant(c),
@@ -309,7 +316,7 @@ fn translate_term_inner(term: &Term, env: &mut Cvc5Env) -> Res<CTerm> {
                     .get(name.as_str())
                     .is_none_or(|t| t.sort().is_dt_constructor());
                 if is_ctor {
-                    let crs = sort.to_cvc5(env)?;
+                    let crs = sort.to_cvc5(env, arena)?;
                     // Get the sort name to look up the uninstantiated sort constructor
                     let sort_name = sort.repr().sort_name().inner().as_str();
                     if let Some(base_sort) = env.sort.get(sort_name).cloned() {
@@ -318,10 +325,9 @@ fn translate_term_inner(term: &Term, env: &mut Cvc5Env) -> Res<CTerm> {
                             let ctor = dt.constructor(i);
                             if ctor.name() == name.as_str() {
                                 let ct = ctor.instantiated_term(crs);
-                                return Ok(env.tm.mk_term(
-                                    Kind::CVC5_KIND_APPLY_CONSTRUCTOR,
-                                    &[ct],
-                                ));
+                                return Ok(env
+                                    .tm
+                                    .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
                             }
                         }
                     }
@@ -335,27 +341,27 @@ fn translate_term_inner(term: &Term, env: &mut Cvc5Env) -> Res<CTerm> {
             .cloned()
             .ok_or_else(|| format!("unbound local: {}", loc.symbol)),
         AT::Not(t) => {
-            let nt = t.to_cvc5(env)?;
+            let nt = t.to_cvc5(env, arena)?;
             Ok(env.tm.mk_term(Kind::CVC5_KIND_NOT, &[nt]))
         }
         AT::Eq(a, b) => {
-            let (ca, cb) = (a.to_cvc5(env)?, b.to_cvc5(env)?);
+            let (ca, cb) = (a.to_cvc5(env, arena)?, b.to_cvc5(env, arena)?);
             Ok(env.tm.mk_term(Kind::CVC5_KIND_EQUAL, &[ca, cb]))
         }
         AT::Distinct(ts) => {
-            let cts = env.translate_terms(ts)?;
+            let cts = env.translate_terms(ts, arena)?;
             Ok(env.tm.mk_term(Kind::CVC5_KIND_DISTINCT, &cts))
         }
         AT::And(ts) => {
-            let cts = env.translate_terms(ts)?;
+            let cts = env.translate_terms(ts, arena)?;
             Ok(env.tm.mk_term(Kind::CVC5_KIND_AND, &cts))
         }
         AT::Or(ts) => {
-            let cts = env.translate_terms(ts)?;
+            let cts = env.translate_terms(ts, arena)?;
             Ok(env.tm.mk_term(Kind::CVC5_KIND_OR, &cts))
         }
         AT::Xor(ts) => {
-            let cts = env.translate_terms(ts)?;
+            let cts = env.translate_terms(ts, arena)?;
             let mut r = cts[0].clone();
             for c in &cts[1..] {
                 r = env.tm.mk_term(Kind::CVC5_KIND_XOR, &[r, CTerm::clone(c)]);
@@ -363,34 +369,42 @@ fn translate_term_inner(term: &Term, env: &mut Cvc5Env) -> Res<CTerm> {
             Ok(r)
         }
         AT::Implies(premises, concl) => {
-            let mut all = env.translate_terms(premises)?;
-            all.push(concl.to_cvc5(env)?);
+            let mut all = env.translate_terms(premises, arena)?;
+            all.push(concl.to_cvc5(env, arena)?);
             Ok(env.tm.mk_term(Kind::CVC5_KIND_IMPLIES, &all))
         }
         AT::Ite(c, t, e) => {
-            let (cc, ct, ce) = (c.to_cvc5(env)?, t.to_cvc5(env)?, e.to_cvc5(env)?);
+            let (cc, ct, ce) = (
+                c.to_cvc5(env, arena)?,
+                t.to_cvc5(env, arena)?,
+                e.to_cvc5(env, arena)?,
+            );
             Ok(env.tm.mk_term(Kind::CVC5_KIND_ITE, &[cc, ct, ce]))
         }
-        AT::Forall(vars, body) => env.translate_quantifier(Kind::CVC5_KIND_FORALL, vars, body),
-        AT::Exists(vars, body) => env.translate_quantifier(Kind::CVC5_KIND_EXISTS, vars, body),
-        AT::Let(bindings, body) => env.translate_let(bindings, body),
-        AT::App(qid, args, ret) => env.translate_app(qid, args, ret.as_ref()),
-        AT::Annotated(t, _) => t.to_cvc5(env),
+        AT::Forall(vars, body) => {
+            env.translate_quantifier(Kind::CVC5_KIND_FORALL, vars, body, arena)
+        }
+        AT::Exists(vars, body) => {
+            env.translate_quantifier(Kind::CVC5_KIND_EXISTS, vars, body, arena)
+        }
+        AT::Let(bindings, body) => env.translate_let(bindings, body, arena),
+        AT::App(qid, args, ret) => env.translate_app(qid, args, ret.as_ref(), arena),
+        AT::Annotated(t, _) => t.to_cvc5(env, arena),
         AT::Matching(_, _) => Err("match expressions not yet supported in cvc5 translation".into()),
     }
 }
 
-impl ConvertToCvc5<Cvc5Env> for [Term] {
+impl<A: HasArenaAlt> ConvertToCvc5<Cvc5Env, A> for [Term] {
     type Output = Vec<CTerm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env) -> Res<Vec<CTerm>> {
-        self.iter().map(|t| t.to_cvc5(env)).collect()
+    fn to_cvc5(&self, env: &mut Cvc5Env, arena: &mut A) -> Res<Vec<CTerm>> {
+        self.iter().map(|t| t.to_cvc5(env, arena)).collect()
     }
 }
 
 impl Cvc5Env {
-    fn translate_terms(&mut self, ts: &[Term]) -> Res<Vec<CTerm>> {
-        ts.to_cvc5(self)
+    fn translate_terms<A: HasArenaAlt>(&mut self, ts: &[Term], arena: &mut A) -> Res<Vec<CTerm>> {
+        ts.to_cvc5(self, arena)
     }
 
     fn translate_constant(&self, c: &Constant) -> Res<CTerm> {
@@ -444,31 +458,33 @@ impl Cvc5Env {
         }
     }
 
-    fn translate_quantifier(
+    fn translate_quantifier<A: HasArenaAlt>(
         &mut self,
         kind: Kind,
         vars: &[alg::VarBinding<Str, Sort>],
         body: &Term,
+        arena: &mut A,
     ) -> Res<CTerm> {
         let mut bound = Vec::with_capacity(vars.len());
         for v in vars {
-            let cs = v.2.to_cvc5(self)?;
+            let cs = v.2.to_cvc5(self, arena)?;
             let bv = self.tm.mk_var(cs, &v.0);
             self.locals.insert(v.1, bv.clone());
             bound.push(bv);
         }
-        let result = self.translate_quantifier_body(kind, body, &bound);
+        let result = self.translate_quantifier_body(kind, body, &bound, arena);
         for v in vars {
             self.locals.remove(&v.1);
         }
         result
     }
 
-    fn translate_quantifier_body(
+    fn translate_quantifier_body<A: HasArenaAlt>(
         &mut self,
         kind: Kind,
         body: &Term,
         bound: &[CTerm],
+        arena: &mut A,
     ) -> Res<CTerm> {
         let bvl = self.tm.mk_term(Kind::CVC5_KIND_VARIABLE_LIST, bound);
 
@@ -477,14 +493,14 @@ impl Cvc5Env {
             ATerm::Annotated(t, attrs) => (t, Some(attrs)),
             _ => (body, None),
         };
-        let cbody = inner_body.to_cvc5(self)?;
+        let cbody = inner_body.to_cvc5(self, arena)?;
 
         // Build INST_PATTERN_LIST from :pattern annotations
         if let Some(attrs) = attrs {
             let mut pats = Vec::new();
             for attr in attrs {
                 if let Attribute::Pattern(terms) = attr {
-                    let cterms = self.translate_terms(terms)?;
+                    let cterms = self.translate_terms(terms, arena)?;
                     pats.push(self.tm.mk_term(Kind::CVC5_KIND_INST_PATTERN, &cterms));
                 }
             }
@@ -497,32 +513,34 @@ impl Cvc5Env {
         Ok(self.tm.mk_term(kind, &[bvl, cbody]))
     }
 
-    fn translate_let(
+    fn translate_let<A: HasArenaAlt>(
         &mut self,
         bindings: &[alg::VarBinding<Str, Term>],
         body: &Term,
+        arena: &mut A,
     ) -> Res<CTerm> {
         let new_bindings = bindings
             .iter()
-            .map(|b| Ok((b.1, b.2.to_cvc5(self)?)))
+            .map(|b| Ok((b.1, b.2.to_cvc5(self, arena)?)))
             .collect::<Res<Vec<_>>>()?;
         for b in new_bindings {
             self.locals.insert(b.0, b.1);
         }
-        let result = body.to_cvc5(self);
+        let result = body.to_cvc5(self, arena);
         for b in bindings {
             self.locals.remove(&b.1);
         }
         result
     }
 
-    fn translate_app(
+    fn translate_app<A: HasArenaAlt>(
         &mut self,
         qid: &QualifiedIdentifier,
         args: &[Term],
         ret_sort: Option<&Sort>,
+        arena: &mut A,
     ) -> Res<CTerm> {
-        let cargs = self.translate_terms(args)?;
+        let cargs = self.translate_terms(args, arena)?;
         let id = &qid.0;
         let kind = id.get_kind();
         // Handle unary minus: (- x) → NEG
@@ -543,7 +561,7 @@ impl Cvc5Env {
             if fs.is_dt_constructor() {
                 // For parametric constructors, resolve via the instantiated return sort
                 if let Some(rs) = ret_sort {
-                    let crs = rs.to_cvc5(self)?;
+                    let crs = rs.to_cvc5(self, arena)?;
                     let sort_name = rs.repr().sort_name().inner().as_str();
                     if let Some(base_sort) = self.sort.get(sort_name).cloned() {
                         let dt = base_sort.datatype();
@@ -574,9 +592,7 @@ impl Cvc5Env {
                             if sel.name() == name.as_str() {
                                 let mut all = vec![sel.term()];
                                 all.extend(cargs);
-                                return Ok(self
-                                    .tm
-                                    .mk_term(Kind::CVC5_KIND_APPLY_SELECTOR, &all));
+                                return Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_SELECTOR, &all));
                             }
                         }
                     }
@@ -596,21 +612,22 @@ impl Cvc5Env {
         } else {
             // Function not in globals — try resolving as a parametric datatype function
             // via the argument's or return sort
-            self.resolve_dt_app(name.as_str(), &cargs, ret_sort)
+            self.resolve_dt_app(name.as_str(), &cargs, ret_sort, arena)
         }
     }
 
     /// Resolve a parametric datatype function (constructor, selector, or tester)
     /// that is not in globals, by inspecting the argument or return sort.
-    fn resolve_dt_app(
+    fn resolve_dt_app<A: HasArenaAlt>(
         &mut self,
         name: &str,
         cargs: &[CTerm],
         ret_sort: Option<&Sort>,
+        arena: &mut A,
     ) -> Res<CTerm> {
         // Try constructor via return sort
         if let Some(rs) = ret_sort {
-            let crs = rs.to_cvc5(self)?;
+            let crs = rs.to_cvc5(self, arena)?;
             let sort_name = rs.repr().sort_name().inner().as_str();
             if let Some(base_sort) = self.sort.get(sort_name).cloned() {
                 let dt = base_sort.datatype();
@@ -699,10 +716,10 @@ impl Cvc5Env {
 }
 
 // ── Command translation ──────────────────────────────────────
-impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
+impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
     type Output = ();
 
-    fn to_cvc5(&self, es: &mut Cvc5EnvSolver) -> Res<()> {
+    fn to_cvc5(&self, es: &mut Cvc5EnvSolver, arena: &mut A) -> Res<()> {
         use alg::Command as AC;
         let env = &mut *es.env;
         let solver = &mut *es.solver;
@@ -728,18 +745,21 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
                 Ok(())
             }
             AC::DeclareConst(name, sort) => {
-                let cs = sort.to_cvc5(env)?;
+                let cs = sort.to_cvc5(env, arena)?;
                 let ct = env.tm.mk_const(cs, name);
                 env.globals.insert(name.inner().clone(), ct);
                 Ok(())
             }
             AC::DeclareFun(name, inp, out) => {
-                let co = out.to_cvc5(env)?;
+                let co = out.to_cvc5(env, arena)?;
                 if inp.is_empty() {
                     let ct = env.tm.mk_const(co, name);
                     env.globals.insert(name.inner().clone(), ct);
                 } else {
-                    let ci: Vec<CSort> = inp.iter().map(|s| s.to_cvc5(env)).collect::<Res<_>>()?;
+                    let ci: Vec<CSort> = inp
+                        .iter()
+                        .map(|s| s.to_cvc5(env, arena))
+                        .collect::<Res<_>>()?;
                     let fs = env.tm.mk_fun_sort(&ci, co);
                     let ct = env.tm.mk_const(fs, name);
                     env.globals.insert(name.inner().clone(), ct);
@@ -760,18 +780,21 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
                 Ok(())
             }
             AC::DefineConst(name, _sort, body) => {
-                let cbody = body.to_cvc5(env)?;
+                let cbody = body.to_cvc5(env, arena)?;
                 env.globals.insert(name.inner().clone(), cbody);
                 Ok(())
             }
-            AC::DefineFun(fd) => es.translate_define_fun(fd, false),
-            AC::DefineFunRec(fd) => es.translate_define_fun(fd, true),
-            AC::DefineFunsRec(fds) => es.translate_define_funs_rec(fds),
-            AC::DeclareDatatype(name, dec) => es.translate_declare_datatypes(&[alg::DatatypeDef {
-                name: name.clone(),
-                dec: dec.clone(),
-            }]),
-            AC::DeclareDatatypes(defs) => es.translate_declare_datatypes(defs),
+            AC::DefineFun(fd) => es.translate_define_fun(fd, false, arena),
+            AC::DefineFunRec(fd) => es.translate_define_fun(fd, true, arena),
+            AC::DefineFunsRec(fds) => es.translate_define_funs_rec(fds, arena),
+            AC::DeclareDatatype(name, dec) => es.translate_declare_datatypes(
+                &[alg::DatatypeDef {
+                    name: name.clone(),
+                    dec: dec.clone(),
+                }],
+                arena,
+            ),
+            AC::DeclareDatatypes(defs) => es.translate_declare_datatypes(defs, arena),
             AC::Assert(t) => {
                 // Peel outermost :named annotations
                 let mut names = Vec::new();
@@ -784,7 +807,7 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
                     }
                     cur = inner;
                 }
-                let ct = cur.to_cvc5(env)?;
+                let ct = cur.to_cvc5(env, arena)?;
                 for name in names {
                     env.globals.insert(name, ct.clone());
                 }
@@ -796,12 +819,12 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
                 Ok(())
             }
             AC::CheckSatAssuming(terms) => {
-                let cts = env.translate_terms(terms)?;
+                let cts = env.translate_terms(terms, arena)?;
                 let _ = solver.check_sat_assuming(&cts);
                 Ok(())
             }
             AC::GetValue(terms) => {
-                let cts = env.translate_terms(terms)?;
+                let cts = env.translate_terms(terms, arena)?;
                 let _vals = solver.get_values(&cts);
                 Ok(())
             }
@@ -864,21 +887,22 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
 
 // ── Command helper methods ───────────────────────────────────
 impl Cvc5EnvSolver<'_> {
-    fn translate_define_fun(
+    fn translate_define_fun<A: HasArenaAlt>(
         &mut self,
         fd: &alg::FunctionDef<Str, Sort, Term>,
         recursive: bool,
+        arena: &mut A,
     ) -> Res<()> {
         let env = &mut *self.env;
-        let out = fd.out_sort.to_cvc5(env)?;
+        let out = fd.out_sort.to_cvc5(env, arena)?;
         let mut vars = Vec::with_capacity(fd.vars.len());
         for v in &fd.vars {
-            let vs = v.2.to_cvc5(env)?;
+            let vs = v.2.to_cvc5(env, arena)?;
             let bv = env.tm.mk_var(vs, &v.0);
             env.locals.insert(v.1, bv.clone());
             vars.push(bv);
         }
-        let body = fd.body.to_cvc5(env);
+        let body = fd.body.to_cvc5(env, arena);
         for v in &fd.vars {
             env.locals.remove(&v.1);
         }
@@ -892,7 +916,11 @@ impl Cvc5EnvSolver<'_> {
         Ok(())
     }
 
-    fn translate_define_funs_rec(&mut self, fds: &[alg::FunctionDef<Str, Sort, Term>]) -> Res<()> {
+    fn translate_define_funs_rec<A: HasArenaAlt>(
+        &mut self,
+        fds: &[alg::FunctionDef<Str, Sort, Term>],
+        arena: &mut A,
+    ) -> Res<()> {
         let env = &mut *self.env;
         // First pass: declare all function constants so they can reference each other
         let mut funs = Vec::with_capacity(fds.len());
@@ -900,9 +928,9 @@ impl Cvc5EnvSolver<'_> {
         for fd in fds {
             let mut inp = Vec::with_capacity(fd.vars.len());
             for v in &fd.vars {
-                inp.push(v.2.to_cvc5(env)?);
+                inp.push(v.2.to_cvc5(env, arena)?);
             }
-            let out = fd.out_sort.to_cvc5(env)?;
+            let out = fd.out_sort.to_cvc5(env, arena)?;
             out_sorts.push(out.clone());
             let fs = if inp.is_empty() {
                 out.clone()
@@ -919,12 +947,12 @@ impl Cvc5EnvSolver<'_> {
         for fd in fds {
             let mut vars = Vec::with_capacity(fd.vars.len());
             for v in &fd.vars {
-                let vs = v.2.to_cvc5(env)?;
+                let vs = v.2.to_cvc5(env, arena)?;
                 let bv = env.tm.mk_var(vs, &v.0);
                 env.locals.insert(v.1, bv.clone());
                 vars.push(bv);
             }
-            let body = fd.body.to_cvc5(env);
+            let body = fd.body.to_cvc5(env, arena);
             for v in &fd.vars {
                 env.locals.remove(&v.1);
             }
@@ -936,7 +964,11 @@ impl Cvc5EnvSolver<'_> {
         Ok(())
     }
 
-    fn translate_declare_datatypes(&mut self, defs: &[alg::DatatypeDef<Str, Sort>]) -> Res<()> {
+    fn translate_declare_datatypes<A: HasArenaAlt>(
+        &mut self,
+        defs: &[alg::DatatypeDef<Str, Sort>],
+        arena: &mut A,
+    ) -> Res<()> {
         let env = &mut *self.env;
         // Pre-register unresolved sorts so self/mutual references resolve
         for def in defs {
@@ -944,30 +976,31 @@ impl Cvc5EnvSolver<'_> {
             let us = env.tm.mk_unresolved_dt_sort(&def.name, arity);
             env.dt_sorts.insert(def.name.inner().clone(), us);
         }
-        let result = Self::build_dt_decls(env, defs);
+        let result = Self::build_dt_decls(env, defs, arena);
         env.dt_sorts.clear();
         let decls = result?;
         if decls.len() == 1 {
             let cs = env.tm.mk_dt_sort(&decls[0]);
             env.sort.insert(defs[0].name.inner().clone(), cs.clone());
             if defs[0].dec.params.is_empty() {
-                Self::register_dt_functions(env, cs);
+                Self::register_dt_functions(env, cs, arena);
             }
         } else {
             let sorts = env.tm.mk_dt_sorts(&decls);
             for (def, cs) in defs.iter().zip(sorts) {
                 env.sort.insert(def.name.inner().clone(), cs.clone());
                 if def.dec.params.is_empty() {
-                    Self::register_dt_functions(env, cs);
+                    Self::register_dt_functions(env, cs, arena);
                 }
             }
         }
         Ok(())
     }
 
-    fn build_dt_decls(
+    fn build_dt_decls<A: HasArenaAlt>(
         env: &mut Cvc5Env,
         defs: &[alg::DatatypeDef<Str, Sort>],
+        arena: &mut A,
     ) -> Res<Vec<cvc5_rs::DatatypeDecl>> {
         let mut decls = Vec::with_capacity(defs.len());
         for def in defs {
@@ -985,7 +1018,7 @@ impl Cvc5EnvSolver<'_> {
             for ctor in &def.dec.constructors {
                 let mut ctor_decl = env.tm.mk_dt_cons_decl(&ctor.ctor);
                 for sel in &ctor.args {
-                    let ss = sel.2.to_cvc5(env)?;
+                    let ss = sel.2.to_cvc5(env, arena)?;
                     ctor_decl.add_selector(&sel.0, ss);
                 }
                 dt_decl.add_constructor(&ctor_decl);
@@ -998,7 +1031,8 @@ impl Cvc5EnvSolver<'_> {
         Ok(decls)
     }
 
-    fn register_dt_functions(env: &mut Cvc5Env, sort: CSort) {
+    fn register_dt_functions<A: HasArenaAlt>(env: &mut Cvc5Env, sort: CSort, arena: &mut A) {
+        let a = arena.arena_alt();
         let dt = sort.datatype();
         for i in 0..dt.num_constructors() {
             let ctor = dt.constructor(i);
@@ -1006,8 +1040,10 @@ impl Cvc5EnvSolver<'_> {
             let name = ctor.name();
             env.globals.insert(name.to_string(), ctor_term);
             let tester = ctor.tester_term();
-            // Register both (_ is Ctor) and is-Ctor style testers
-            env.globals.insert(format!("is-{name}"), tester.clone());
+            let is_name = format!("is-{name}");
+            // allocate the is-X symbol in the arena so it's tracked
+            a.allocate_str(&is_name);
+            env.globals.insert(is_name, tester.clone());
             for j in 0..ctor.num_selectors() {
                 let sel = ctor.selector(j);
                 let sel_term = sel.term();
