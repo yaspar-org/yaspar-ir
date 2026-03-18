@@ -398,3 +398,29 @@ fn locals_cleaned_up_after_define_fun_error() {
     cmds[1].to_cvc5(&mut es).unwrap();
     assert!(cmds[2].to_cvc5(&mut es).is_ok());
 }
+
+/// :named annotations in assert should register the term as a global,
+/// making it available for later reference (e.g. in get-value).
+#[test]
+fn named_annotation_registers_global() {
+    let mut ctx = Context::new();
+    let cmds = UntypedAst
+        .parse_script_str(
+            "(set-logic QF_LIA)
+             (declare-const x Int)
+             (assert (! (> x 0) :named pos))
+             (assert (=> pos (> x 1)))",
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    // All commands should succeed — "pos" from :named must be usable in the second assert
+    for cmd in &cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+}

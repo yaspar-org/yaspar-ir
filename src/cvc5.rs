@@ -326,10 +326,7 @@ fn translate_term_inner(term: &Term, env: &mut Cvc5Env) -> Res<CTerm> {
         AT::Exists(vars, body) => env.translate_quantifier(Kind::CVC5_KIND_EXISTS, vars, body),
         AT::Let(bindings, body) => env.translate_let(bindings, body),
         AT::App(qid, args, _) => env.translate_app(qid, args),
-        AT::Annotated(t, _) => {
-            // wild annotations are ignored
-            t.to_cvc5(env)
-        }
+        AT::Annotated(t, _) => t.to_cvc5(env),
         AT::Matching(_, _) => Err("match expressions not yet supported in cvc5 translation".into()),
     }
 }
@@ -603,7 +600,21 @@ impl ConvertToCvc5<Cvc5EnvSolver<'_>> for Command {
             }
             AC::DeclareDatatypes(defs) => es.translate_declare_datatypes(defs),
             AC::Assert(t) => {
-                let ct = t.to_cvc5(env)?;
+                // Peel outermost :named annotations
+                let mut names = Vec::new();
+                let mut cur = t;
+                while let ATerm::Annotated(inner, attrs) = cur.repr() {
+                    for attr in attrs {
+                        if let Attribute::Named(name) = attr {
+                            names.push(name.inner().clone());
+                        }
+                    }
+                    cur = inner;
+                }
+                let ct = cur.to_cvc5(env)?;
+                for name in names {
+                    env.globals.insert(name, ct.clone());
+                }
                 solver.assert_formula(CTerm::clone(&ct));
                 Ok(())
             }
