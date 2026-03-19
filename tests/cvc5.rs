@@ -601,3 +601,16 @@ fn match_in_define_fun_rec() {
          (assert (= (unwrap-or o 0) 42))"
     ));
 }
+
+/// Match with anonymous variables `_` in a constructor pattern.
+#[test]
+fn match_anonymous_vars() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1))
+           ((par (X) ((nil) (cons (car X) (cdr (List X)))))))
+         (declare-const l (List Int))
+         (assert (= l (cons 5 (as nil (List Int)))))
+         (assert (= 1 (match l (((cons _ _) 1) (nil 0)))))"
+    ));
+}
