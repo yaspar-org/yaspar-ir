@@ -34,13 +34,13 @@ pub mod utils;
 
 #[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::{ImplicantEnumerator, ImplicantIterator};
-use crate::locenv::{LocEnv, valid_char};
+use crate::locenv::{valid_char, LocEnv};
 pub use crate::raw::alg::{
     Command as ACommand, Constant as AConstant, Index as AIndex, SortDef as ASortDef, StrQuote,
     SymbolQuote, Term as ATerm,
 };
 pub use crate::raw::instance::*;
-use crate::raw::tc::{TC, TCEnv};
+use crate::raw::tc::{TCEnv, TC};
 pub use checked::{CheckedApi, ScopedSortApi};
 use lazy_static::lazy_static;
 use std::collections::hash_map::Keys;
@@ -48,9 +48,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 
 #[cfg(feature = "cnf")]
-use crate::ast::cnf::{CNFCache, CNFEnv};
+pub use crate::ast::cnf::{partition_nnfs, CNFConversion};
 #[cfg(feature = "cnf")]
-pub use crate::ast::cnf::{CNFConversion, partition_nnfs};
+use crate::ast::cnf::{CNFCache, CNFEnv};
 use crate::statics::{BITVEC, BV_RE};
 use crate::traits::AllocatableString;
 pub use crate::traits::Contains;
@@ -128,7 +128,7 @@ lazy_static! {
     static ref EMP_SET: HashSet<Theory> = HashSet::from([]);
     static ref SPECIAL_SYMBOLS: HashSet<&'static str> = {
       let mut set = yaspar::tokens::SPECIAL_SYMBOLS.keys().cloned().collect::<HashSet<_>>();
-        set.extend(["and", "or", "not", "ite", "=>", "distinct", "="].iter());
+        set.extend(["and", "or", "xor", "not", "ite", "=>", "distinct", "="].iter());
         set
     };
 }
@@ -702,7 +702,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{LetElim, Typecheck, u};
+    use crate::ast::{u, LetElim, Typecheck};
     use crate::untyped::UntypedAst;
     use dashu::integer::IBig;
 
