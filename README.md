@@ -552,6 +552,19 @@ This crate fully supports features of datatypes as described by the SMTLib stand
    and `is-X` tester (common extension and de facto standard). `is-X` is defined in terms of `(_ is X)` as a definition.
 4. Match expressions.
 
+#### `is` is not a permitted symbol
+
+When the theory of datatypes is active, `is` cannot be used as a user-declared symbol (e.g. via `declare-const`,
+`declare-fun`, or as a bound variable name). This is because `is` serves as the head symbol of the indexed identifier
+`(_ is X)` for datatype constructor testers. Allowing `is` as a regular symbol would create ambiguity between a
+user-defined symbol and the built-in tester operator.
+
+This restriction is consistent with how other indexed-identifier head symbols are treated. For example, in the theory
+of bitvectors, symbols of the form `bvN` (where `N` is a numeral) are reserved because they denote bitvector literals.
+Similarly, symbols like `extract`, `zero_extend`, `sign_extend`, and `rotate_left` are recognized as heads of indexed
+bitvector operators (e.g. `(_ extract 7 4)`). In each case, the symbol has special meaning when it appears as the head
+of an indexed identifier, and reserving it prevents confusion with user-defined names.
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
