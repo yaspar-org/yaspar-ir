@@ -405,11 +405,9 @@ impl Cvc5Env {
     }
 
     /// Build `(kind head args...)`.
-    fn mk_applied(&self, kind: Kind, head: CTerm, args: &[CTerm]) -> CTerm {
-        let mut all = Vec::with_capacity(1 + args.len());
-        all.push(head);
-        all.extend_from_slice(args);
-        self.tm.mk_term(kind, &all)
+    fn mk_applied(&self, kind: Kind, head: CTerm, mut args: Vec<CTerm>) -> CTerm {
+        args.insert(0, head);
+        self.tm.mk_term(kind, &args)
     }
 
     /// Look up a constructor by name in the datatype behind `sort`, returning its
@@ -437,24 +435,6 @@ impl Cvc5Env {
         Ok(None)
     }
 
-    /// Resolve a selector or tester by name via the first argument's sort.
-    fn resolve_dt_by_arg(&self, name: &str, arg: &CTerm) -> Option<(Kind, CTerm)> {
-        let dt = arg.sort().datatype();
-        for i in 0..dt.num_constructors() {
-            let ctor = dt.constructor(i);
-            if format!("is-{}", ctor.name()) == name {
-                return Some((Kind::CVC5_KIND_APPLY_TESTER, ctor.tester_term()));
-            }
-            for j in 0..ctor.num_selectors() {
-                let sel = ctor.selector(j);
-                if sel.name() == name {
-                    return Some((Kind::CVC5_KIND_APPLY_SELECTOR, sel.term()));
-                }
-            }
-        }
-        None
-    }
-
     fn translate_global<A: HasArenaAlt>(
         &mut self,
         qid: &QualifiedIdentifier,
@@ -473,20 +453,18 @@ impl Cvc5Env {
             _ => {
                 // For sort-ascribed parametric constructors like (as nil (List Int)),
                 // resolve via the instantiated sort using instantiated_term
-                let is_ctor = self
-                    .globals
-                    .get(name)
-                    .is_some_and(|t| t.sort().is_dt_constructor());
-                if is_ctor && let Some(ct) = self.resolve_parametric_ctor(name, sort, arena)? {
-                    return Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]));
-                }
                 let t = self
                     .globals
                     .get(name)
                     .cloned()
                     .ok_or_else(|| format!("unknown global symbol: {name}"))?;
-                if t.sort().is_dt_constructor() {
-                    Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[t]))
+                let is_ctor = t.sort().is_dt_constructor();
+                if is_ctor {
+                    if let Some(ct) = self.resolve_parametric_ctor(name, sort, arena)? {
+                        Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]))
+                    } else {
+                        Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[t]))
+                    }
                 } else {
                     Ok(t)
                 }
@@ -711,38 +689,34 @@ impl Cvc5Env {
             return Ok(self.tm.mk_term(kind, &cargs));
         }
         if let Some(ref ik) = kind {
-            return self.translate_indexed_app(ik, &cargs);
+            return self.translate_indexed_app(ik, cargs);
         }
         let name = &id.symbol;
         if let Some(f) = self.globals.get(name).cloned() {
             let fs = f.sort();
             if fs.is_dt_constructor() {
                 if let Some(ct) = self.resolve_parametric_ctor(name, rs, arena)? {
-                    return Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, ct, &cargs));
+                    Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, ct, cargs))
+                } else {
+                    Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, f, cargs))
                 }
-                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, f, &cargs))
             } else if fs.is_dt_selector() {
-                if let Some(first_arg) = cargs.first()
-                    && let Some((kind, head)) = self.resolve_dt_by_arg(name, first_arg)
-                {
-                    return Ok(self.mk_applied(kind, head, &cargs));
-                }
-                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_SELECTOR, f, &cargs))
+                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_SELECTOR, f, cargs))
             } else if fs.is_dt_tester() {
-                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_TESTER, f, &cargs))
+                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_TESTER, f, cargs))
             } else {
-                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_UF, f, &cargs))
+                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_UF, f, cargs))
             }
         } else {
             Err(format!("unknown function: {name}"))
         }
     }
 
-    fn translate_indexed_app(&self, ik: &IdentifierKind, cargs: &[CTerm]) -> Res<CTerm> {
+    fn translate_indexed_app(&self, ik: &IdentifierKind, cargs: Vec<CTerm>) -> Res<CTerm> {
         use alg::IdentifierKind::*;
         let mk = |kind, indices: &[u32]| {
             let op = self.tm.mk_op(kind, indices);
-            Ok(self.tm.mk_term_from_op(op, cargs))
+            Ok(self.tm.mk_term_from_op(op, &cargs))
         };
         let to_u32 = |n: &dashu::integer::UBig| -> Res<u32> {
             n.try_into().map_err(|_| format!("index too large: {n}"))
@@ -825,10 +799,7 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                     let ct = env.tm.mk_const(co, name);
                     env.globals.insert(name.clone(), ct);
                 } else {
-                    let ci: Vec<CSort> = inp
-                        .iter()
-                        .map(|s| s.to_cvc5(env, arena))
-                        .collect::<Res<_>>()?;
+                    let ci = inp.to_cvc5(env, arena)?;
                     let fs = env.tm.mk_fun_sort(&ci, co);
                     let ct = env.tm.mk_const(fs, name);
                     env.globals.insert(name.clone(), ct);
