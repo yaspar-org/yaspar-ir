@@ -128,7 +128,7 @@ lazy_static! {
     static ref EMP_SET: HashSet<Theory> = HashSet::from([]);
     static ref SPECIAL_SYMBOLS: HashSet<&'static str> = {
       let mut set = yaspar::tokens::SPECIAL_SYMBOLS.keys().cloned().collect::<HashSet<_>>();
-        set.extend(["and", "or", "not", "ite", "=>", "distinct", "="].iter());
+        set.extend(["and", "or", "xor", "not", "ite", "=>", "distinct", "="].iter());
         set
     };
 }
