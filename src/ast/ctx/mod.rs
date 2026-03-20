@@ -34,13 +34,13 @@ pub mod utils;
 
 #[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::{ImplicantEnumerator, ImplicantIterator};
-use crate::locenv::{valid_char, LocEnv};
+use crate::locenv::{LocEnv, valid_char};
 pub use crate::raw::alg::{
     Command as ACommand, Constant as AConstant, Index as AIndex, SortDef as ASortDef, StrQuote,
     SymbolQuote, Term as ATerm,
 };
 pub use crate::raw::instance::*;
-use crate::raw::tc::{TCEnv, TC};
+use crate::raw::tc::{TC, TCEnv};
 pub use checked::{CheckedApi, ScopedSortApi};
 use lazy_static::lazy_static;
 use std::collections::hash_map::Keys;
@@ -48,9 +48,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 
 #[cfg(feature = "cnf")]
-pub use crate::ast::cnf::{partition_nnfs, CNFConversion};
-#[cfg(feature = "cnf")]
 use crate::ast::cnf::{CNFCache, CNFEnv};
+#[cfg(feature = "cnf")]
+pub use crate::ast::cnf::{CNFConversion, partition_nnfs};
 use crate::statics::{BITVEC, BV_RE};
 use crate::traits::AllocatableString;
 pub use crate::traits::Contains;
@@ -702,7 +702,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{u, LetElim, Typecheck};
+    use crate::ast::{LetElim, Typecheck, u};
     use crate::untyped::UntypedAst;
     use dashu::integer::IBig;
 
