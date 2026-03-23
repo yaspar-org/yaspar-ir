@@ -53,7 +53,7 @@ use crate::ast::*;
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::traits::{Contains, Repr};
-pub use cvc5_rs::{Kind, Solver, TermManager};
+pub use cvc5_rs::{Kind, ProofComponent, Solver, TermManager};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use yaspar::{binary_to_string, hex_to_string};
@@ -61,6 +61,7 @@ use yaspar::{binary_to_string, hex_to_string};
 pub type CSort = cvc5_rs::Sort;
 pub type CTerm = cvc5_rs::Term;
 pub type CResult = cvc5_rs::Result;
+pub type CProof = cvc5_rs::Proof;
 type Res<T> = std::result::Result<T, String>;
 
 /// The result of translating and executing a single SMTLib command via cvc5.
@@ -79,6 +80,8 @@ pub enum CommandResult {
     Terms(Vec<CTerm>),
     /// Result of `get-info` or `get-option`: a string response.
     Info(String),
+    /// Result of `get-proof`: the full proof tree.
+    GetProof(Vec<CProof>),
 }
 
 /// Convert a yaspar-ir typed AST node to its cvc5-rs counterpart.
@@ -923,7 +926,16 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                 solver.reset_assertions();
                 Ok(CommandResult::None)
             }
-            AC::Echo(_) | AC::Exit | AC::GetAssignment | AC::GetProof => Ok(CommandResult::None),
+            AC::Echo(s) => {
+                // this is what echo does
+                println!("{}", s);
+                Ok(CommandResult::None)
+            }
+            AC::Exit | AC::GetAssignment => Ok(CommandResult::None),
+            AC::GetProof => {
+                let proofs = solver.get_proof(ProofComponent::CVC5_PROOF_COMPONENT_FULL);
+                Ok(CommandResult::GetProof(proofs))
+            }
         }
     }
 }
