@@ -614,3 +614,178 @@ fn match_anonymous_vars() {
          (assert (= 1 (match l (((cons _ _) 1) (nil 0)))))"
     ));
 }
+
+// ── CommandResult tests ──────────────────────────────────────
+
+use yaspar_ir::cvc5::CommandResult;
+
+/// Helper: run a script and pass each CommandResult to a callback.
+/// Results are inspected before the solver is dropped, avoiding use-after-free
+/// of cvc5 objects that reference solver-internal state.
+fn with_script_results(script: &str, options: &[(&str, &str)], f: impl FnOnce(&[CommandResult])) {
+    let mut ctx = Context::new();
+    let cmds = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    for (k, v) in options {
+        solver.set_option(k, v);
+    }
+    let mut env = Cvc5Env::new(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    let results: Vec<_> = cmds
+        .iter()
+        .map(|cmd| cmd.to_cvc5(&mut es, &mut ctx).unwrap())
+        .collect();
+    f(&results);
+}
+
+#[test]
+fn command_result_none_for_declarations() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (> x 0))",
+        &[],
+        |results| assert!(results.iter().all(|r| matches!(r, CommandResult::None))),
+    );
+}
+
+#[test]
+fn command_result_check_sat_sat() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (> x 0))
+         (check-sat)",
+        &[],
+        |results| match results.last().unwrap() {
+            CommandResult::CheckSat(r) => assert!(r.is_sat()),
+            other => panic!("expected CheckSat, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_check_sat_unsat() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (> x 0))
+         (assert (< x 0))
+         (check-sat)",
+        &[],
+        |results| match results.last().unwrap() {
+            CommandResult::CheckSat(r) => assert!(r.is_unsat()),
+            other => panic!("expected CheckSat, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_check_sat_assuming() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (> x 0))
+         (check-sat-assuming ((< x 0)))",
+        &[],
+        |results| match results.last().unwrap() {
+            CommandResult::CheckSat(r) => assert!(r.is_unsat()),
+            other => panic!("expected CheckSat, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_value() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (= x 42))
+         (check-sat)
+         (get-value (x))",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetValue(vals) => assert_eq!(vals.len(), 1),
+            other => panic!("expected GetValue, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_model() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (= x 42))
+         (check-sat)
+         (get-model)",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetModel(m) => assert_eq!(m, "(\n)\n"),
+            other => panic!("expected GetModel, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_assertions() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (> x 0))
+         (get-assertions)",
+        &[("produce-assertions", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::Terms(ts) => assert_eq!(ts.len(), 1),
+            other => panic!("expected Terms, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_unsat_core() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (! (> x 0) :named a1))
+         (assert (! (< x 0) :named a2))
+         (check-sat)
+         (get-unsat-core)",
+        &[("produce-unsat-cores", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::Terms(ts) => assert_eq!(ts.len(), 2),
+            other => panic!("expected Terms, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_info() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (get-info :name)",
+        &[],
+        |results| match results.last().unwrap() {
+            CommandResult::Info(s) => assert!(!s.is_empty()),
+            other => panic!("expected Info, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_option() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (get-option :produce-models)",
+        &[],
+        |results| match results.last().unwrap() {
+            CommandResult::Info(s) => assert!(!s.is_empty()),
+            other => panic!("expected Info, got {other:?}"),
+        },
+    );
+}

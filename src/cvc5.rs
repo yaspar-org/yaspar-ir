@@ -60,7 +60,26 @@ use yaspar::{binary_to_string, hex_to_string};
 
 pub type CSort = cvc5_rs::Sort;
 pub type CTerm = cvc5_rs::Term;
+pub type CResult = cvc5_rs::Result;
 type Res<T> = std::result::Result<T, String>;
+
+/// The result of translating and executing a single SMTLib command via cvc5.
+#[derive(Debug)]
+pub enum CommandResult {
+    /// No meaningful return value (declarations, definitions, `assert`, `set-logic`,
+    /// `set-info`, `set-option`, `define-sort`, `reset-assertions`, `echo`, `exit`).
+    None,
+    /// Result of `check-sat` or `check-sat-assuming`.
+    CheckSat(CResult),
+    /// Result of `get-value`: a list of term–value pairs.
+    GetValue(Vec<CTerm>),
+    /// Result of `get-model`: the model as a string.
+    GetModel(String),
+    /// Result of `get-assertions`, `get-unsat-core`, or `get-unsat-assumptions`: a list of terms.
+    Terms(Vec<CTerm>),
+    /// Result of `get-info` or `get-option`: a string response.
+    Info(String),
+}
 
 /// Convert a yaspar-ir typed AST node to its cvc5-rs counterpart.
 pub trait ConvertToCvc5<Env, A> {
@@ -760,16 +779,16 @@ impl Cvc5Env {
 
 // ── Command translation ──────────────────────────────────────
 impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
-    type Output = ();
+    type Output = CommandResult;
 
-    fn to_cvc5(&self, es: &mut Cvc5EnvSolver, arena: &mut A) -> Res<()> {
+    fn to_cvc5(&self, es: &mut Cvc5EnvSolver, arena: &mut A) -> Res<CommandResult> {
         use alg::Command as AC;
         let env = &mut *es.env;
         let solver = &mut *es.solver;
         match self.inner().repr() {
             AC::SetLogic(l) => {
                 solver.set_logic(l);
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::SetInfo(attr) => {
                 if let Attribute::Symbol(kw, val) = attr {
@@ -777,7 +796,7 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                 } else if let Attribute::Constant(kw, Constant::String(s)) = attr {
                     solver.set_info(kw.symbol_of(), s);
                 }
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::SetOption(attr) => {
                 if let Attribute::Symbol(kw, val) = attr {
@@ -785,13 +804,13 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                 } else if let Attribute::Constant(kw, Constant::String(s)) = attr {
                     solver.set_option(kw.symbol_of(), s);
                 }
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::DeclareConst(name, sort) => {
                 let cs = sort.to_cvc5(env, arena)?;
                 let ct = env.tm.mk_const(cs, name);
                 env.globals.insert(name.clone(), ct);
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::DeclareFun(name, inp, out) => {
                 let co = out.to_cvc5(env, arena)?;
@@ -804,7 +823,7 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                     let ct = env.tm.mk_const(fs, name);
                     env.globals.insert(name.clone(), ct);
                 }
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::DeclareSort(name, arity) => {
                 let cs = if *arity == 0 {
@@ -813,16 +832,16 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                     env.tm.mk_uninterpreted_sort_constructor_sort(*arity, name)
                 };
                 env.sort.insert(name.clone(), cs);
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::DefineSort(..) => {
                 // we don't need to do anything. typechecking will unfold all defined sorts
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::DefineConst(name, _sort, body) => {
                 let cbody = body.to_cvc5(env, arena)?;
                 env.globals.insert(name.clone(), cbody);
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::DefineFun(fd) => es.translate_define_fun(fd, false, arena),
             AC::DefineFunRec(fd) => es.translate_define_fun(fd, true, arena),
@@ -852,75 +871,59 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                     env.globals.insert(name, ct.clone());
                 }
                 solver.assert_formula(CTerm::clone(&ct));
-                Ok(())
+                Ok(CommandResult::None)
             }
             AC::CheckSat => {
-                let _ = solver.check_sat();
-                Ok(())
+                let r = solver.check_sat();
+                Ok(CommandResult::CheckSat(r))
             }
             AC::CheckSatAssuming(terms) => {
                 let cts = terms.to_cvc5(env, arena)?;
-                let _ = solver.check_sat_assuming(&cts);
-                Ok(())
+                let r = solver.check_sat_assuming(&cts);
+                Ok(CommandResult::CheckSat(r))
             }
             AC::GetValue(terms) => {
                 let cts = terms.to_cvc5(env, arena)?;
-                let _vals = solver.get_values(&cts);
-                Ok(())
+                let vals = solver.get_values(&cts);
+                Ok(CommandResult::GetValue(vals))
             }
             AC::GetModel => {
                 // get_model requires sorts and consts; just call with empty for now
-                let _ = solver.get_model(&[], &[]);
-                Ok(())
+                let m = solver.get_model(&[], &[]);
+                Ok(CommandResult::GetModel(m))
             }
             AC::GetAssertions => {
-                let _ = solver.get_assertions();
-                Ok(())
+                let ts = solver.get_assertions();
+                Ok(CommandResult::Terms(ts))
             }
             AC::GetUnsatCore => {
-                let _ = solver.get_unsat_core();
-                Ok(())
+                let ts = solver.get_unsat_core();
+                Ok(CommandResult::Terms(ts))
             }
             AC::GetUnsatAssumptions => {
-                let _ = solver.get_unsat_assumptions();
-                Ok(())
+                let ts = solver.get_unsat_assumptions();
+                Ok(CommandResult::Terms(ts))
             }
             AC::GetInfo(kw) => {
-                let _ = solver.get_info(kw.symbol_of());
-                Ok(())
+                let s = solver.get_info(kw.symbol_of());
+                Ok(CommandResult::Info(s))
             }
             AC::GetOption(kw) => {
-                let _ = solver.get_option(kw.symbol_of());
-                Ok(())
+                let s = solver.get_option(kw.symbol_of());
+                Ok(CommandResult::Info(s))
             }
             AC::Push(_) => {
                 // push and pop are not supported because Context does not support push and pop,
                 // so the symbol management is incorrect.
-
-                // let n: u32 = n
-                //     .try_into()
-                //     .map_err(|_| "push level too large".to_string())?;
-                // solver.push(n);
-                // Ok(())
                 Err("push is not supported".into())
             }
-            AC::Pop(_) => {
-                // let n: u32 = n
-                //     .try_into()
-                //     .map_err(|_| "pop level too large".to_string())?;
-                // solver.pop(n);
-                // Ok(())
-                Err("pop is not supported".into())
-            }
-            AC::Reset => {
-                // solver doesn't seem to support reset?
-                Err("reset is not supported".into())
-            }
+            AC::Pop(_) => Err("pop is not supported".into()),
+            AC::Reset => Err("reset is not supported".into()),
             AC::ResetAssertions => {
                 solver.reset_assertions();
-                Ok(())
+                Ok(CommandResult::None)
             }
-            AC::Echo(_) | AC::Exit | AC::GetAssignment | AC::GetProof => Ok(()),
+            AC::Echo(_) | AC::Exit | AC::GetAssignment | AC::GetProof => Ok(CommandResult::None),
         }
     }
 }
@@ -932,7 +935,7 @@ impl Cvc5EnvSolver<'_> {
         fd: &alg::FunctionDef<Str, Sort, Term>,
         recursive: bool,
         arena: &mut A,
-    ) -> Res<()> {
+    ) -> Res<CommandResult> {
         let env = &mut *self.env;
         let out = fd.out_sort.to_cvc5(env, arena)?;
         let vars = env.bind_vars(&fd.vars, arena)?;
@@ -945,14 +948,14 @@ impl Cvc5EnvSolver<'_> {
             self.solver.define_fun(&fd.name, &vars, out, body, true)
         };
         self.env.globals.insert(fd.name.clone(), ct);
-        Ok(())
+        Ok(CommandResult::None)
     }
 
     fn translate_define_funs_rec<A: HasArenaAlt>(
         &mut self,
         fds: &[alg::FunctionDef<Str, Sort, Term>],
         arena: &mut A,
-    ) -> Res<()> {
+    ) -> Res<CommandResult> {
         let env = &mut *self.env;
         // First pass: declare all function constants so they can reference each other
         let mut funs = Vec::with_capacity(fds.len());
@@ -985,14 +988,14 @@ impl Cvc5EnvSolver<'_> {
         }
         let var_refs: Vec<&[CTerm]> = all_vars.iter().map(|v| v.as_slice()).collect();
         self.solver.define_funs_rec(&funs, &var_refs, &bodies, true);
-        Ok(())
+        Ok(CommandResult::None)
     }
 
     fn translate_declare_datatypes<A: HasArenaAlt>(
         &mut self,
         defs: &[alg::DatatypeDef<Str, Sort>],
         arena: &mut A,
-    ) -> Res<()> {
+    ) -> Res<CommandResult> {
         let env = &mut *self.env;
         // Pre-register unresolved sorts so self/mutual references resolve
         for def in defs {
@@ -1014,7 +1017,7 @@ impl Cvc5EnvSolver<'_> {
                 Self::register_dt_functions(env, cs, &def.dec, arena);
             }
         }
-        Ok(())
+        Ok(CommandResult::None)
     }
 
     fn build_dt_decls<A: HasArenaAlt>(
