@@ -72,7 +72,7 @@ pub enum CommandResult {
     None,
     /// Result of `check-sat` or `check-sat-assuming`.
     CheckSat(CResult),
-    /// Result of `get-value`: a list of term–value pairs.
+    /// Result of `get-value`: a list of terms.
     GetValue(Vec<CTerm>),
     /// Result of `get-model`: the model as a string.
     GetModel(String),
@@ -926,12 +926,7 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
                 solver.reset_assertions();
                 Ok(CommandResult::None)
             }
-            AC::Echo(s) => {
-                // this is what echo does
-                println!("{}", s);
-                Ok(CommandResult::None)
-            }
-            AC::Exit | AC::GetAssignment => Ok(CommandResult::None),
+            AC::Echo(_) | AC::Exit | AC::GetAssignment => Ok(CommandResult::None),
             AC::GetProof => {
                 let proofs = solver.get_proof(ProofComponent::CVC5_PROOF_COMPONENT_FULL);
                 Ok(CommandResult::GetProof(proofs))
