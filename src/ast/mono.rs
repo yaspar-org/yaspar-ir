@@ -73,6 +73,24 @@ where
     }
 }
 
+/// Compute the substitution for [Sort] based on a [DatatypeDec]
+pub fn find_sort_subst_from_datatype_dec(dec: &DatatypeDec, input: &Sort) -> TC<SortSubst> {
+    if dec.params.len() != input.1.len() {
+        return Err(format!(
+            "Sort {input} has {} sub-sorts, but {} are required!",
+            input.1.len(),
+            dec.params.len()
+        ));
+    }
+
+    Ok(dec
+        .params
+        .iter()
+        .zip(input.1.iter())
+        .map(|(a, b)| (a.clone(), Some(b.clone())))
+        .collect())
+}
+
 /// Monomorphize a datatype declaration by instantiating its sort parameters with concrete sorts.
 ///
 /// Given a parametric datatype and a concrete sort instantiation, this creates a new datatype
@@ -84,20 +102,7 @@ where
     type Output = TC<DatatypeDec>;
 
     fn monomorphize(&self, input: &Sort, env: &mut E) -> Self::Output {
-        if self.params.len() != input.1.len() {
-            return Err(format!(
-                "Sort {input} has {} sub-sorts, but {} are required!",
-                input.1.len(),
-                self.params.len()
-            ));
-        }
-
-        let subst: SortSubst = self
-            .params
-            .iter()
-            .zip(input.1.iter())
-            .map(|(a, b)| (a.clone(), Some(b.clone())))
-            .collect();
+        let subst = find_sort_subst_from_datatype_dec(self, input)?;
 
         Ok(DatatypeDec {
             params: vec![],

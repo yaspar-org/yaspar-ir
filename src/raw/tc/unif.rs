@@ -6,8 +6,10 @@ use crate::ast::{HasArenaAlt, Sort, Str, TC};
 use crate::traits::Repr;
 use std::collections::HashMap;
 
-/// A [SortSubst] is a substitution from sort variables to ground sorts (sorts with no open variables)
-pub(crate) type SortSubst = HashMap<Str, Option<Sort>>;
+/// A [SortSubst] is a partial substitution from sort variables to ground sorts (sorts with no open sort variables)
+///
+/// If a variable does not map to a ground sort, it maps to [None].
+pub type SortSubst = HashMap<Str, Option<Sort>>;
 
 /// Unify a ground sort with an expected sort with potential open sort variables; update the
 /// substitution if necessary
