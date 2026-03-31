@@ -25,6 +25,8 @@ pub trait GlobalSubst<E> {
     fn gsubst<S>(&self, global_names: impl IntoIterator<Item = S>, env: &mut E) -> Self
     where
         S: AllocatableString<Arena>;
+
+    fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut E) -> Self;
 }
 
 impl<T, E> GlobalSubst<E> for T
@@ -36,12 +38,18 @@ where
     where
         S: AllocatableString<Arena>,
     {
+        {
+            let global_names = global_names
+                .into_iter()
+                .map(|s| s.allocate(env.arena()))
+                .collect::<HashSet<_>>();
+            self.gsubst_with_names(&global_names, env)
+        }
+    }
+
+    fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut E) -> Self {
         let mut cache = HashMap::new();
-        let global_names = global_names
-            .into_iter()
-            .map(|s| s.allocate(env.arena()))
-            .collect::<HashSet<_>>();
-        self.gsubst_impl(&global_names, &HashSet::new(), env, &mut cache)
+        self.gsubst_impl(global_names, &HashSet::new(), env, &mut cache)
     }
 }
 
