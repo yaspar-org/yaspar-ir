@@ -1,0 +1,51 @@
+name: Setup cvc5
+description: Resolve cvc5-rs version, cache, and build cvc5 from source
+
+outputs:
+  cvc5-dir:
+    description: Path to the cvc5 build directory
+    value: ${{ github.workspace }}/cvc5-built
+
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+
+    - name: Install build dependencies (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install cmake
+
+    - name: Resolve cvc5-rs version
+      id: cvc5-version
+      shell: bash
+      run: |
+        version=$(awk -F'"' '/^cvc5-rs/{print $2}' Cargo.toml)
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Cache cvc5 build
+      id: cache-cvc5
+      uses: actions/cache@v4
+      with:
+        path: cvc5-built
+        key: ${{ runner.os }}-cvc5-rs-${{ steps.cvc5-version.outputs.version }}
+
+    - name: Clone and build cvc5
+      if: steps.cache-cvc5.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cargo fetch
+        cvc5_sys_dir=$(find $HOME/.cargo/registry/src -type d -name "cvc5-sys-*" | head -1)
+        cvc5_ver=$(awk -F'"' '/\[package.metadata.cvc5\]/{found=1} found && /version/{print $2; exit}' "$cvc5_sys_dir/Cargo.toml")
+        echo "Building cvc5 $cvc5_ver"
+        git clone --depth 1 --branch "cvc5-$cvc5_ver" \
+          https://github.com/cvc5/cvc5.git cvc5-built
+        cd cvc5-built
+        ./configure.sh --static --auto-download \
+          --prefix="$(pwd)/build/install" -DBUILD_GMP=1
+        cd build && make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)

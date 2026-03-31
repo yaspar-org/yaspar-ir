@@ -81,50 +81,16 @@ jobs:
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install build dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
-
-      - name: Install build dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: brew install cmake
-
-      - name: Resolve cvc5-rs version
-        id: cvc5-version
-        run: |
-          version=$(awk -F'"' '/^cvc5-rs/{print $2}' Cargo.toml)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Cache cvc5 build
-        id: cache-cvc5
-        uses: actions/cache@v4
-        with:
-          path: cvc5-built
-          key: ${{ runner.os }}-cvc5-rs-${{ steps.cvc5-version.outputs.version }}
-
-      - name: Clone and build cvc5
-        if: steps.cache-cvc5.outputs.cache-hit != 'true'
-        run: |
-          # Fetch cvc5-sys source to read the expected cvc5 version
-          cargo fetch
-          cvc5_sys_dir=$(find $HOME/.cargo/registry/src -type d -name "cvc5-sys-*" | head -1)
-          cvc5_ver=$(awk -F'"' '/\[package.metadata.cvc5\]/{found=1} found && /version/{print $2; exit}' "$cvc5_sys_dir/Cargo.toml")
-          echo "Building cvc5 $cvc5_ver"
-          git clone --depth 1 --branch "cvc5-$cvc5_ver" \
-            https://github.com/cvc5/cvc5.git cvc5-built
-          cd cvc5-built
-          ./configure.sh --static --auto-download \
-            --prefix="$(pwd)/build/install" -DBUILD_GMP=1
-          cd build && make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+      - name: Setup cvc5
+        id: cvc5
+        uses: ./.github/actions/setup-cvc5
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Run cvc5 tests
         run: cargo test --features cvc5
         env:
-          CVC5_DIR: ${{ github.workspace }}/cvc5-built
+          CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
   lints:
     name: Lints
@@ -142,37 +108,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
-
-      - name: Resolve cvc5-rs version
-        id: cvc5-version
-        run: |
-          version=$(awk -F'"' '/^cvc5-rs/{print $2}' Cargo.toml)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Cache cvc5 build
-        id: cache-cvc5
-        uses: actions/cache@v4
-        with:
-          path: cvc5-built
-          key: ${{ runner.os }}-cvc5-rs-${{ steps.cvc5-version.outputs.version }}
-
-      - name: Clone and build cvc5
-        if: steps.cache-cvc5.outputs.cache-hit != 'true'
-        run: |
-          cargo fetch
-          cvc5_sys_dir=$(find $HOME/.cargo/registry/src -type d -name "cvc5-sys-*" | head -1)
-          cvc5_ver=$(awk -F'"' '/\[package.metadata.cvc5\]/{found=1} found && /version/{print $2; exit}' "$cvc5_sys_dir/Cargo.toml")
-          echo "Building cvc5 $cvc5_ver"
-          git clone --depth 1 --branch "cvc5-$cvc5_ver" \
-            https://github.com/cvc5/cvc5.git cvc5-built
-          cd cvc5-built
-          ./configure.sh --static --auto-download \
-            --prefix="$(pwd)/build/install" -DBUILD_GMP=1
-          cd build && make -j$(nproc)
+      - name: Setup cvc5
+        id: cvc5
+        uses: ./.github/actions/setup-cvc5
 
       - uses: Swatinem/rust-cache@v2
 
@@ -182,13 +120,13 @@ jobs:
       - name: Run cargo clippy
         run: cargo clippy --all-features --tests -- -D warnings
         env:
-          CVC5_DIR: ${{ github.workspace }}/cvc5-built
+          CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
       - name: Run rustdoc lints
         run: cargo doc --workspace --all-features --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: ""
-          CVC5_DIR: ${{ github.workspace }}/cvc5-built
+          CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
   docs:
     name: Documentation
@@ -203,40 +141,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake
-
-      - name: Resolve cvc5-rs version
-        id: cvc5-version
-        run: |
-          version=$(awk -F'"' '/^cvc5-rs/{print $2}' Cargo.toml)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Cache cvc5 build
-        id: cache-cvc5
-        uses: actions/cache@v4
-        with:
-          path: cvc5-built
-          key: ${{ runner.os }}-cvc5-rs-${{ steps.cvc5-version.outputs.version }}
-
-      - name: Clone and build cvc5
-        if: steps.cache-cvc5.outputs.cache-hit != 'true'
-        run: |
-          cargo fetch
-          cvc5_sys_dir=$(find $HOME/.cargo/registry/src -type d -name "cvc5-sys-*" | head -1)
-          cvc5_ver=$(awk -F'"' '/\[package.metadata.cvc5\]/{found=1} found && /version/{print $2; exit}' "$cvc5_sys_dir/Cargo.toml")
-          echo "Building cvc5 $cvc5_ver"
-          git clone --depth 1 --branch "cvc5-$cvc5_ver" \
-            https://github.com/cvc5/cvc5.git cvc5-built
-          cd cvc5-built
-          ./configure.sh --static --auto-download \
-            --prefix="$(pwd)/build/install" -DBUILD_GMP=1
-          cd build && make -j$(nproc)
+      - name: Setup cvc5
+        id: cvc5
+        uses: ./.github/actions/setup-cvc5
 
       - name: Build documentation
         run: cargo doc --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
-          CVC5_DIR: ${{ github.workspace }}/cvc5-built
+          CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
