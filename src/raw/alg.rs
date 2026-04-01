@@ -31,6 +31,7 @@ use yaspar::tokens::SPECIAL_SYMBOLS;
 use yaspar::{binary_to_string, hex_to_string};
 
 mod kind;
+mod rec;
 
 /// Represent a literal constant in SMTLib
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
