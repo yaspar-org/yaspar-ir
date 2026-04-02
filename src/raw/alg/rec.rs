@@ -402,6 +402,18 @@ fn advance_attributes_until_pattern<Str: Clone, T, Out>(
     }
 }
 
+/// A boxed zipper frame, used as the "stack" representation during traversal.
+type Zip<'a, Str, So, T, Out> = Box<TermZipper<'a, Str, So, T, Out>>;
+
+/// The result of a push step: either a zipper to continue from, or the final value.
+type PushResult<'a, R, Str, So, T> = Result<
+    Either<
+        Zip<'a, Str, So, T, <R as TermRecursor<Str, So, T>>::Out>,
+        <R as TermRecursor<Str, So, T>>::Out,
+    >,
+    <R as TermRecursor<Str, So, T>>::Err,
+>;
+
 /// Propagate a freshly computed `result` upward through the zipper toward the root.
 ///
 /// Returns `Right(value)` when the root is reached, or `Left(zipper)` when the current
@@ -411,11 +423,12 @@ fn advance_attributes_until_pattern<Str: Clone, T, Out>(
 /// is appended to the accumulator. If all children are now ready, the corresponding
 /// `on_*` callback is invoked and propagation continues upward in the same call (the
 /// inner `loop`). Otherwise the updated frame is returned for the next expansion.
+#[allow(clippy::boxed_local)]
 fn term_recursion_zipper_push<'a, R, Str, So, T>(
     recursor: &mut R,
-    mut zipper: Box<TermZipper<'a, Str, So, T, R::Out>>,
+    mut zipper: Zip<'a, Str, So, T, R::Out>,
     mut result: R::Out,
-) -> Result<Either<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Out>, R::Err>
+) -> PushResult<'a, R, Str, So, T>
 where
     Str: Clone,
     R: TermRecursor<Str, So, T>,
@@ -724,8 +737,8 @@ where
 /// be at a leaf (`Constant`, `Global`, or `Local`), ready for resolution.
 fn term_recursion_zipper_next<'a, R, Str, So, T>(
     recursor: &mut R,
-    zipper: Box<TermZipper<'a, Str, So, T, R::Out>>,
-) -> Result<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Err>
+    zipper: Zip<'a, Str, So, T, R::Out>,
+) -> Result<Zip<'a, Str, So, T, R::Out>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
@@ -748,7 +761,7 @@ where
             recursor.setup_quantifier_scope(vs, body)?;
             Some(body)
         }
-        TermZipper::MatchScrutinee { scrutinee, .. } => Some(&scrutinee),
+        TermZipper::MatchScrutinee { scrutinee, .. } => Some(scrutinee),
         TermZipper::MatchCases {
             scrutinee,
             cases,
@@ -759,8 +772,8 @@ where
             recursor.setup_match_case_scope(scrutinee, cases, scrutinee_rec, case_rec.len())?;
             Some(&cases[case_rec.len()].body)
         }
-        TermZipper::EqL { l, .. } => Some(&l),
-        TermZipper::EqR { r, .. } => Some(&r),
+        TermZipper::EqL { l, .. } => Some(l),
+        TermZipper::EqR { r, .. } => Some(r),
         TermZipper::AnnotatedBody { body, .. } => Some(body),
         TermZipper::AnnotatedAttrs {
             anns,
@@ -797,9 +810,9 @@ where
 /// returning a zipper positioned at that leaf.
 fn term_recursion_zipper_expand<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
-    mut parent: Box<TermZipper<'a, Str, So, T, R::Out>>,
+    mut parent: Zip<'a, Str, So, T, R::Out>,
     mut t: &'a T,
-) -> Result<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Err>
+) -> Result<Zip<'a, Str, So, T, R::Out>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
@@ -860,7 +873,7 @@ where
                     scrutinee,
                     cases,
                 });
-                t = &scrutinee;
+                t = scrutinee;
             }
             Term::Annotated(body, anns) => {
                 parent = Box::new(TermZipper::AnnotatedBody { parent, body, anns });
@@ -937,8 +950,8 @@ where
 /// children remain to be processed.
 fn term_recursion_zip_one_step<'a, R, Str, So, T>(
     recursor: &mut R,
-    mut zipper: Box<TermZipper<'a, Str, So, T, R::Out>>,
-) -> Result<Either<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Out>, R::Err>
+    mut zipper: Zip<'a, Str, So, T, R::Out>,
+) -> PushResult<'a, R, Str, So, T>
 where
     Str: Clone,
     R: TermRecursor<Str, So, T>,
