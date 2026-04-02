@@ -69,6 +69,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         &mut self,
         _vs: &[VarBinding<Str, Sort>],
         _t: &Term,
+        _is_forall: bool,
     ) -> Result<(), Self::Err> {
         Ok(())
     }

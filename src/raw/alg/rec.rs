@@ -128,6 +128,7 @@ pub trait TermRecursor<Str, So, T> {
         &mut self,
         vs: &[VarBinding<Str, So>],
         t: &T,
+        is_forall: bool,
     ) -> Result<(), Self::Err>;
     /// Called for `exists` after the body has been recursed.
     fn on_exists(
@@ -793,9 +794,14 @@ where
             recursor.setup_let_scope(vs, body, vs_rec)?;
             Some(body)
         }
-        TermZipper::Quantifier { vs, body, .. } => {
+        TermZipper::Quantifier {
+            vs,
+            body,
+            is_forall,
+            ..
+        } => {
             // this branch is not expected to get hit
-            recursor.setup_quantifier_scope(vs, body)?;
+            recursor.setup_quantifier_scope(vs, body, *is_forall)?;
             Some(body)
         }
         TermZipper::MatchScrutinee { scrutinee, .. } => Some(scrutinee),
@@ -885,7 +891,7 @@ where
                 t = &vs[0].2;
             }
             Term::Exists(vs, body) => {
-                recursor.setup_quantifier_scope(vs, body)?;
+                recursor.setup_quantifier_scope(vs, body, false)?;
                 parent = Box::new(TermZipper::Quantifier {
                     parent,
                     vs,
@@ -895,7 +901,7 @@ where
                 t = body;
             }
             Term::Forall(vs, body) => {
-                recursor.setup_quantifier_scope(vs, body)?;
+                recursor.setup_quantifier_scope(vs, body, true)?;
                 parent = Box::new(TermZipper::Quantifier {
                     parent,
                     vs,
