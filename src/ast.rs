@@ -68,6 +68,9 @@ pub fn list_of_logics() -> &'static [&'static str] {
     &crate::ast::ctx::ALL_LOGICS
 }
 
+/// Convenience alias: a [`TermRecursor`] specialized to the typed AST
+pub trait TypedTermRecursor: TermRecursor<Str, Sort, Term> {}
+
 impl<C> Typecheck<C> for u::Sort
 where
     C: ScopedSortApi,

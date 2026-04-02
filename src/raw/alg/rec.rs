@@ -306,7 +306,7 @@ enum TermZipper<'a, Str, So, T, Out> {
     /// Annotated phase 1: recursing on the inner term.
     AnnotatedBody {
         parent: Box<TermZipper<'a, Str, So, T, Out>>,
-        t: &'a T,
+        body: &'a T,
         anns: &'a [Attribute<Str, T>],
     },
     /// Annotated phase 2: recursing on `Attribute::Pattern` sub-terms.
@@ -314,7 +314,7 @@ enum TermZipper<'a, Str, So, T, Out> {
     /// results for the `Pattern` attribute currently at `anns[anns_rec.len()]`.
     AnnotatedAttrs {
         parent: Box<TermZipper<'a, Str, So, T, Out>>,
-        t: &'a T,
+        body: &'a T,
         anns: &'a [Attribute<Str, T>],
         t_rec: Out,
         /// Fully-processed attributes so far.
@@ -549,18 +549,18 @@ where
                 result = recursor.on_eq(l, r, l_rec, result)?;
                 zipper = parent;
             }
-            TermZipper::AnnotatedBody { parent, t, anns } => {
+            TermZipper::AnnotatedBody { parent, body, anns } => {
                 // Skip leading non-Pattern attributes.
                 let mut anns_rec: Vec<Attribute<Str, R::Out>> = vec![];
                 advance_attributes_until_pattern(anns, &mut anns_rec);
                 if anns_rec.len() >= anns.len() {
                     // No Pattern attributes at all — finalize immediately.
-                    result = recursor.on_annotated(t, anns, result, anns_rec)?;
+                    result = recursor.on_annotated(body, anns, result, anns_rec)?;
                     zipper = parent;
                 } else {
                     return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
                         parent,
-                        t,
+                        body,
                         anns,
                         t_rec: result,
                         anns_rec,
@@ -570,7 +570,7 @@ where
             }
             TermZipper::AnnotatedAttrs {
                 parent,
-                t,
+                body,
                 anns,
                 t_rec,
                 mut anns_rec,
@@ -591,13 +591,13 @@ where
                     // Advance through any remaining non-Pattern attributes.
                     advance_attributes_until_pattern(anns, &mut anns_rec);
                     if anns_rec.len() >= anns.len() {
-                        result = recursor.on_annotated(t, anns, t_rec, anns_rec)?;
+                        result = recursor.on_annotated(body, anns, t_rec, anns_rec)?;
                         zipper = parent;
                     } else {
                         // More Pattern attributes to process.
                         return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
                             parent,
-                            t,
+                            body,
                             anns,
                             t_rec,
                             anns_rec,
@@ -608,7 +608,7 @@ where
                     // More terms in the current Pattern.
                     return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
                         parent,
-                        t,
+                        body,
                         anns,
                         t_rec,
                         anns_rec,
@@ -761,7 +761,7 @@ where
         }
         TermZipper::EqL { l, .. } => Some(&l),
         TermZipper::EqR { r, .. } => Some(&r),
-        TermZipper::AnnotatedBody { t, .. } => Some(t),
+        TermZipper::AnnotatedBody { body, .. } => Some(body),
         TermZipper::AnnotatedAttrs {
             anns,
             anns_rec,
@@ -862,13 +862,9 @@ where
                 });
                 t = &scrutinee;
             }
-            Term::Annotated(inner, anns) => {
-                parent = Box::new(TermZipper::AnnotatedBody {
-                    parent,
-                    t: inner,
-                    anns,
-                });
-                t = inner;
+            Term::Annotated(body, anns) => {
+                parent = Box::new(TermZipper::AnnotatedBody { parent, body, anns });
+                t = body;
             }
             Term::Eq(l, r) => {
                 parent = Box::new(TermZipper::EqL { parent, l, r });
