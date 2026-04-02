@@ -12,7 +12,7 @@
 //! strings. It delegates to the `yaspar` parser library.
 
 use crate::allocator::StrAllocator;
-use crate::ast::{ACommand, AConstant, AIndex, ATerm, HasArenaAlt, alg};
+use crate::ast::{ACommand, AConstant, AIndex, ATerm, HasArenaAlt, TermRecursor, alg};
 use crate::instantiate_ast;
 use crate::meta::WithMeta;
 use crate::raw::alg::CheckIdentifier;
@@ -95,6 +95,9 @@ impl<T> MetaData for Untyped<T> {
 type P<T> = Untyped<T>;
 
 instantiate_ast!(P);
+
+/// Convenience alias: a [`TermRecursor`] specialized to the untyped AST
+pub trait UntypedTermRecursor: TermRecursor<Str, Sort, Term> {}
 
 impl<Env: HasArenaAlt> Allocatable<Env> for Str {
     type Out = crate::ast::Str;

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use yaspar_ir::ast::alg::{
     Attribute, Constant, Local, PatternArm, QualifiedIdentifier, VarBinding,
 };
@@ -13,29 +16,29 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_constant(
         &mut self,
-        constant: &Constant<Str>,
-        sort: &Option<Sort>,
+        _constant: &Constant<Str>,
+        _sort: &Option<Sort>,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1)
     }
 
     fn on_global(
         &mut self,
-        id: &QualifiedIdentifier<Str, Sort>,
-        sort: &Option<Sort>,
+        _id: &QualifiedIdentifier<Str, Sort>,
+        _sort: &Option<Sort>,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1)
     }
 
-    fn on_local(&mut self, id: &Local<Str, Sort>) -> Result<Self::Out, Self::Err> {
+    fn on_local(&mut self, _id: &Local<Str, Sort>) -> Result<Self::Out, Self::Err> {
         Ok(1)
     }
 
     fn on_app(
         &mut self,
-        id: &QualifiedIdentifier<Str, Sort>,
-        ts: &[Term],
-        s: &Option<Sort>,
+        _id: &QualifiedIdentifier<Str, Sort>,
+        _ts: &[Term],
+        _s: &Option<Sort>,
         recs: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1 + recs.into_iter().sum::<usize>())
@@ -43,17 +46,17 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn setup_let_scope(
         &mut self,
-        vs: &[VarBinding<Str, Term>],
-        body: &Term,
-        vs_rec: &[VarBinding<Str, Self::Out>],
+        _vs: &[VarBinding<Str, Term>],
+        _body: &Term,
+        _vs_rec: &[VarBinding<Str, Self::Out>],
     ) -> Result<(), Self::Err> {
         Ok(())
     }
 
     fn on_let(
         &mut self,
-        vs: &[VarBinding<Str, Term>],
-        body: &Term,
+        _vs: &[VarBinding<Str, Term>],
+        _body: &Term,
         vs_rec: Vec<VarBinding<Str, Self::Out>>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
@@ -62,16 +65,16 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn setup_quantifier_scope(
         &mut self,
-        vs: &[VarBinding<Str, Sort>],
-        t: &Term,
+        _vs: &[VarBinding<Str, Sort>],
+        _t: &Term,
     ) -> Result<(), Self::Err> {
         Ok(())
     }
 
     fn on_exists(
         &mut self,
-        vs: &[VarBinding<Str, Sort>],
-        t: &Term,
+        _vs: &[VarBinding<Str, Sort>],
+        _t: &Term,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1 + t_rec)
@@ -79,8 +82,8 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_forall(
         &mut self,
-        vs: &[VarBinding<Str, Sort>],
-        t: &Term,
+        _vs: &[VarBinding<Str, Sort>],
+        _t: &Term,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1 + t_rec)
@@ -88,17 +91,17 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn setup_match_case_scope(
         &mut self,
-        scrutinee: &Term,
-        cases: &[PatternArm<Str, Term>],
-        scrutinee_rec: &Self::Out,
-        case_idx: usize,
+        _scrutinee: &Term,
+        _cases: &[PatternArm<Str, Term>],
+        _scrutinee_rec: &Self::Out,
+        _case_idx: usize,
     ) -> Result<(), Self::Err> {
         Ok(())
     }
 
     fn on_match_arm(
         &mut self,
-        scrutinee: &Term,
+        _scrutinee: &Term,
         cases: &[PatternArm<Str, Term>],
         case_idx: usize,
         arm: Self::Out,
@@ -111,8 +114,8 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_match(
         &mut self,
-        scrutinee: &Term,
-        cases: &[PatternArm<Str, Term>],
+        _scrutinee: &Term,
+        _cases: &[PatternArm<Str, Term>],
         scrutinee_rec: Self::Out,
         cases_rec: Vec<PatternArm<Str, Self::Out>>,
     ) -> Result<Self::Out, Self::Err> {
@@ -121,8 +124,8 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_annotated(
         &mut self,
-        t: &Term,
-        anns: &[Attribute<Str, Term>],
+        _t: &Term,
+        _anns: &[Attribute<Str, Term>],
         t_rec: Self::Out,
         anns_rec: Vec<Attribute<Str, Self::Out>>,
     ) -> Result<Self::Out, Self::Err> {
@@ -141,38 +144,42 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_eq(
         &mut self,
-        a: &Term,
-        b: &Term,
+        _a: &Term,
+        _b: &Term,
         a_rec: Self::Out,
         b_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1 + a_rec + b_rec)
     }
 
-    fn on_distinct(&mut self, ts: &[Term], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err> {
+    fn on_distinct(
+        &mut self,
+        _ts: &[Term],
+        ts_rec: Vec<Self::Out>,
+    ) -> Result<Self::Out, Self::Err> {
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
-    fn on_and(&mut self, ts: &[Term], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err> {
+    fn on_and(&mut self, _ts: &[Term], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err> {
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
-    fn on_or(&mut self, ts: &[Term], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err> {
+    fn on_or(&mut self, _ts: &[Term], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err> {
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
-    fn on_xor(&mut self, ts: &[Term], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err> {
+    fn on_xor(&mut self, _ts: &[Term], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err> {
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
-    fn on_not(&mut self, t: &Term, t_rec: Self::Out) -> Result<Self::Out, Self::Err> {
+    fn on_not(&mut self, _t: &Term, t_rec: Self::Out) -> Result<Self::Out, Self::Err> {
         Ok(1 + t_rec)
     }
 
     fn on_implies(
         &mut self,
-        ts: &[Term],
-        t: &Term,
+        _ts: &[Term],
+        _t: &Term,
         ts_rec: &[Self::Out],
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
@@ -181,9 +188,9 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_ite(
         &mut self,
-        b: &Term,
-        t: &Term,
-        e: &Term,
+        _b: &Term,
+        _t: &Term,
+        _e: &Term,
         b_rec: Self::Out,
         t_rec: Self::Out,
         e_rec: &Self::Out,
