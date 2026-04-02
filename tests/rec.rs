@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use yaspar::ast::Keyword;
 use yaspar_ir::ast::alg::{
     Attribute, Constant, Local, PatternArm, QualifiedIdentifier, VarBinding,
 };
@@ -12,6 +13,7 @@ struct TermSize;
 
 impl TermRecursor<Str, Sort, Term> for TermSize {
     type Out = usize;
+    type Attr = usize;
     type Err = Bottom;
 
     fn on_constant(
@@ -48,7 +50,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         &mut self,
         _vs: &[VarBinding<Str, Term>],
         _body: &Term,
-        _vs_rec: &[VarBinding<Str, Self::Out>],
+        _vs_rec: &[VarBinding<&Str, Self::Out>],
     ) -> Result<(), Self::Err> {
         Ok(())
     }
@@ -57,7 +59,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         &mut self,
         _vs: &[VarBinding<Str, Term>],
         _body: &Term,
-        vs_rec: Vec<VarBinding<Str, Self::Out>>,
+        vs_rec: Vec<VarBinding<&Str, Self::Out>>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1 + vs_rec.into_iter().map(|v| v.2).sum::<usize>() + body_rec)
@@ -127,19 +129,41 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _t: &Term,
         _anns: &[Attribute<Str, Term>],
         t_rec: Self::Out,
-        anns_rec: Vec<Attribute<Str, Self::Out>>,
+        anns_rec: Vec<Self::Attr>,
     ) -> Result<Self::Out, Self::Err> {
-        Ok(1 + t_rec
-            + anns_rec
-                .into_iter()
-                .map(|a| match a {
-                    Attribute::Keyword(_) => 1,
-                    Attribute::Constant(_, _) => 1,
-                    Attribute::Symbol(_, _) => 1,
-                    Attribute::Named(_) => 1,
-                    Attribute::Pattern(ns) => ns.into_iter().sum::<usize>(),
-                })
-                .sum::<usize>())
+        Ok(1 + t_rec + anns_rec.into_iter().sum::<usize>())
+    }
+
+    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Result<Self::Attr, Self::Err> {
+        Ok(1)
+    }
+
+    fn on_attribute_constant(
+        &mut self,
+        _keyword: &Keyword,
+        _constant: &Constant<Str>,
+    ) -> Result<Self::Attr, Self::Err> {
+        Ok(1)
+    }
+
+    fn on_attribute_symbol(
+        &mut self,
+        _keyword: &Keyword,
+        _symbol: &Str,
+    ) -> Result<Self::Attr, Self::Err> {
+        Ok(1)
+    }
+
+    fn on_attribute_named(&mut self, _name: &Str) -> Result<Self::Attr, Self::Err> {
+        Ok(1)
+    }
+
+    fn on_attribute_pattern(
+        &mut self,
+        _patterns: &[Term],
+        patterns_rec: Vec<Self::Out>,
+    ) -> Result<Self::Attr, Self::Err> {
+        Ok(patterns_rec.into_iter().sum::<usize>())
     }
 
     fn on_eq(

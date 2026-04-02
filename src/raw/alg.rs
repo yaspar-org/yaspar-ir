@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Mul, Sub};
-use yaspar::ast::Keyword;
+pub use yaspar::ast::Keyword;
 use yaspar::tokens::SPECIAL_SYMBOLS;
 use yaspar::{binary_to_string, hex_to_string};
 

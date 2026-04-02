@@ -61,6 +61,8 @@ enum Either<A, B> {
 pub trait TermRecursor<Str, So, T> {
     /// The type produced by each recursive step.
     type Out;
+    /// The type produced by each attribute callback.
+    type Attr;
     /// The error type returned when a callback fails.
     type Err;
 
@@ -68,7 +70,6 @@ pub trait TermRecursor<Str, So, T> {
     fn recurse_on_term(&mut self, t: &T) -> Result<Self::Out, Self::Err>
     where
         Self: Sized,
-        Str: Clone,
         T: Contains<T: Repr<T = Term<Str, So, T>>>,
     {
         term_recursion(self, t)
@@ -110,7 +111,7 @@ pub trait TermRecursor<Str, So, T> {
         &mut self,
         vs: &[VarBinding<Str, T>],
         body: &T,
-        vs_rec: &[VarBinding<Str, Self::Out>],
+        vs_rec: &[VarBinding<&Str, Self::Out>],
     ) -> Result<(), Self::Err>;
 
     /// Called after all let-binding RHS and the body have been recursed.
@@ -118,7 +119,7 @@ pub trait TermRecursor<Str, So, T> {
         &mut self,
         vs: &[VarBinding<Str, T>],
         body: &T,
-        vs_rec: Vec<VarBinding<Str, Self::Out>>,
+        vs_rec: Vec<VarBinding<&Str, Self::Out>>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err>;
 
@@ -167,15 +168,40 @@ pub trait TermRecursor<Str, So, T> {
         scrutinee_rec: Self::Out,
         cases_rec: Vec<PatternArm<Str, Self::Out>>,
     ) -> Result<Self::Out, Self::Err>;
-    /// Called for an annotated term after the inner term and all `Pattern` sub-terms
-    /// have been recursed. Non-`Pattern` attributes are cloned as-is.
+    /// Called for an annotated term after the inner term and all attributes
+    /// have been processed via their respective `on_attribute_*` callbacks.
     fn on_annotated(
         &mut self,
         t: &T,
         anns: &[Attribute<Str, T>],
         t_rec: Self::Out,
-        anns_rec: Vec<Attribute<Str, Self::Out>>,
+        anns_rec: Vec<Self::Attr>,
     ) -> Result<Self::Out, Self::Err>;
+
+    // --- Attribute callbacks ---
+
+    /// Called for a keyword-only attribute (e.g. `:keyword`).
+    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err>;
+    /// Called for a keyword attribute with a constant value (e.g. `:keyword 42`).
+    fn on_attribute_constant(
+        &mut self,
+        keyword: &Keyword,
+        constant: &Constant<Str>,
+    ) -> Result<Self::Attr, Self::Err>;
+    /// Called for a keyword attribute with a symbol value (e.g. `:keyword sym`).
+    fn on_attribute_symbol(
+        &mut self,
+        keyword: &Keyword,
+        symbol: &Str,
+    ) -> Result<Self::Attr, Self::Err>;
+    /// Called for a `:named` attribute.
+    fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err>;
+    /// Called for a `:pattern` attribute after all pattern sub-terms have been recursed.
+    fn on_attribute_pattern(
+        &mut self,
+        patterns: &[T],
+        patterns_rec: Vec<Self::Out>,
+    ) -> Result<Self::Attr, Self::Err>;
 
     // --- Binary / n-ary connectives ---
 
@@ -228,28 +254,28 @@ pub trait TermRecursor<Str, So, T> {
 /// `LetBindings` (processing binding RHS values left-to-right) then `LetBody` (processing
 /// the body after the scope callback). Similarly, `Ite` uses three frames (`IteB` → `IteT`
 /// → `IteE`) and `Implies` uses two (`ImpliesPremises` → `ImpliesConclusion`).
-enum TermZipper<'a, Str, So, T, Out> {
+enum TermZipper<'a, Str, So, T, Out, Attr> {
     /// Sentinel: the traversal has returned to the top level.
     Root,
     // --- Leaf frames (resolved immediately, never stored across iterations) ---
     Constant {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         constant: &'a Constant<Str>,
         sort: &'a Option<So>,
     },
     Global {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         id: &'a QualifiedIdentifier<Str, So>,
         sort: &'a Option<So>,
     },
     Local {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         id: &'a Local<Str, So>,
     },
     // --- Multi-child compound frames ---
     /// Function application: collecting argument results left-to-right.
     App {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         id: &'a QualifiedIdentifier<Str, So>,
         args: &'a [T],
         sort: &'a Option<So>,
@@ -257,34 +283,34 @@ enum TermZipper<'a, Str, So, T, Out> {
     },
     /// Let-binding phase 1: recursing on binding RHS values left-to-right.
     LetBindings {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         vs: &'a [VarBinding<Str, T>],
         body: &'a T,
-        vs_rec: Vec<VarBinding<Str, Out>>,
+        vs_rec: Vec<VarBinding<&'a Str, Out>>,
     },
     /// Let-binding phase 2: recursing on the body (after `setup_let_scope`).
     LetBody {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         vs: &'a [VarBinding<Str, T>],
-        vs_rec: Vec<VarBinding<Str, Out>>,
+        vs_rec: Vec<VarBinding<&'a Str, Out>>,
         body: &'a T,
     },
     /// `Forall` / `Exists`: recursing on the body (after `setup_quantifier_scope`).
     Quantifier {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         vs: &'a [VarBinding<Str, So>],
         body: &'a T,
         is_forall: bool,
     },
     /// Match phase 1: recursing on the scrutinee.
     MatchScrutinee {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         scrutinee: &'a T,
         cases: &'a [PatternArm<Str, T>],
     },
     /// Match phase 2: recursing on arm bodies left-to-right (after `setup_match_case_scope`).
     MatchCases {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         scrutinee: &'a T,
         cases: &'a [PatternArm<Str, T>],
         scrutinee_rec: Out,
@@ -292,20 +318,20 @@ enum TermZipper<'a, Str, So, T, Out> {
     },
     /// Equality phase 1: recursing on the left operand.
     EqL {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         l: &'a T,
         r: &'a T,
     },
     /// Equality phase 2: recursing on the right operand.
     EqR {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         l: &'a T,
         r: &'a T,
         l_rec: Out,
     },
     /// Annotated phase 1: recursing on the inner term.
     AnnotatedBody {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         body: &'a T,
         anns: &'a [Attribute<Str, T>],
     },
@@ -313,51 +339,51 @@ enum TermZipper<'a, Str, So, T, Out> {
     /// `anns_rec` tracks fully-processed attributes; `cur_pattern_rec` accumulates
     /// results for the `Pattern` attribute currently at `anns[anns_rec.len()]`.
     AnnotatedAttrs {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         body: &'a T,
         anns: &'a [Attribute<Str, T>],
         t_rec: Out,
         /// Fully-processed attributes so far.
-        anns_rec: Vec<Attribute<Str, Out>>,
+        anns_rec: Vec<Attr>,
         /// Within the current `Pattern` attribute, the terms processed so far.
         cur_pattern_rec: Vec<Out>,
     },
     /// `Distinct`, `And`, `Or`, or `Xor`: collecting child results left-to-right.
     Nary {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         kind: NaryKind,
         ts: &'a [T],
         rec: Vec<Out>,
     },
     /// `Not`: single child.
     Not {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         t: &'a T,
     },
     /// `Implies` phase 1: collecting premise results left-to-right.
     ImpliesPremises {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         ts: &'a [T],
         t: &'a T,
         rec: Vec<Out>,
     },
     /// `Implies` phase 2: recursing on the conclusion.
     ImpliesConclusion {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         ts: &'a [T],
         t: &'a T,
         ts_rec: Vec<Out>,
     },
     /// `Ite` phase 1: recursing on the condition.
     IteB {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         b: &'a T,
         t: &'a T,
         e: &'a T,
     },
     /// `Ite` phase 2: recursing on the then-branch.
     IteT {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         b: &'a T,
         t: &'a T,
         e: &'a T,
@@ -365,7 +391,7 @@ enum TermZipper<'a, Str, So, T, Out> {
     },
     /// `Ite` phase 3: recursing on the else-branch.
     IteE {
-        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         b: &'a T,
         t: &'a T,
         e: &'a T,
@@ -385,32 +411,44 @@ enum NaryKind {
 
 /// Advance `anns_rec` past consecutive non-`Pattern` attributes starting at
 /// `anns[anns_rec.len()]`. Stops when a `Pattern` is encountered or all attributes
-/// are consumed. Non-`Pattern` attributes are cloned with their `T` parameter erased
-/// (they contain no sub-terms).
-fn advance_attributes_until_pattern<Str: Clone, T, Out>(
+/// are consumed. Non-`Pattern` attributes are processed via the recursor's
+/// `on_attribute_*` callbacks.
+fn advance_attributes_until_pattern<R, Str, So, T>(
+    recursor: &mut R,
     anns: &[Attribute<Str, T>],
-    anns_rec: &mut Vec<Attribute<Str, Out>>,
-) {
+    anns_rec: &mut Vec<R::Attr>,
+) -> Result<(), R::Err>
+where
+    R: TermRecursor<Str, So, T>,
+{
     while anns_rec.len() < anns.len() {
         match &anns[anns_rec.len()] {
             Attribute::Pattern(_) => break,
-            Attribute::Keyword(k) => anns_rec.push(Attribute::Keyword(k.clone())),
-            Attribute::Constant(k, c) => anns_rec.push(Attribute::Constant(k.clone(), c.clone())),
-            Attribute::Symbol(k, s) => anns_rec.push(Attribute::Symbol(k.clone(), s.clone())),
-            Attribute::Named(s) => anns_rec.push(Attribute::Named(s.clone())),
+            Attribute::Keyword(k) => anns_rec.push(recursor.on_attribute_keyword(k)?),
+            Attribute::Constant(k, c) => anns_rec.push(recursor.on_attribute_constant(k, c)?),
+            Attribute::Symbol(k, s) => anns_rec.push(recursor.on_attribute_symbol(k, s)?),
+            Attribute::Named(s) => anns_rec.push(recursor.on_attribute_named(s)?),
         }
     }
+    Ok(())
 }
 
 /// A boxed zipper frame, used as the "stack" representation during traversal.
-type Zip<'a, Str, So, T, Out> = Box<TermZipper<'a, Str, So, T, Out>>;
+type Zip<'a, Str, So, T, Out, Attr> = Box<TermZipper<'a, Str, So, T, Out, Attr>>;
+
+/// A [`Zip`] specialized to a particular [`TermRecursor`].
+type RZip<'a, R, Str, So, T> = Zip<
+    'a,
+    Str,
+    So,
+    T,
+    <R as TermRecursor<Str, So, T>>::Out,
+    <R as TermRecursor<Str, So, T>>::Attr,
+>;
 
 /// The result of a push step: either a zipper to continue from, or the final value.
 type PushResult<'a, R, Str, So, T> = Result<
-    Either<
-        Zip<'a, Str, So, T, <R as TermRecursor<Str, So, T>>::Out>,
-        <R as TermRecursor<Str, So, T>>::Out,
-    >,
+    Either<RZip<'a, R, Str, So, T>, <R as TermRecursor<Str, So, T>>::Out>,
     <R as TermRecursor<Str, So, T>>::Err,
 >;
 
@@ -426,11 +464,10 @@ type PushResult<'a, R, Str, So, T> = Result<
 #[allow(clippy::boxed_local)]
 fn term_recursion_zipper_push<'a, R, Str, So, T>(
     recursor: &mut R,
-    mut zipper: Zip<'a, Str, So, T, R::Out>,
+    mut zipper: Zip<'a, Str, So, T, R::Out, R::Attr>,
     mut result: R::Out,
 ) -> PushResult<'a, R, Str, So, T>
 where
-    Str: Clone,
     R: TermRecursor<Str, So, T>,
 {
     loop {
@@ -469,7 +506,7 @@ where
             } => {
                 // we are still working on the binder
                 let v = &vs[vs_rec.len()];
-                let binding = VarBinding(v.0.clone(), v.1, result);
+                let binding = VarBinding(&v.0, v.1, result);
                 vs_rec.push(binding);
                 if vs_rec.len() >= vs.len() {
                     // now we should swap to the body
@@ -564,8 +601,8 @@ where
             }
             TermZipper::AnnotatedBody { parent, body, anns } => {
                 // Skip leading non-Pattern attributes.
-                let mut anns_rec: Vec<Attribute<Str, R::Out>> = vec![];
-                advance_attributes_until_pattern(anns, &mut anns_rec);
+                let mut anns_rec: Vec<R::Attr> = vec![];
+                advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
                 if anns_rec.len() >= anns.len() {
                     // No Pattern attributes at all — finalize immediately.
                     result = recursor.on_annotated(body, anns, result, anns_rec)?;
@@ -599,10 +636,10 @@ where
                 };
                 if cur_pattern_rec.len() >= pat_ts.len() {
                     // This Pattern attribute is done.
-                    anns_rec.push(Attribute::Pattern(cur_pattern_rec));
+                    anns_rec.push(recursor.on_attribute_pattern(pat_ts, cur_pattern_rec)?);
                     cur_pattern_rec = vec![];
                     // Advance through any remaining non-Pattern attributes.
-                    advance_attributes_until_pattern(anns, &mut anns_rec);
+                    advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
                     if anns_rec.len() >= anns.len() {
                         result = recursor.on_annotated(body, anns, t_rec, anns_rec)?;
                         zipper = parent;
@@ -737,8 +774,8 @@ where
 /// be at a leaf (`Constant`, `Global`, or `Local`), ready for resolution.
 fn term_recursion_zipper_next<'a, R, Str, So, T>(
     recursor: &mut R,
-    zipper: Zip<'a, Str, So, T, R::Out>,
-) -> Result<Zip<'a, Str, So, T, R::Out>, R::Err>
+    zipper: RZip<'a, R, Str, So, T>,
+) -> Result<RZip<'a, R, Str, So, T>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
@@ -810,9 +847,9 @@ where
 /// returning a zipper positioned at that leaf.
 fn term_recursion_zipper_expand<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
-    mut parent: Zip<'a, Str, So, T, R::Out>,
+    mut parent: RZip<'a, R, Str, So, T>,
     mut t: &'a T,
-) -> Result<Zip<'a, Str, So, T, R::Out>, R::Err>
+) -> Result<RZip<'a, R, Str, So, T>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
@@ -950,10 +987,9 @@ where
 /// children remain to be processed.
 fn term_recursion_zip_one_step<'a, R, Str, So, T>(
     recursor: &mut R,
-    mut zipper: Zip<'a, Str, So, T, R::Out>,
+    mut zipper: Zip<'a, Str, So, T, R::Out, R::Attr>,
 ) -> PushResult<'a, R, Str, So, T>
 where
-    Str: Clone,
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
@@ -988,7 +1024,6 @@ where
 /// [`term_recursion_zip_one_step`] until the traversal completes.
 fn term_recursion<R, Str, So, T>(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
 where
-    Str: Clone,
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
