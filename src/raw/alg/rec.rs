@@ -13,6 +13,15 @@ pub trait TermRecursor<Str, So, T> {
     type Out;
     type Err;
 
+    fn recurse_on_term(&mut self, t: &T) -> Result<Self::Out, Self::Err>
+    where
+        Self: Sized,
+        Str: Clone,
+        T: Contains<T: Repr<T = Term<Str, So, T>>>,
+    {
+        term_recursion(self, t)
+    }
+
     fn on_constant(
         &mut self,
         constant: &Constant<Str>,
@@ -36,13 +45,14 @@ pub trait TermRecursor<Str, So, T> {
         &mut self,
         vs: &[VarBinding<Str, T>],
         body: &T,
-        vs_rec: Vec<VarBinding<Str, Self::Out>>,
+        vs_rec: &[VarBinding<Str, Self::Out>],
     ) -> Result<(), Self::Err>;
 
     fn on_let(
         &mut self,
         vs: &[VarBinding<Str, T>],
         body: &T,
+        vs_rec: Vec<VarBinding<Str, Self::Out>>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err>;
 
@@ -68,6 +78,7 @@ pub trait TermRecursor<Str, So, T> {
         &mut self,
         scrutinee: &T,
         cases: &[PatternArm<Str, T>],
+        scrutinee_rec: &Self::Out,
         case_idx: usize,
     ) -> Result<(), Self::Err>;
     fn on_match_arm(
@@ -76,7 +87,7 @@ pub trait TermRecursor<Str, So, T> {
         cases: &[PatternArm<Str, T>],
         case_idx: usize,
         arm: Self::Out,
-    ) -> Result<Self::Out, Self::Err>;
+    ) -> Result<PatternArm<Str, Self::Out>, Self::Err>;
     fn on_match(
         &mut self,
         scrutinee: &T,
@@ -153,6 +164,7 @@ enum TermZipper<'a, Str, So, T, Out> {
     LetBody {
         parent: Box<TermZipper<'a, Str, So, T, Out>>,
         vs: &'a [VarBinding<Str, T>],
+        vs_rec: Vec<VarBinding<Str, Out>>,
         body: &'a T,
     },
     Quantifier {
@@ -161,25 +173,54 @@ enum TermZipper<'a, Str, So, T, Out> {
         body: &'a T,
         is_forall: bool,
     },
+    MatchScrutinee {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        scrutinee: &'a T,
+        cases: &'a [PatternArm<Str, T>],
+    },
+    MatchCases {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        scrutinee: &'a T,
+        cases: &'a [PatternArm<Str, T>],
+        scrutinee_rec: Out,
+        case_rec: Vec<PatternArm<Str, Out>>,
+    },
+    EqL {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        l: &'a T,
+        r: &'a T,
+    },
+    EqR {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        l: &'a T,
+        r: &'a T,
+        l_rec: Out,
+    },
 }
 
 impl<'a, Str, So, T, Out> TermZipper<'a, Str, So, T, Out> {
-    fn next_term(&self) -> Option<&Term<Str, So, T>> {
+    fn next_term(&self) -> Option<&T> {
         match self {
             TermZipper::Root
             | TermZipper::Constant { .. }
             | TermZipper::Global { .. }
             | TermZipper::Local { .. } => None,
             TermZipper::App { args, rec, .. } => Some(&args[rec.len()]),
-            TermZipper::LetBindings { vs, vs_rec, .. } => Some(&vs[vs_rec.len()]),
+            TermZipper::LetBindings { vs, vs_rec, .. } => Some(&vs[vs_rec.len()].2),
             TermZipper::LetBody { body, .. } => Some(body),
             TermZipper::Quantifier { body, .. } => Some(body),
+            TermZipper::MatchScrutinee { scrutinee, .. } => Some(&scrutinee),
+            TermZipper::MatchCases {
+                cases, case_rec, ..
+            } => Some(&cases[case_rec.len()].body),
+            TermZipper::EqL { l, .. } => Some(&l),
+            TermZipper::EqR { r, .. } => Some(&r),
         }
     }
 }
 
 fn term_recursion_zipper_push<'a, R, Str, So, T>(
-    r: &mut R,
+    recursor: &mut R,
     mut zipper: Box<TermZipper<'a, Str, So, T, R::Out>>,
     mut result: R::Out,
 ) -> Result<Either<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Out>, R::Err>
@@ -203,7 +244,7 @@ where
                 rec.push(result);
                 if rec.len() >= args.len() {
                     // at this point, all recursions are ready, and therefore we should invoke the recursor
-                    result = r.on_app(id, args, sort, rec)?;
+                    result = recursor.on_app(id, args, sort, rec)?;
                     zipper = parent;
                 } else {
                     return Ok(Either::Left(Box::new(TermZipper::App {
@@ -227,11 +268,11 @@ where
                 vs_rec.push(binding);
                 if vs_rec.len() >= vs.len() {
                     // now we should swap to the body
-                    r.setup_let_scope(vs, body, vs_rec)?;
                     return Ok(Either::Left(Box::new(TermZipper::LetBody {
                         parent,
                         vs,
                         body,
+                        vs_rec,
                     })));
                 } else {
                     return Ok(Either::Left(Box::new(TermZipper::LetBindings {
@@ -242,9 +283,14 @@ where
                     })));
                 }
             }
-            TermZipper::LetBody { parent, vs, body } => {
+            TermZipper::LetBody {
+                parent,
+                vs,
+                vs_rec,
+                body,
+            } => {
+                result = recursor.on_let(vs, body, vs_rec, result)?;
                 zipper = parent;
-                result = r.on_let(vs, body, result)?;
             }
             TermZipper::Quantifier {
                 parent,
@@ -252,38 +298,136 @@ where
                 body,
                 is_forall,
             } => {
-                r.setup_quantifier_scope(vs, body)?;
                 result = if is_forall {
-                    r.on_forall(vs, body, result)
+                    recursor.on_forall(vs, body, result)
                 } else {
-                    r.on_exists(vs, body, result)
+                    recursor.on_exists(vs, body, result)
                 }?;
+                zipper = parent;
+            }
+            TermZipper::MatchScrutinee {
+                parent,
+                scrutinee,
+                cases,
+            } => {
+                return Ok(Either::Left(Box::new(TermZipper::MatchCases {
+                    parent,
+                    scrutinee,
+                    cases,
+                    scrutinee_rec: result,
+                    case_rec: vec![],
+                })));
+            }
+            TermZipper::MatchCases {
+                parent,
+                scrutinee,
+                cases,
+                scrutinee_rec,
+                mut case_rec,
+            } => {
+                let arm = recursor.on_match_arm(scrutinee, cases, case_rec.len(), result)?;
+                case_rec.push(arm);
+                if case_rec.len() >= cases.len() {
+                    result = recursor.on_match(scrutinee, cases, scrutinee_rec, case_rec)?;
+                    zipper = parent;
+                } else {
+                    return Ok(Either::Left(Box::new(TermZipper::MatchCases {
+                        parent,
+                        scrutinee,
+                        cases,
+                        scrutinee_rec,
+                        case_rec,
+                    })));
+                }
+            }
+            TermZipper::EqL { parent, l, r } => {
+                return Ok(Either::Left(Box::new(TermZipper::EqR {
+                    parent,
+                    l,
+                    r,
+                    l_rec: result,
+                })));
+            }
+            TermZipper::EqR {
+                parent,
+                l,
+                r,
+                l_rec,
+            } => {
+                result = recursor.on_eq(l, r, l_rec, result)?;
                 zipper = parent;
             }
         }
     }
 }
 
-fn term_recursion_zipper_expand<'a, R, Str, So, T>(
-    mut parent: Box<TermZipper<'a, Str, So, T, R::Out>>,
-    mut t: &T,
-) -> Box<TermZipper<'a, Str, So, T, R::Out>>
+fn term_recursion_zipper_next<'a, R, Str, So, T>(
+    recursor: &mut R,
+    zipper: Box<TermZipper<'a, Str, So, T, R::Out>>,
+) -> Result<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Err>
 where
-    // Str: Clone,
+    R: TermRecursor<Str, So, T>,
+    T: Contains<T: Repr<T = Term<Str, So, T>>>,
+{
+    let t: Option<&T> = match zipper.as_ref() {
+        TermZipper::Root
+        | TermZipper::Constant { .. }
+        | TermZipper::Global { .. }
+        | TermZipper::Local { .. } => None,
+        TermZipper::App { args, rec, .. } => Some(&args[rec.len()]),
+        TermZipper::LetBindings { vs, vs_rec, .. } => Some(&vs[vs_rec.len()].2),
+        TermZipper::LetBody {
+            vs, vs_rec, body, ..
+        } => {
+            recursor.setup_let_scope(vs, body, vs_rec)?;
+            Some(body)
+        }
+        TermZipper::Quantifier { vs, body, .. } => {
+            // this branch is not expected to get hit
+            recursor.setup_quantifier_scope(vs, body)?;
+            Some(body)
+        }
+        TermZipper::MatchScrutinee { scrutinee, .. } => Some(&scrutinee),
+        TermZipper::MatchCases {
+            scrutinee,
+            cases,
+            case_rec,
+            scrutinee_rec,
+            ..
+        } => {
+            recursor.setup_match_case_scope(scrutinee, cases, scrutinee_rec, case_rec.len())?;
+            Some(&cases[case_rec.len()].body)
+        }
+        TermZipper::EqL { l, .. } => Some(&l),
+        TermZipper::EqR { r, .. } => Some(&r),
+    };
+    if let Some(t) = t {
+        term_recursion_zipper_expand(recursor, zipper, t)
+    } else {
+        Ok(zipper)
+    }
+}
+
+fn term_recursion_zipper_expand<'a, R, Str: 'a, So: 'a, T>(
+    recursor: &mut R,
+    mut parent: Box<TermZipper<'a, Str, So, T, R::Out>>,
+    mut t: &'a T,
+) -> Result<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Err>
+where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     loop {
         match t.inner().repr() {
             Term::Constant(constant, sort) => {
-                return Box::new(TermZipper::Constant {
+                return Ok(Box::new(TermZipper::Constant {
                     parent,
                     constant,
                     sort,
-                });
+                }));
             }
-            Term::Global(id, sort) => return Box::new(TermZipper::Global { parent, id, sort }),
-            Term::Local(id) => return Box::new(TermZipper::Local { parent, id }),
+            Term::Global(id, sort) => return Ok(Box::new(TermZipper::Global { parent, id, sort })),
+            Term::Local(id) => return Ok(Box::new(TermZipper::Local { parent, id })),
             Term::App(id, args, sort) => {
                 parent = Box::new(TermZipper::App {
                     parent,
@@ -304,6 +448,7 @@ where
                 t = &vs[0].2;
             }
             Term::Exists(vs, body) => {
+                recursor.setup_quantifier_scope(vs, body)?;
                 parent = Box::new(TermZipper::Quantifier {
                     parent,
                     vs,
@@ -313,6 +458,7 @@ where
                 t = body;
             }
             Term::Forall(vs, body) => {
+                recursor.setup_quantifier_scope(vs, body)?;
                 parent = Box::new(TermZipper::Quantifier {
                     parent,
                     vs,
@@ -321,9 +467,19 @@ where
                 });
                 t = body;
             }
-            Term::Matching(_, _) => {}
+            Term::Matching(scrutinee, cases) => {
+                parent = Box::new(TermZipper::MatchScrutinee {
+                    parent,
+                    scrutinee,
+                    cases,
+                });
+                t = &scrutinee;
+            }
             Term::Annotated(_, _) => {}
-            Term::Eq(_, _) => {}
+            Term::Eq(l, r) => {
+                parent = Box::new(TermZipper::EqL { parent, l, r });
+                t = l;
+            }
             Term::Distinct(_) => {}
             Term::And(_) => {}
             Term::Or(_) => {}
@@ -335,7 +491,7 @@ where
     }
 }
 fn term_recursion_zip_one_step<'a, R, Str, So, T>(
-    r: &mut R,
+    recursor: &mut R,
     mut zipper: Box<TermZipper<'a, Str, So, T, R::Out>>,
 ) -> Result<Either<Box<TermZipper<'a, Str, So, T, R::Out>>, R::Out>, R::Err>
 where
@@ -343,10 +499,7 @@ where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
-    let next = zipper.next_term();
-    if let Some(t) = next {
-        zipper = term_recursion_zipper_expand(zipper, t);
-    }
+    zipper = term_recursion_zipper_next(recursor, zipper)?;
 
     match *zipper {
         TermZipper::Constant {
@@ -354,16 +507,16 @@ where
             constant,
             sort,
         } => {
-            let result = r.on_constant(constant, sort)?;
-            term_recursion_zipper_push(r, parent, result)
+            let result = recursor.on_constant(constant, sort)?;
+            term_recursion_zipper_push(recursor, parent, result)
         }
         TermZipper::Global { parent, id, sort } => {
-            let result = r.on_global(id, sort)?;
-            term_recursion_zipper_push(r, parent, result)
+            let result = recursor.on_global(id, sort)?;
+            term_recursion_zipper_push(recursor, parent, result)
         }
         TermZipper::Local { parent, id } => {
-            let result = r.on_local(id)?;
-            term_recursion_zipper_push(r, parent, result)
+            let result = recursor.on_local(id)?;
+            term_recursion_zipper_push(recursor, parent, result)
         }
         _ => {
             unreachable!()
@@ -371,22 +524,22 @@ where
     }
 }
 
-fn term_recursion<R, Str, So, T>(r: &mut R, term: &T) -> Result<R::Out, R::Err>
+fn term_recursion<R, Str, So, T>(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
 where
     Str: Clone,
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     let mut zipper = Box::new(TermZipper::Root);
-    zipper = term_recursion_zipper_expand(zipper, term);
+    zipper = term_recursion_zipper_expand(recursor, zipper, term)?;
     loop {
-        let result = term_recursion_zip_one_step(r, zipper)?;
+        let result = term_recursion_zip_one_step(recursor, zipper)?;
         match result {
             Either::Left(l) => {
                 zipper = l;
             }
             Either::Right(r) => {
-                return r;
+                return Ok(r);
             }
         }
     }
