@@ -196,25 +196,88 @@ enum TermZipper<'a, Str, So, T, Out> {
         r: &'a T,
         l_rec: Out,
     },
+    /// Recurse on the inner term of an annotated term; then move to attrs.
+    AnnotatedBody {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        t: &'a T,
+        anns: &'a [Attribute<Str, T>],
+    },
+    /// Recurse on `Attribute::Pattern` sub-terms within annotations.
+    AnnotatedAttrs {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        t: &'a T,
+        anns: &'a [Attribute<Str, T>],
+        t_rec: Out,
+        /// Fully-processed attributes so far.
+        anns_rec: Vec<Attribute<Str, Out>>,
+        /// Within the current `Pattern` attribute, the terms processed so far.
+        cur_pattern_rec: Vec<Out>,
+    },
+    /// N-ary connective: `Distinct`, `And`, `Or`, `Xor`.
+    Nary {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        kind: NaryKind,
+        ts: &'a [T],
+        rec: Vec<Out>,
+    },
+    Not {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        t: &'a T,
+    },
+    ImpliesPremises {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        ts: &'a [T],
+        t: &'a T,
+        rec: Vec<Out>,
+    },
+    ImpliesConclusion {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        ts: &'a [T],
+        t: &'a T,
+        ts_rec: Vec<Out>,
+    },
+    IteB {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        b: &'a T,
+        t: &'a T,
+        e: &'a T,
+    },
+    IteT {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        b: &'a T,
+        t: &'a T,
+        e: &'a T,
+        b_rec: Out,
+    },
+    IteE {
+        parent: Box<TermZipper<'a, Str, So, T, Out>>,
+        b: &'a T,
+        t: &'a T,
+        e: &'a T,
+        b_rec: Out,
+        t_rec: Out,
+    },
 }
 
-impl<'a, Str, So, T, Out> TermZipper<'a, Str, So, T, Out> {
-    fn next_term(&self) -> Option<&T> {
-        match self {
-            TermZipper::Root
-            | TermZipper::Constant { .. }
-            | TermZipper::Global { .. }
-            | TermZipper::Local { .. } => None,
-            TermZipper::App { args, rec, .. } => Some(&args[rec.len()]),
-            TermZipper::LetBindings { vs, vs_rec, .. } => Some(&vs[vs_rec.len()].2),
-            TermZipper::LetBody { body, .. } => Some(body),
-            TermZipper::Quantifier { body, .. } => Some(body),
-            TermZipper::MatchScrutinee { scrutinee, .. } => Some(&scrutinee),
-            TermZipper::MatchCases {
-                cases, case_rec, ..
-            } => Some(&cases[case_rec.len()].body),
-            TermZipper::EqL { l, .. } => Some(&l),
-            TermZipper::EqR { r, .. } => Some(&r),
+#[derive(Clone, Copy)]
+enum NaryKind {
+    Distinct,
+    And,
+    Or,
+    Xor,
+}
+
+fn advance_attributes_until_pattern<Str: Clone, T, Out>(
+    anns: &[Attribute<Str, T>],
+    anns_rec: &mut Vec<Attribute<Str, Out>>,
+) {
+    while anns_rec.len() < anns.len() {
+        match &anns[anns_rec.len()] {
+            Attribute::Pattern(_) => break,
+            Attribute::Keyword(k) => anns_rec.push(Attribute::Keyword(k.clone())),
+            Attribute::Constant(k, c) => anns_rec.push(Attribute::Constant(k.clone(), c.clone())),
+            Attribute::Symbol(k, s) => anns_rec.push(Attribute::Symbol(k.clone(), s.clone())),
+            Attribute::Named(s) => anns_rec.push(Attribute::Named(s.clone())),
         }
     }
 }
@@ -357,6 +420,169 @@ where
                 result = recursor.on_eq(l, r, l_rec, result)?;
                 zipper = parent;
             }
+            TermZipper::AnnotatedBody { parent, t, anns } => {
+                // Skip leading non-Pattern attributes.
+                let mut anns_rec: Vec<Attribute<Str, R::Out>> = vec![];
+                advance_attributes_until_pattern(anns, &mut anns_rec);
+                if anns_rec.len() >= anns.len() {
+                    // No Pattern attributes at all — finalize immediately.
+                    result = recursor.on_annotated(t, anns, result, anns_rec)?;
+                    zipper = parent;
+                } else {
+                    return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
+                        parent,
+                        t,
+                        anns,
+                        t_rec: result,
+                        anns_rec,
+                        cur_pattern_rec: vec![],
+                    })));
+                }
+            }
+            TermZipper::AnnotatedAttrs {
+                parent,
+                t,
+                anns,
+                t_rec,
+                mut anns_rec,
+                mut cur_pattern_rec,
+            } => {
+                // A result just came back from a Pattern sub-term.
+                cur_pattern_rec.push(result);
+                // Find the current Pattern attribute we're working on.
+                let cur_attr = &anns[anns_rec.len()];
+                let pat_ts = match cur_attr {
+                    Attribute::Pattern(ts) => ts,
+                    _ => unreachable!(),
+                };
+                if cur_pattern_rec.len() >= pat_ts.len() {
+                    // This Pattern attribute is done.
+                    anns_rec.push(Attribute::Pattern(cur_pattern_rec));
+                    cur_pattern_rec = vec![];
+                    // Advance through any remaining non-Pattern attributes.
+                    advance_attributes_until_pattern(anns, &mut anns_rec);
+                    if anns_rec.len() >= anns.len() {
+                        result = recursor.on_annotated(t, anns, t_rec, anns_rec)?;
+                        zipper = parent;
+                    } else {
+                        // More Pattern attributes to process.
+                        return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
+                            parent,
+                            t,
+                            anns,
+                            t_rec,
+                            anns_rec,
+                            cur_pattern_rec,
+                        })));
+                    }
+                } else {
+                    // More terms in the current Pattern.
+                    return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
+                        parent,
+                        t,
+                        anns,
+                        t_rec,
+                        anns_rec,
+                        cur_pattern_rec,
+                    })));
+                }
+            }
+            TermZipper::Nary {
+                parent,
+                kind,
+                ts,
+                mut rec,
+            } => {
+                rec.push(result);
+                if rec.len() >= ts.len() {
+                    result = match kind {
+                        NaryKind::Distinct => recursor.on_distinct(ts, rec)?,
+                        NaryKind::And => recursor.on_and(ts, rec)?,
+                        NaryKind::Or => recursor.on_or(ts, rec)?,
+                        NaryKind::Xor => recursor.on_xor(ts, rec)?,
+                    };
+                    zipper = parent;
+                } else {
+                    return Ok(Either::Left(Box::new(TermZipper::Nary {
+                        parent,
+                        kind,
+                        ts,
+                        rec,
+                    })));
+                }
+            }
+            TermZipper::Not { parent, t } => {
+                result = recursor.on_not(t, result)?;
+                zipper = parent;
+            }
+            TermZipper::ImpliesPremises {
+                parent,
+                ts,
+                t,
+                mut rec,
+            } => {
+                rec.push(result);
+                if rec.len() >= ts.len() {
+                    return Ok(Either::Left(Box::new(TermZipper::ImpliesConclusion {
+                        parent,
+                        ts,
+                        t,
+                        ts_rec: rec,
+                    })));
+                } else {
+                    return Ok(Either::Left(Box::new(TermZipper::ImpliesPremises {
+                        parent,
+                        ts,
+                        t,
+                        rec,
+                    })));
+                }
+            }
+            TermZipper::ImpliesConclusion {
+                parent,
+                ts,
+                t,
+                ts_rec,
+            } => {
+                result = recursor.on_implies(ts, t, &ts_rec, result)?;
+                zipper = parent;
+            }
+            TermZipper::IteB { parent, b, t, e } => {
+                return Ok(Either::Left(Box::new(TermZipper::IteT {
+                    parent,
+                    b,
+                    t,
+                    e,
+                    b_rec: result,
+                })));
+            }
+            TermZipper::IteT {
+                parent,
+                b,
+                t,
+                e,
+                b_rec,
+            } => {
+                return Ok(Either::Left(Box::new(TermZipper::IteE {
+                    parent,
+                    b,
+                    t,
+                    e,
+                    b_rec,
+                    t_rec: result,
+                })));
+            }
+            TermZipper::IteE {
+                parent,
+                b,
+                t,
+                e,
+                b_rec,
+                t_rec,
+            } => {
+                result = recursor.on_ite(b, t, e, b_rec, t_rec, &result)?;
+                zipper = parent;
+            }
         }
     }
 }
@@ -400,6 +626,26 @@ where
         }
         TermZipper::EqL { l, .. } => Some(&l),
         TermZipper::EqR { r, .. } => Some(&r),
+        TermZipper::AnnotatedBody { t, .. } => Some(t),
+        TermZipper::AnnotatedAttrs {
+            anns,
+            anns_rec,
+            cur_pattern_rec,
+            ..
+        } => {
+            // Find the current Pattern attribute and the next sub-term within it.
+            match &anns[anns_rec.len()] {
+                Attribute::Pattern(ts) => Some(&ts[cur_pattern_rec.len()]),
+                _ => unreachable!(),
+            }
+        }
+        TermZipper::Nary { ts, rec, .. } => Some(&ts[rec.len()]),
+        TermZipper::Not { t, .. } => Some(t),
+        TermZipper::ImpliesPremises { ts, rec, .. } => Some(&ts[rec.len()]),
+        TermZipper::ImpliesConclusion { t, .. } => Some(t),
+        TermZipper::IteB { b, .. } => Some(b),
+        TermZipper::IteT { t, .. } => Some(t),
+        TermZipper::IteE { e, .. } => Some(e),
     };
     if let Some(t) = t {
         term_recursion_zipper_expand(recursor, zipper, t)
@@ -475,18 +721,76 @@ where
                 });
                 t = &scrutinee;
             }
-            Term::Annotated(_, _) => {}
+            Term::Annotated(inner, anns) => {
+                parent = Box::new(TermZipper::AnnotatedBody {
+                    parent,
+                    t: inner,
+                    anns,
+                });
+                t = inner;
+            }
             Term::Eq(l, r) => {
                 parent = Box::new(TermZipper::EqL { parent, l, r });
                 t = l;
             }
-            Term::Distinct(_) => {}
-            Term::And(_) => {}
-            Term::Or(_) => {}
-            Term::Xor(_) => {}
-            Term::Implies(_, _) => {}
-            Term::Not(_) => {}
-            Term::Ite(_, _, _) => {}
+            Term::Distinct(ts) => {
+                parent = Box::new(TermZipper::Nary {
+                    parent,
+                    kind: NaryKind::Distinct,
+                    ts,
+                    rec: vec![],
+                });
+                t = &ts[0];
+            }
+            Term::And(ts) => {
+                parent = Box::new(TermZipper::Nary {
+                    parent,
+                    kind: NaryKind::And,
+                    ts,
+                    rec: vec![],
+                });
+                t = &ts[0];
+            }
+            Term::Or(ts) => {
+                parent = Box::new(TermZipper::Nary {
+                    parent,
+                    kind: NaryKind::Or,
+                    ts,
+                    rec: vec![],
+                });
+                t = &ts[0];
+            }
+            Term::Xor(ts) => {
+                parent = Box::new(TermZipper::Nary {
+                    parent,
+                    kind: NaryKind::Xor,
+                    ts,
+                    rec: vec![],
+                });
+                t = &ts[0];
+            }
+            Term::Implies(ts, concl) => {
+                parent = Box::new(TermZipper::ImpliesPremises {
+                    parent,
+                    ts,
+                    t: concl,
+                    rec: vec![],
+                });
+                t = &ts[0];
+            }
+            Term::Not(inner) => {
+                parent = Box::new(TermZipper::Not { parent, t: inner });
+                t = inner;
+            }
+            Term::Ite(b, th, e) => {
+                parent = Box::new(TermZipper::IteB {
+                    parent,
+                    b,
+                    t: th,
+                    e,
+                });
+                t = b;
+            }
         }
     }
 }
