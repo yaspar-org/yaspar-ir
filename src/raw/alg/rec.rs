@@ -197,15 +197,15 @@ pub trait TermRecursor<Str, So, T> {
     fn on_xor(&mut self, ts: &[T], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err>;
     /// Called for `(not t)`.
     fn on_not(&mut self, t: &T, t_rec: Self::Out) -> Result<Self::Out, Self::Err>;
-    /// Called for `(=> p1 ... pn concl)`. Premise results are passed by shared reference.
+    /// Called for `(=> p1 ... pn concl)`.
     fn on_implies(
         &mut self,
         ts: &[T],
         t: &T,
-        ts_rec: &[Self::Out],
+        ts_rec: Vec<Self::Out>,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err>;
-    /// Called for `(ite cond then else)`. The else result is passed by shared reference.
+    /// Called for `(ite cond then else)`.
     fn on_ite(
         &mut self,
         b: &T,
@@ -673,7 +673,7 @@ where
                 t,
                 ts_rec,
             } => {
-                result = recursor.on_implies(ts, t, &ts_rec, result)?;
+                result = recursor.on_implies(ts, t, ts_rec, result)?;
                 zipper = parent;
             }
             TermZipper::IteB { parent, b, t, e } => {

@@ -180,7 +180,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         &mut self,
         _ts: &[Term],
         _t: &Term,
-        ts_rec: &[Self::Out],
+        ts_rec: Vec<Self::Out>,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
         Ok(1 + ts_rec.into_iter().sum::<usize>() + t_rec)
