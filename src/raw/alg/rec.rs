@@ -398,6 +398,27 @@ where
     Ok(())
 }
 
+enum Either<A, B> {
+    Left(A),
+    Right(B),
+}
+
+/// Result of [`push_result`]: either the final value or a frame needing more children.
+type PushResult<'a, R, Str, So, T> = Result<
+    Either<
+        <R as TermRecursor<Str, So, T>>::Out,
+        Frame<
+            'a,
+            Str,
+            So,
+            T,
+            <R as TermRecursor<Str, So, T>>::Out,
+            <R as TermRecursor<Str, So, T>>::Attr,
+        >,
+    >,
+    <R as TermRecursor<Str, So, T>>::Err,
+>;
+
 /// Propagate a freshly computed `result` upward through the stack.
 ///
 /// Pops frames and invokes callbacks as children complete. When a frame still has
@@ -408,14 +429,14 @@ fn push_result<'a, R, Str, So, T>(
     recursor: &mut R,
     stack: &mut RStack<'a, R, Str, So, T>,
     mut result: R::Out,
-) -> Result<Option<R::Out>, R::Err>
+) -> PushResult<'a, R, Str, So, T>
 where
     R: TermRecursor<Str, So, T>,
 {
     loop {
         let frame = match stack.pop() {
             Some(f) => f,
-            None => return Ok(Some(result)),
+            None => return Ok(Either::Left(result)),
         };
         match frame {
             Frame::App {
@@ -428,13 +449,12 @@ where
                 if rec.len() >= args.len() {
                     result = recursor.on_app(id, args, sort, rec)?;
                 } else {
-                    stack.push(Frame::App {
+                    return Ok(Either::Right(Frame::App {
                         id,
                         args,
                         sort,
                         rec,
-                    });
-                    return Ok(None);
+                    }));
                 }
             }
             Frame::LetBindings {
@@ -444,12 +464,12 @@ where
             } => {
                 let v = &vs[vs_rec.len()];
                 vs_rec.push(VarBinding(&v.0, v.1, result));
-                if vs_rec.len() >= vs.len() {
-                    stack.push(Frame::LetBody { vs, vs_rec, body });
+                let frame = if vs_rec.len() >= vs.len() {
+                    Frame::LetBody { vs, vs_rec, body }
                 } else {
-                    stack.push(Frame::LetBindings { vs, body, vs_rec });
-                }
-                return Ok(None);
+                    Frame::LetBindings { vs, body, vs_rec }
+                };
+                return Ok(Either::Right(frame));
             }
             Frame::LetBody { vs, vs_rec, body } => {
                 result = recursor.on_let(vs, body, vs_rec, result)?;
@@ -466,13 +486,12 @@ where
                 }?;
             }
             Frame::MatchScrutinee { scrutinee, cases } => {
-                stack.push(Frame::MatchCases {
+                return Ok(Either::Right(Frame::MatchCases {
                     scrutinee,
                     cases,
                     scrutinee_rec: result,
                     case_rec: vec![],
-                });
-                return Ok(None);
+                }));
             }
             Frame::MatchCases {
                 scrutinee,
@@ -485,22 +504,20 @@ where
                 if case_rec.len() >= cases.len() {
                     result = recursor.on_match(scrutinee, cases, scrutinee_rec, case_rec)?;
                 } else {
-                    stack.push(Frame::MatchCases {
+                    return Ok(Either::Right(Frame::MatchCases {
                         scrutinee,
                         cases,
                         scrutinee_rec,
                         case_rec,
-                    });
-                    return Ok(None);
+                    }));
                 }
             }
             Frame::EqL { l, r } => {
-                stack.push(Frame::EqR {
+                return Ok(Either::Right(Frame::EqR {
                     l,
                     r,
                     l_rec: result,
-                });
-                return Ok(None);
+                }));
             }
             Frame::EqR { l, r, l_rec } => {
                 result = recursor.on_eq(l, r, l_rec, result)?;
@@ -511,14 +528,13 @@ where
                 if anns_rec.len() >= anns.len() {
                     result = recursor.on_annotated(body, anns, result, anns_rec)?;
                 } else {
-                    stack.push(Frame::AnnotatedAttrs {
+                    return Ok(Either::Right(Frame::AnnotatedAttrs {
                         body,
                         anns,
                         t_rec: result,
                         anns_rec,
                         cur_pattern_rec: vec![],
-                    });
-                    return Ok(None);
+                    }));
                 }
             }
             Frame::AnnotatedAttrs {
@@ -540,24 +556,22 @@ where
                     if anns_rec.len() >= anns.len() {
                         result = recursor.on_annotated(body, anns, t_rec, anns_rec)?;
                     } else {
-                        stack.push(Frame::AnnotatedAttrs {
+                        return Ok(Either::Right(Frame::AnnotatedAttrs {
                             body,
                             anns,
                             t_rec,
                             anns_rec,
                             cur_pattern_rec,
-                        });
-                        return Ok(None);
+                        }));
                     }
                 } else {
-                    stack.push(Frame::AnnotatedAttrs {
+                    return Ok(Either::Right(Frame::AnnotatedAttrs {
                         body,
                         anns,
                         t_rec,
                         anns_rec,
                         cur_pattern_rec,
-                    });
-                    return Ok(None);
+                    }));
                 }
             }
             Frame::Nary { kind, ts, mut rec } => {
@@ -570,8 +584,7 @@ where
                         NaryKind::Xor => recursor.on_xor(ts, rec)?,
                     };
                 } else {
-                    stack.push(Frame::Nary { kind, ts, rec });
-                    return Ok(None);
+                    return Ok(Either::Right(Frame::Nary { kind, ts, rec }));
                 }
             }
             Frame::Not { t } => {
@@ -579,34 +592,32 @@ where
             }
             Frame::ImpliesPremises { ts, t, mut rec } => {
                 rec.push(result);
-                if rec.len() >= ts.len() {
-                    stack.push(Frame::ImpliesConclusion { ts, t, ts_rec: rec });
+                let frame = if rec.len() >= ts.len() {
+                    Frame::ImpliesConclusion { ts, t, ts_rec: rec }
                 } else {
-                    stack.push(Frame::ImpliesPremises { ts, t, rec });
-                }
-                return Ok(None);
+                    Frame::ImpliesPremises { ts, t, rec }
+                };
+                return Ok(Either::Right(frame));
             }
             Frame::ImpliesConclusion { ts, t, ts_rec } => {
                 result = recursor.on_implies(ts, t, ts_rec, result)?;
             }
             Frame::IteB { b, t, e } => {
-                stack.push(Frame::IteT {
+                return Ok(Either::Right(Frame::IteT {
                     b,
                     t,
                     e,
                     b_rec: result,
-                });
-                return Ok(None);
+                }));
             }
             Frame::IteT { b, t, e, b_rec } => {
-                stack.push(Frame::IteE {
+                return Ok(Either::Right(Frame::IteE {
                     b,
                     t,
                     e,
                     b_rec,
                     t_rec: result,
-                });
-                return Ok(None);
+                }));
             }
             Frame::IteE {
                 b,
@@ -627,62 +638,59 @@ where
 /// callbacks for scoped constructs before returning the child reference.
 fn next_child<'a, R, Str, So, T>(
     recursor: &mut R,
-    stack: &RStack<'a, R, Str, So, T>,
-) -> Result<Option<&'a T>, R::Err>
+    frame: &Frame<'a, Str, So, T, R::Out, R::Attr>,
+) -> Result<&'a T, R::Err>
 where
     R: TermRecursor<Str, So, T>,
 {
-    match stack.last() {
-        None => Ok(None),
-        Some(frame) => match frame {
-            Frame::App { args, rec, .. } => Ok(Some(&args[rec.len()])),
-            Frame::LetBindings { vs, vs_rec, .. } => Ok(Some(&vs[vs_rec.len()].2)),
-            Frame::LetBody {
-                vs, vs_rec, body, ..
-            } => {
-                recursor.setup_let_scope(vs, body, vs_rec)?;
-                Ok(Some(body))
-            }
-            Frame::Quantifier {
-                vs,
-                body,
-                is_forall,
-                ..
-            } => {
-                recursor.setup_quantifier_scope(vs, body, *is_forall)?;
-                Ok(Some(body))
-            }
-            Frame::MatchScrutinee { scrutinee, .. } => Ok(Some(scrutinee)),
-            Frame::MatchCases {
-                scrutinee,
-                cases,
-                scrutinee_rec,
-                case_rec,
-                ..
-            } => {
-                recursor.setup_match_case_scope(scrutinee, cases, scrutinee_rec, case_rec.len())?;
-                Ok(Some(&cases[case_rec.len()].body))
-            }
-            Frame::EqL { l, .. } => Ok(Some(l)),
-            Frame::EqR { r, .. } => Ok(Some(r)),
-            Frame::AnnotatedBody { body, .. } => Ok(Some(body)),
-            Frame::AnnotatedAttrs {
-                anns,
-                anns_rec,
-                cur_pattern_rec,
-                ..
-            } => match &anns[anns_rec.len()] {
-                Attribute::Pattern(ts) => Ok(Some(&ts[cur_pattern_rec.len()])),
-                _ => unreachable!(),
-            },
-            Frame::Nary { ts, rec, .. } => Ok(Some(&ts[rec.len()])),
-            Frame::Not { t, .. } => Ok(Some(t)),
-            Frame::ImpliesPremises { ts, rec, .. } => Ok(Some(&ts[rec.len()])),
-            Frame::ImpliesConclusion { t, .. } => Ok(Some(t)),
-            Frame::IteB { b, .. } => Ok(Some(b)),
-            Frame::IteT { t, .. } => Ok(Some(t)),
-            Frame::IteE { e, .. } => Ok(Some(e)),
+    match frame {
+        Frame::App { args, rec, .. } => Ok(&args[rec.len()]),
+        Frame::LetBindings { vs, vs_rec, .. } => Ok(&vs[vs_rec.len()].2),
+        Frame::LetBody {
+            vs, vs_rec, body, ..
+        } => {
+            recursor.setup_let_scope(vs, body, vs_rec)?;
+            Ok(body)
+        }
+        Frame::Quantifier {
+            vs,
+            body,
+            is_forall,
+            ..
+        } => {
+            recursor.setup_quantifier_scope(vs, body, *is_forall)?;
+            Ok(body)
+        }
+        Frame::MatchScrutinee { scrutinee, .. } => Ok(scrutinee),
+        Frame::MatchCases {
+            scrutinee,
+            cases,
+            scrutinee_rec,
+            case_rec,
+            ..
+        } => {
+            recursor.setup_match_case_scope(scrutinee, cases, scrutinee_rec, case_rec.len())?;
+            Ok(&cases[case_rec.len()].body)
+        }
+        Frame::EqL { l, .. } => Ok(l),
+        Frame::EqR { r, .. } => Ok(r),
+        Frame::AnnotatedBody { body, .. } => Ok(body),
+        Frame::AnnotatedAttrs {
+            anns,
+            anns_rec,
+            cur_pattern_rec,
+            ..
+        } => match &anns[anns_rec.len()] {
+            Attribute::Pattern(ts) => Ok(&ts[cur_pattern_rec.len()]),
+            _ => unreachable!(),
         },
+        Frame::Nary { ts, rec, .. } => Ok(&ts[rec.len()]),
+        Frame::Not { t, .. } => Ok(t),
+        Frame::ImpliesPremises { ts, rec, .. } => Ok(&ts[rec.len()]),
+        Frame::ImpliesConclusion { t, .. } => Ok(t),
+        Frame::IteB { b, .. } => Ok(b),
+        Frame::IteT { t, .. } => Ok(t),
+        Frame::IteE { e, .. } => Ok(e),
     }
 }
 
@@ -824,11 +832,12 @@ where
     let mut result = resolve_leaf(recursor, leaf)?;
     loop {
         match push_result(recursor, &mut stack, result)? {
-            Some(final_result) => return Ok(final_result),
-            None => {
+            Either::Left(final_result) => return Ok(final_result),
+            Either::Right(frame) => {
                 // unwrap is safe below, as an empy stack should return Some in push_result and
                 // hit the previous case.
-                let child = next_child(recursor, &stack)?.unwrap();
+                let child = next_child(recursor, &frame)?;
+                stack.push(frame);
                 let leaf = expand(recursor, &mut stack, child)?;
                 result = resolve_leaf(recursor, leaf)?;
             }
