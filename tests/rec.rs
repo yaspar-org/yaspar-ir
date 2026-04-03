@@ -8,12 +8,16 @@ use yaspar_ir::ast::alg::{
 use yaspar_ir::ast::{Context, Typecheck};
 use yaspar_ir::ast::{Sort, Str, Term, TermRecursor, TypedTermRecursor};
 use yaspar_ir::untyped::UntypedAst;
+
 enum Bottom {}
+
 struct TermSize;
 
 impl TermRecursor<Str, Sort, Term> for TermSize {
     type Out = usize;
     type Attr = usize;
+    type Binding = usize;
+    type Arm = usize;
     type Err = Bottom;
 
     fn on_constant(
@@ -46,11 +50,21 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         Ok(1 + recs.into_iter().sum::<usize>())
     }
 
+    fn on_let_binding(
+        &mut self,
+        _vs: &[VarBinding<Str, Term>],
+        _body: &Term,
+        _binding_idx: usize,
+        binding_rec: Self::Out,
+    ) -> Result<Self::Binding, Self::Err> {
+        Ok(binding_rec)
+    }
+
     fn setup_let_scope(
         &mut self,
         _vs: &[VarBinding<Str, Term>],
         _body: &Term,
-        _vs_rec: &[VarBinding<&Str, Self::Out>],
+        _vs_rec: &[Self::Out],
     ) -> Result<(), Self::Err> {
         Ok(())
     }
@@ -59,10 +73,10 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         &mut self,
         _vs: &[VarBinding<Str, Term>],
         _body: &Term,
-        vs_rec: Vec<VarBinding<&Str, Self::Out>>,
+        vs_rec: Vec<Self::Out>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
-        Ok(1 + vs_rec.into_iter().map(|v| v.2).sum::<usize>() + body_rec)
+        Ok(1 + vs_rec.into_iter().sum::<usize>() + body_rec)
     }
 
     fn setup_quantifier_scope(
@@ -105,14 +119,11 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
     fn on_match_arm(
         &mut self,
         _scrutinee: &Term,
-        cases: &[PatternArm<Str, Term>],
-        case_idx: usize,
+        _cases: &[PatternArm<Str, Term>],
+        _case_idx: usize,
         arm: Self::Out,
-    ) -> Result<PatternArm<Str, Self::Out>, Self::Err> {
-        Ok(PatternArm {
-            pattern: cases[case_idx].pattern.clone(),
-            body: arm,
-        })
+    ) -> Result<Self::Arm, Self::Err> {
+        Ok(arm)
     }
 
     fn on_match(
@@ -120,9 +131,9 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _scrutinee: &Term,
         _cases: &[PatternArm<Str, Term>],
         scrutinee_rec: Self::Out,
-        cases_rec: Vec<PatternArm<Str, Self::Out>>,
+        cases_rec: Vec<Self::Arm>,
     ) -> Result<Self::Out, Self::Err> {
-        Ok(1 + scrutinee_rec + cases_rec.into_iter().map(|c| c.body).sum::<usize>())
+        Ok(1 + scrutinee_rec + cases_rec.into_iter().sum::<usize>())
     }
 
     fn on_annotated(

@@ -53,6 +53,10 @@ pub trait TermRecursor<Str, So, T> {
     type Out;
     /// The type produced by each attribute callback.
     type Attr;
+    /// The type produced by a let binding.
+    type Binding;
+    /// The type produced by an arm in a match expression.
+    type Arm;
     /// The error type returned when a callback fails.
     type Err;
 
@@ -95,13 +99,22 @@ pub trait TermRecursor<Str, So, T> {
 
     // --- Scoped constructs ---
 
+    /// Called after a let binding term has been recursed.
+    fn on_let_binding(
+        &mut self,
+        vs: &[VarBinding<Str, T>],
+        body: &T,
+        binding_idx: usize,
+        binding_rec: Self::Out,
+    ) -> Result<Self::Binding, Self::Err>;
+
     /// Called after all let-binding RHS values have been recursed, before entering the body.
     /// Use this to extend the environment with the new bindings.
     fn setup_let_scope(
         &mut self,
         vs: &[VarBinding<Str, T>],
         body: &T,
-        vs_rec: &[VarBinding<&Str, Self::Out>],
+        vs_rec: &[Self::Binding],
     ) -> Result<(), Self::Err>;
 
     /// Called after all let-binding RHS and the body have been recursed.
@@ -109,7 +122,7 @@ pub trait TermRecursor<Str, So, T> {
         &mut self,
         vs: &[VarBinding<Str, T>],
         body: &T,
-        vs_rec: Vec<VarBinding<&Str, Self::Out>>,
+        vs_rec: Vec<Self::Binding>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err>;
 
@@ -150,14 +163,14 @@ pub trait TermRecursor<Str, So, T> {
         cases: &[PatternArm<Str, T>],
         case_idx: usize,
         arm: Self::Out,
-    ) -> Result<PatternArm<Str, Self::Out>, Self::Err>;
+    ) -> Result<Self::Arm, Self::Err>;
     /// Called after all match arms and the scrutinee have been recursed.
     fn on_match(
         &mut self,
         scrutinee: &T,
         cases: &[PatternArm<Str, T>],
         scrutinee_rec: Self::Out,
-        cases_rec: Vec<PatternArm<Str, Self::Out>>,
+        cases_rec: Vec<Self::Arm>,
     ) -> Result<Self::Out, Self::Err>;
     /// Called for an annotated term after the inner term and all attributes
     /// have been processed via their respective `on_attribute_*` callbacks.
@@ -243,25 +256,25 @@ pub trait TermRecursor<Str, So, T> {
 /// `LetBindings` (processing binding RHS values left-to-right) then `LetBody` (processing
 /// the body after the scope callback). Similarly, `Ite` uses three frames (`IteB` → `IteT`
 /// → `IteE`) and `Implies` uses two (`ImpliesPremises` → `ImpliesConclusion`).
-enum Frame<'a, Str, So, T, Out, Attr> {
+enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
     /// Function application: collecting argument results left-to-right.
     App {
         id: &'a QualifiedIdentifier<Str, So>,
         args: &'a [T],
         sort: &'a Option<So>,
-        rec: Vec<Out>,
+        rec: Vec<R::Out>,
     },
     /// Let-binding phase 1: recursing on binding RHS values left-to-right.
     LetBindings {
         vs: &'a [VarBinding<Str, T>],
         body: &'a T,
-        vs_rec: Vec<VarBinding<&'a Str, Out>>,
+        vs_rec: Vec<R::Binding>,
     },
     /// Let-binding phase 2: recursing on the body (after `setup_let_scope`).
     LetBody {
         vs: &'a [VarBinding<Str, T>],
-        vs_rec: Vec<VarBinding<&'a Str, Out>>,
         body: &'a T,
+        vs_rec: Vec<R::Binding>,
     },
     /// `Forall` / `Exists`: recursing on the body (after `setup_quantifier_scope`).
     Quantifier {
@@ -278,13 +291,13 @@ enum Frame<'a, Str, So, T, Out, Attr> {
     MatchCases {
         scrutinee: &'a T,
         cases: &'a [PatternArm<Str, T>],
-        scrutinee_rec: Out,
-        case_rec: Vec<PatternArm<Str, Out>>,
+        scrutinee_rec: R::Out,
+        case_rec: Vec<R::Arm>,
     },
     /// Equality phase 1: recursing on the left operand.
     EqL { l: &'a T, r: &'a T },
     /// Equality phase 2: recursing on the right operand.
-    EqR { l: &'a T, r: &'a T, l_rec: Out },
+    EqR { l: &'a T, r: &'a T, l_rec: R::Out },
     /// Annotated phase 1: recursing on the inner term.
     AnnotatedBody {
         body: &'a T,
@@ -294,15 +307,15 @@ enum Frame<'a, Str, So, T, Out, Attr> {
     AnnotatedAttrs {
         body: &'a T,
         anns: &'a [Attribute<Str, T>],
-        t_rec: Out,
-        anns_rec: Vec<Attr>,
-        cur_pattern_rec: Vec<Out>,
+        t_rec: R::Out,
+        anns_rec: Vec<R::Attr>,
+        cur_pattern_rec: Vec<R::Out>,
     },
     /// `Distinct`, `And`, `Or`, or `Xor`: collecting child results left-to-right.
     Nary {
         kind: NaryKind,
         ts: &'a [T],
-        rec: Vec<Out>,
+        rec: Vec<R::Out>,
     },
     /// `Not`: single child.
     Not { t: &'a T },
@@ -310,13 +323,13 @@ enum Frame<'a, Str, So, T, Out, Attr> {
     ImpliesPremises {
         ts: &'a [T],
         t: &'a T,
-        rec: Vec<Out>,
+        rec: Vec<R::Out>,
     },
     /// `Implies` phase 2: recursing on the conclusion.
     ImpliesConclusion {
         ts: &'a [T],
         t: &'a T,
-        ts_rec: Vec<Out>,
+        ts_rec: Vec<R::Out>,
     },
     /// `Ite` phase 1: recursing on the condition.
     IteB { b: &'a T, t: &'a T, e: &'a T },
@@ -325,15 +338,15 @@ enum Frame<'a, Str, So, T, Out, Attr> {
         b: &'a T,
         t: &'a T,
         e: &'a T,
-        b_rec: Out,
+        b_rec: R::Out,
     },
     /// `Ite` phase 3: recursing on the else-branch.
     IteE {
         b: &'a T,
         t: &'a T,
         e: &'a T,
-        b_rec: Out,
-        t_rec: Out,
+        b_rec: R::Out,
+        t_rec: R::Out,
     },
 }
 
@@ -362,17 +375,7 @@ enum Leaf<'a, Str, So> {
 }
 
 /// The traversal stack: a `Vec` of frames.
-type Stack<'a, Str, So, T, Out, Attr> = Vec<Frame<'a, Str, So, T, Out, Attr>>;
-
-/// A [`Stack`] specialized to a particular [`TermRecursor`].
-type RStack<'a, R, Str, So, T> = Stack<
-    'a,
-    Str,
-    So,
-    T,
-    <R as TermRecursor<Str, So, T>>::Out,
-    <R as TermRecursor<Str, So, T>>::Attr,
->;
+type RStack<'a, R, Str, So, T> = Vec<Frame<'a, Str, So, T, R>>;
 
 /// Advance `anns_rec` past consecutive non-`Pattern` attributes starting at
 /// `anns[anns_rec.len()]`. Stops when a `Pattern` is encountered or all attributes
@@ -405,17 +408,7 @@ enum Either<A, B> {
 
 /// Result of [`push_result`]: either the final value or a frame needing more children.
 type PushResult<'a, R, Str, So, T> = Result<
-    Either<
-        <R as TermRecursor<Str, So, T>>::Out,
-        Frame<
-            'a,
-            Str,
-            So,
-            T,
-            <R as TermRecursor<Str, So, T>>::Out,
-            <R as TermRecursor<Str, So, T>>::Attr,
-        >,
-    >,
+    Either<<R as TermRecursor<Str, So, T>>::Out, Frame<'a, Str, So, T, R>>,
     <R as TermRecursor<Str, So, T>>::Err,
 >;
 
@@ -462,8 +455,7 @@ where
                 body,
                 mut vs_rec,
             } => {
-                let v = &vs[vs_rec.len()];
-                vs_rec.push(VarBinding(&v.0, v.1, result));
+                vs_rec.push(recursor.on_let_binding(vs, body, vs_rec.len(), result)?);
                 let frame = if vs_rec.len() >= vs.len() {
                     Frame::LetBody { vs, vs_rec, body }
                 } else {
@@ -638,7 +630,7 @@ where
 /// callbacks for scoped constructs before returning the child reference.
 fn next_child<'a, R, Str, So, T>(
     recursor: &mut R,
-    frame: &Frame<'a, Str, So, T, R::Out, R::Attr>,
+    frame: &Frame<'a, Str, So, T, R>,
 ) -> Result<&'a T, R::Err>
 where
     R: TermRecursor<Str, So, T>,
