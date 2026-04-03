@@ -39,7 +39,7 @@ use crate::raw::alg::*;
 /// `on_global`, `on_local`) receive only the original node data. Compound callbacks
 /// additionally receive the already-computed recursive results for their children.
 ///
-/// Two special `setup_*` hooks are called *before* descending into a scoped body, giving
+/// Three special `setup_*` hooks are called *before* descending into a scoped body, giving
 /// the implementor a chance to extend its environment with the new bindings:
 ///
 /// - [`setup_let_scope`](TermRecursor::setup_let_scope) – called after all let-binding
@@ -56,7 +56,7 @@ pub trait TermRecursor<Str, So, T> {
     /// The error type returned when a callback fails.
     type Err;
 
-    /// Entry point: recursively process `t` using the zipper-based traversal.
+    /// Entry point: recursively process `t` using the stack-based traversal.
     fn recurse_on_term(&mut self, t: &T) -> Result<Self::Out, Self::Err>
     where
         Self: Sized,
@@ -422,8 +422,8 @@ type PushResult<'a, R, Str, So, T> = Result<
 /// Propagate a freshly computed `result` upward through the stack.
 ///
 /// Pops frames and invokes callbacks as children complete. When a frame still has
-/// unprocessed children, it is pushed back (possibly in a new phase) and the function
-/// returns `None` so the main loop can expand the next child. Returns `Some(result)`
+/// unprocessed children, it returns `Either::Right(frame)`, where `frame` is the top of the stack,
+/// so the main loop can push the frame back and expand the next child. Returns `Either::Left(result)`
 /// when the stack is empty (traversal complete).
 fn push_result<'a, R, Str, So, T>(
     recursor: &mut R,
@@ -834,7 +834,7 @@ where
         match push_result(recursor, &mut stack, result)? {
             Either::Left(final_result) => return Ok(final_result),
             Either::Right(frame) => {
-                // unwrap is safe below, as an empy stack should return Some in push_result and
+                // unwrap is safe below, as an empty stack should return Left in push_result and
                 // hit the previous case.
                 let child = next_child(recursor, &frame)?;
                 stack.push(frame);
