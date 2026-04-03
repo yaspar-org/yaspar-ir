@@ -1,47 +1,37 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Stack-safe recursion over [`Term`] trees using a zipper-based traversal.
+//! Stack-safe recursion over [`Term`] trees using a Vec-based traversal stack.
 //!
 //! Deeply nested terms can overflow the call stack when traversed with ordinary recursion.
 //! This module provides [`TermRecursor`], a visitor-style trait whose default method
-//! [`recurse_on_term`](TermRecursor::recurse_on_term) drives an iterative, heap-allocated
-//! traversal via [`TermZipper`].
+//! [`recurse_on_term`](TermRecursor::recurse_on_term) drives an iterative traversal
+//! using a `Vec<Frame>` as an explicit stack.
 //!
 //! # How it works
 //!
 //! The traversal is a standard left-to-right, depth-first walk:
 //!
-//! 1. **Expand** – [`term_recursion_zipper_expand`] descends from a term into its leftmost
-//!    leaf, pushing a zipper frame for every intermediate node onto a linked list of
-//!    heap-allocated boxes.
+//! 1. **Expand** – [`expand`] descends from a term into its leftmost leaf, pushing a
+//!    [`Frame`] for every intermediate node onto the stack `Vec`.
 //!
-//! 2. **Step** – [`term_recursion_zip_one_step`] resolves the current leaf (always a
-//!    `Constant`, `Global`, or `Local`) by calling the corresponding `on_*` callback,
-//!    then pushes the result upward.
+//! 2. **Resolve** – [`resolve_leaf`] calls the appropriate leaf callback (`on_constant`,
+//!    `on_global`, or `on_local`) to produce a result.
 //!
-//! 3. **Push** – [`term_recursion_zipper_push`] propagates a result toward the root.
-//!    At each frame it either:
-//!    - accumulates the result and yields back to the main loop so the next child can be
-//!      expanded, or
+//! 3. **Push** – [`push_result`] propagates a result upward through the stack. At each
+//!    frame it either:
+//!    - accumulates the result and returns so the next child can be expanded, or
 //!    - invokes the `on_*` callback when all children are ready and continues upward.
 //!
-//! 4. **Next** – [`term_recursion_zipper_next`] is called at the start of each step to
-//!    determine the next child term to expand. For scoped constructs (`Let`, `Quantifier`,
-//!    `Match`) it also invokes the appropriate `setup_*` callback so the recursor can
-//!    update its environment before descending.
+//! 4. **Next** – [`next_child`] peeks at the top frame to determine the next child term
+//!    to expand. For scoped constructs (`Let`, `Quantifier`, `Match`) it also invokes
+//!    the appropriate `setup_*` callback.
 //!
-//! The main loop in [`term_recursion`] alternates between next and push until the `Root`
-//! frame is reached, at which point the final result is returned.
+//! The main loop in [`term_recursion`] alternates between these phases until the stack
+//! is empty, at which point the final result is returned.
 
 use crate::ast::Repr;
 use crate::raw::alg::*;
-
-/// Result of a single push step: either a zipper to continue from, or the final value.
-enum Either<A, B> {
-    Left(A),
-    Right(B),
-}
 
 /// A visitor trait for performing stack-safe, bottom-up recursion over [`Term`] trees.
 ///
@@ -244,39 +234,18 @@ pub trait TermRecursor<Str, So, T> {
     ) -> Result<Self::Out, Self::Err>;
 }
 
-/// A zipper (one-hole context) for iterative traversal of a [`Term`] tree.
+/// A stack frame for iterative traversal of a [`Term`] tree.
 ///
-/// Each variant represents a "frame" in the traversal stack. The `parent` field links to
-/// the enclosing frame, forming a singly-linked list on the heap. Leaf variants (`Constant`,
-/// `Global`, `Local`) are transient — they are immediately resolved and never stored across
-/// loop iterations.
+/// Each variant represents a pending computation. Frames are stored in a `Vec` (the
+/// traversal stack).
 ///
 /// Multi-child nodes are split into sequential phases. For example, `Let` uses two frames:
 /// `LetBindings` (processing binding RHS values left-to-right) then `LetBody` (processing
 /// the body after the scope callback). Similarly, `Ite` uses three frames (`IteB` → `IteT`
 /// → `IteE`) and `Implies` uses two (`ImpliesPremises` → `ImpliesConclusion`).
-enum TermZipper<'a, Str, So, T, Out, Attr> {
-    /// Sentinel: the traversal has returned to the top level.
-    Root,
-    // --- Leaf frames (resolved immediately, never stored across iterations) ---
-    Constant {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
-        constant: &'a Constant<Str>,
-        sort: &'a Option<So>,
-    },
-    Global {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
-        id: &'a QualifiedIdentifier<Str, So>,
-        sort: &'a Option<So>,
-    },
-    Local {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
-        id: &'a Local<Str, So>,
-    },
-    // --- Multi-child compound frames ---
+enum Frame<'a, Str, So, T, Out, Attr> {
     /// Function application: collecting argument results left-to-right.
     App {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         id: &'a QualifiedIdentifier<Str, So>,
         args: &'a [T],
         sort: &'a Option<So>,
@@ -284,107 +253,75 @@ enum TermZipper<'a, Str, So, T, Out, Attr> {
     },
     /// Let-binding phase 1: recursing on binding RHS values left-to-right.
     LetBindings {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         vs: &'a [VarBinding<Str, T>],
         body: &'a T,
         vs_rec: Vec<VarBinding<&'a Str, Out>>,
     },
     /// Let-binding phase 2: recursing on the body (after `setup_let_scope`).
     LetBody {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         vs: &'a [VarBinding<Str, T>],
         vs_rec: Vec<VarBinding<&'a Str, Out>>,
         body: &'a T,
     },
     /// `Forall` / `Exists`: recursing on the body (after `setup_quantifier_scope`).
     Quantifier {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         vs: &'a [VarBinding<Str, So>],
         body: &'a T,
         is_forall: bool,
     },
     /// Match phase 1: recursing on the scrutinee.
     MatchScrutinee {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         scrutinee: &'a T,
         cases: &'a [PatternArm<Str, T>],
     },
     /// Match phase 2: recursing on arm bodies left-to-right (after `setup_match_case_scope`).
     MatchCases {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         scrutinee: &'a T,
         cases: &'a [PatternArm<Str, T>],
         scrutinee_rec: Out,
         case_rec: Vec<PatternArm<Str, Out>>,
     },
     /// Equality phase 1: recursing on the left operand.
-    EqL {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
-        l: &'a T,
-        r: &'a T,
-    },
+    EqL { l: &'a T, r: &'a T },
     /// Equality phase 2: recursing on the right operand.
-    EqR {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
-        l: &'a T,
-        r: &'a T,
-        l_rec: Out,
-    },
+    EqR { l: &'a T, r: &'a T, l_rec: Out },
     /// Annotated phase 1: recursing on the inner term.
     AnnotatedBody {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         body: &'a T,
         anns: &'a [Attribute<Str, T>],
     },
     /// Annotated phase 2: recursing on `Attribute::Pattern` sub-terms.
-    /// `anns_rec` tracks fully-processed attributes; `cur_pattern_rec` accumulates
-    /// results for the `Pattern` attribute currently at `anns[anns_rec.len()]`.
     AnnotatedAttrs {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         body: &'a T,
         anns: &'a [Attribute<Str, T>],
         t_rec: Out,
-        /// Fully-processed attributes so far.
         anns_rec: Vec<Attr>,
-        /// Within the current `Pattern` attribute, the terms processed so far.
         cur_pattern_rec: Vec<Out>,
     },
     /// `Distinct`, `And`, `Or`, or `Xor`: collecting child results left-to-right.
     Nary {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         kind: NaryKind,
         ts: &'a [T],
         rec: Vec<Out>,
     },
     /// `Not`: single child.
-    Not {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
-        t: &'a T,
-    },
+    Not { t: &'a T },
     /// `Implies` phase 1: collecting premise results left-to-right.
     ImpliesPremises {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         ts: &'a [T],
         t: &'a T,
         rec: Vec<Out>,
     },
     /// `Implies` phase 2: recursing on the conclusion.
     ImpliesConclusion {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         ts: &'a [T],
         t: &'a T,
         ts_rec: Vec<Out>,
     },
     /// `Ite` phase 1: recursing on the condition.
-    IteB {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
-        b: &'a T,
-        t: &'a T,
-        e: &'a T,
-    },
+    IteB { b: &'a T, t: &'a T, e: &'a T },
     /// `Ite` phase 2: recursing on the then-branch.
     IteT {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         b: &'a T,
         t: &'a T,
         e: &'a T,
@@ -392,7 +329,6 @@ enum TermZipper<'a, Str, So, T, Out, Attr> {
     },
     /// `Ite` phase 3: recursing on the else-branch.
     IteE {
-        parent: Box<TermZipper<'a, Str, So, T, Out, Attr>>,
         b: &'a T,
         t: &'a T,
         e: &'a T,
@@ -401,7 +337,7 @@ enum TermZipper<'a, Str, So, T, Out, Attr> {
     },
 }
 
-/// Discriminant for the [`Nary`](TermZipper::Nary) zipper variant.
+/// Discriminant for the [`Nary`](Frame::Nary) variant.
 #[derive(Clone, Copy)]
 enum NaryKind {
     Distinct,
@@ -409,6 +345,34 @@ enum NaryKind {
     Or,
     Xor,
 }
+
+/// The leaf information returned by [`expand`] when a leaf node is reached.
+enum Leaf<'a, Str, So> {
+    Constant {
+        constant: &'a Constant<Str>,
+        sort: &'a Option<So>,
+    },
+    Global {
+        id: &'a QualifiedIdentifier<Str, So>,
+        sort: &'a Option<So>,
+    },
+    Local {
+        id: &'a Local<Str, So>,
+    },
+}
+
+/// The traversal stack: a `Vec` of frames.
+type Stack<'a, Str, So, T, Out, Attr> = Vec<Frame<'a, Str, So, T, Out, Attr>>;
+
+/// A [`Stack`] specialized to a particular [`TermRecursor`].
+type RStack<'a, R, Str, So, T> = Stack<
+    'a,
+    Str,
+    So,
+    T,
+    <R as TermRecursor<Str, So, T>>::Out,
+    <R as TermRecursor<Str, So, T>>::Attr,
+>;
 
 /// Advance `anns_rec` past consecutive non-`Pattern` attributes starting at
 /// `anns[anns_rec.len()]`. Stops when a `Pattern` is encountered or all attributes
@@ -434,51 +398,27 @@ where
     Ok(())
 }
 
-/// A boxed zipper frame, used as the "stack" representation during traversal.
-type Zip<'a, Str, So, T, Out, Attr> = Box<TermZipper<'a, Str, So, T, Out, Attr>>;
-
-/// A [`Zip`] specialized to a particular [`TermRecursor`].
-type RZip<'a, R, Str, So, T> = Zip<
-    'a,
-    Str,
-    So,
-    T,
-    <R as TermRecursor<Str, So, T>>::Out,
-    <R as TermRecursor<Str, So, T>>::Attr,
->;
-
-/// The result of a push step: either a zipper to continue from, or the final value.
-type PushResult<'a, R, Str, So, T> = Result<
-    Either<RZip<'a, R, Str, So, T>, <R as TermRecursor<Str, So, T>>::Out>,
-    <R as TermRecursor<Str, So, T>>::Err,
->;
-
-/// Propagate a freshly computed `result` upward through the zipper toward the root.
+/// Propagate a freshly computed `result` upward through the stack.
 ///
-/// Returns `Right(value)` when the root is reached, or `Left(zipper)` when the current
-/// frame still has unprocessed children and the main loop should expand the next one.
-///
-/// For frames that accumulate children (e.g. `App`, `Nary`, `LetBindings`), the result
-/// is appended to the accumulator. If all children are now ready, the corresponding
-/// `on_*` callback is invoked and propagation continues upward in the same call (the
-/// inner `loop`). Otherwise the updated frame is returned for the next expansion.
-#[allow(clippy::boxed_local)]
-fn term_recursion_zipper_push<'a, R, Str, So, T>(
+/// Pops frames and invokes callbacks as children complete. When a frame still has
+/// unprocessed children, it is pushed back (possibly in a new phase) and the function
+/// returns `None` so the main loop can expand the next child. Returns `Some(result)`
+/// when the stack is empty (traversal complete).
+fn push_result<'a, R, Str, So, T>(
     recursor: &mut R,
-    mut zipper: Zip<'a, Str, So, T, R::Out, R::Attr>,
+    stack: &mut RStack<'a, R, Str, So, T>,
     mut result: R::Out,
-) -> PushResult<'a, R, Str, So, T>
+) -> Result<Option<R::Out>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
 {
     loop {
-        match *zipper {
-            TermZipper::Root => return Ok(Either::Right(result)),
-            TermZipper::Constant { .. } | TermZipper::Global { .. } | TermZipper::Local { .. } => {
-                unreachable!()
-            }
-            TermZipper::App {
-                parent,
+        let frame = match stack.pop() {
+            Some(f) => f,
+            None => return Ok(Some(result)),
+        };
+        match frame {
+            Frame::App {
                 id,
                 args,
                 sort,
@@ -486,57 +426,35 @@ where
             } => {
                 rec.push(result);
                 if rec.len() >= args.len() {
-                    // at this point, all recursions are ready, and therefore we should invoke the recursor
                     result = recursor.on_app(id, args, sort, rec)?;
-                    zipper = parent;
                 } else {
-                    return Ok(Either::Left(Box::new(TermZipper::App {
-                        parent,
+                    stack.push(Frame::App {
                         id,
                         args,
                         sort,
                         rec,
-                    })));
+                    });
+                    return Ok(None);
                 }
             }
-            TermZipper::LetBindings {
-                parent,
+            Frame::LetBindings {
                 vs,
                 body,
                 mut vs_rec,
             } => {
-                // we are still working on the binder
                 let v = &vs[vs_rec.len()];
-                let binding = VarBinding(&v.0, v.1, result);
-                vs_rec.push(binding);
+                vs_rec.push(VarBinding(&v.0, v.1, result));
                 if vs_rec.len() >= vs.len() {
-                    // now we should swap to the body
-                    return Ok(Either::Left(Box::new(TermZipper::LetBody {
-                        parent,
-                        vs,
-                        body,
-                        vs_rec,
-                    })));
+                    stack.push(Frame::LetBody { vs, vs_rec, body });
                 } else {
-                    return Ok(Either::Left(Box::new(TermZipper::LetBindings {
-                        parent,
-                        vs,
-                        body,
-                        vs_rec,
-                    })));
+                    stack.push(Frame::LetBindings { vs, body, vs_rec });
                 }
+                return Ok(None);
             }
-            TermZipper::LetBody {
-                parent,
-                vs,
-                vs_rec,
-                body,
-            } => {
+            Frame::LetBody { vs, vs_rec, body } => {
                 result = recursor.on_let(vs, body, vs_rec, result)?;
-                zipper = parent;
             }
-            TermZipper::Quantifier {
-                parent,
+            Frame::Quantifier {
                 vs,
                 body,
                 is_forall,
@@ -546,23 +464,17 @@ where
                 } else {
                     recursor.on_exists(vs, body, result)
                 }?;
-                zipper = parent;
             }
-            TermZipper::MatchScrutinee {
-                parent,
-                scrutinee,
-                cases,
-            } => {
-                return Ok(Either::Left(Box::new(TermZipper::MatchCases {
-                    parent,
+            Frame::MatchScrutinee { scrutinee, cases } => {
+                stack.push(Frame::MatchCases {
                     scrutinee,
                     cases,
                     scrutinee_rec: result,
                     case_rec: vec![],
-                })));
+                });
+                return Ok(None);
             }
-            TermZipper::MatchCases {
-                parent,
+            Frame::MatchCases {
                 scrutinee,
                 cases,
                 scrutinee_rec,
@@ -572,107 +484,83 @@ where
                 case_rec.push(arm);
                 if case_rec.len() >= cases.len() {
                     result = recursor.on_match(scrutinee, cases, scrutinee_rec, case_rec)?;
-                    zipper = parent;
                 } else {
-                    return Ok(Either::Left(Box::new(TermZipper::MatchCases {
-                        parent,
+                    stack.push(Frame::MatchCases {
                         scrutinee,
                         cases,
                         scrutinee_rec,
                         case_rec,
-                    })));
+                    });
+                    return Ok(None);
                 }
             }
-            TermZipper::EqL { parent, l, r } => {
-                return Ok(Either::Left(Box::new(TermZipper::EqR {
-                    parent,
+            Frame::EqL { l, r } => {
+                stack.push(Frame::EqR {
                     l,
                     r,
                     l_rec: result,
-                })));
+                });
+                return Ok(None);
             }
-            TermZipper::EqR {
-                parent,
-                l,
-                r,
-                l_rec,
-            } => {
+            Frame::EqR { l, r, l_rec } => {
                 result = recursor.on_eq(l, r, l_rec, result)?;
-                zipper = parent;
             }
-            TermZipper::AnnotatedBody { parent, body, anns } => {
-                // Skip leading non-Pattern attributes.
+            Frame::AnnotatedBody { body, anns } => {
                 let mut anns_rec: Vec<R::Attr> = vec![];
                 advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
                 if anns_rec.len() >= anns.len() {
-                    // No Pattern attributes at all — finalize immediately.
                     result = recursor.on_annotated(body, anns, result, anns_rec)?;
-                    zipper = parent;
                 } else {
-                    return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
-                        parent,
+                    stack.push(Frame::AnnotatedAttrs {
                         body,
                         anns,
                         t_rec: result,
                         anns_rec,
                         cur_pattern_rec: vec![],
-                    })));
+                    });
+                    return Ok(None);
                 }
             }
-            TermZipper::AnnotatedAttrs {
-                parent,
+            Frame::AnnotatedAttrs {
                 body,
                 anns,
                 t_rec,
                 mut anns_rec,
                 mut cur_pattern_rec,
             } => {
-                // A result just came back from a Pattern sub-term.
                 cur_pattern_rec.push(result);
-                // Find the current Pattern attribute we're working on.
-                let cur_attr = &anns[anns_rec.len()];
-                let pat_ts = match cur_attr {
+                let pat_ts = match &anns[anns_rec.len()] {
                     Attribute::Pattern(ts) => ts,
                     _ => unreachable!(),
                 };
                 if cur_pattern_rec.len() >= pat_ts.len() {
-                    // This Pattern attribute is done.
                     anns_rec.push(recursor.on_attribute_pattern(pat_ts, cur_pattern_rec)?);
                     cur_pattern_rec = vec![];
-                    // Advance through any remaining non-Pattern attributes.
                     advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
                     if anns_rec.len() >= anns.len() {
                         result = recursor.on_annotated(body, anns, t_rec, anns_rec)?;
-                        zipper = parent;
                     } else {
-                        // More Pattern attributes to process.
-                        return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
-                            parent,
+                        stack.push(Frame::AnnotatedAttrs {
                             body,
                             anns,
                             t_rec,
                             anns_rec,
                             cur_pattern_rec,
-                        })));
+                        });
+                        return Ok(None);
                     }
                 } else {
-                    // More terms in the current Pattern.
-                    return Ok(Either::Left(Box::new(TermZipper::AnnotatedAttrs {
-                        parent,
+                    stack.push(Frame::AnnotatedAttrs {
                         body,
                         anns,
                         t_rec,
                         anns_rec,
                         cur_pattern_rec,
-                    })));
+                    });
+                    return Ok(None);
                 }
             }
-            TermZipper::Nary {
-                parent,
-                kind,
-                ts,
-                mut rec,
-            } => {
+            Frame::Nary { kind, ts, mut rec } => {
                 rec.push(result);
                 if rec.len() >= ts.len() {
                     result = match kind {
@@ -681,79 +569,46 @@ where
                         NaryKind::Or => recursor.on_or(ts, rec)?,
                         NaryKind::Xor => recursor.on_xor(ts, rec)?,
                     };
-                    zipper = parent;
                 } else {
-                    return Ok(Either::Left(Box::new(TermZipper::Nary {
-                        parent,
-                        kind,
-                        ts,
-                        rec,
-                    })));
+                    stack.push(Frame::Nary { kind, ts, rec });
+                    return Ok(None);
                 }
             }
-            TermZipper::Not { parent, t } => {
+            Frame::Not { t } => {
                 result = recursor.on_not(t, result)?;
-                zipper = parent;
             }
-            TermZipper::ImpliesPremises {
-                parent,
-                ts,
-                t,
-                mut rec,
-            } => {
+            Frame::ImpliesPremises { ts, t, mut rec } => {
                 rec.push(result);
                 if rec.len() >= ts.len() {
-                    return Ok(Either::Left(Box::new(TermZipper::ImpliesConclusion {
-                        parent,
-                        ts,
-                        t,
-                        ts_rec: rec,
-                    })));
+                    stack.push(Frame::ImpliesConclusion { ts, t, ts_rec: rec });
                 } else {
-                    return Ok(Either::Left(Box::new(TermZipper::ImpliesPremises {
-                        parent,
-                        ts,
-                        t,
-                        rec,
-                    })));
+                    stack.push(Frame::ImpliesPremises { ts, t, rec });
                 }
+                return Ok(None);
             }
-            TermZipper::ImpliesConclusion {
-                parent,
-                ts,
-                t,
-                ts_rec,
-            } => {
+            Frame::ImpliesConclusion { ts, t, ts_rec } => {
                 result = recursor.on_implies(ts, t, ts_rec, result)?;
-                zipper = parent;
             }
-            TermZipper::IteB { parent, b, t, e } => {
-                return Ok(Either::Left(Box::new(TermZipper::IteT {
-                    parent,
+            Frame::IteB { b, t, e } => {
+                stack.push(Frame::IteT {
                     b,
                     t,
                     e,
                     b_rec: result,
-                })));
+                });
+                return Ok(None);
             }
-            TermZipper::IteT {
-                parent,
-                b,
-                t,
-                e,
-                b_rec,
-            } => {
-                return Ok(Either::Left(Box::new(TermZipper::IteE {
-                    parent,
+            Frame::IteT { b, t, e, b_rec } => {
+                stack.push(Frame::IteE {
                     b,
                     t,
                     e,
                     b_rec,
                     t_rec: result,
-                })));
+                });
+                return Ok(None);
             }
-            TermZipper::IteE {
-                parent,
+            Frame::IteE {
                 b,
                 t,
                 e,
@@ -761,119 +616,93 @@ where
                 t_rec,
             } => {
                 result = recursor.on_ite(b, t, e, b_rec, t_rec, &result)?;
-                zipper = parent;
             }
         }
     }
 }
 
-/// Determine the next child term to descend into and expand it.
+/// Determine the next child term to descend into.
 ///
-/// This is called at the beginning of each step. It inspects the current zipper frame
-/// to find the next unprocessed child, invoking `setup_*` callbacks for scoped constructs
-/// (`LetBody`, `Quantifier`, `MatchCases`) before descending. The returned zipper will
-/// be at a leaf (`Constant`, `Global`, or `Local`), ready for resolution.
-fn term_recursion_zipper_next<'a, R, Str, So, T>(
+/// Peeks at the top frame to find the next unprocessed child, invoking `setup_*`
+/// callbacks for scoped constructs before returning the child reference.
+fn next_child<'a, R, Str, So, T>(
     recursor: &mut R,
-    zipper: RZip<'a, R, Str, So, T>,
-) -> Result<RZip<'a, R, Str, So, T>, R::Err>
+    stack: &RStack<'a, R, Str, So, T>,
+) -> Result<Option<&'a T>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
-    T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
-    let t: Option<&T> = match zipper.as_ref() {
-        TermZipper::Root
-        | TermZipper::Constant { .. }
-        | TermZipper::Global { .. }
-        | TermZipper::Local { .. } => None,
-        TermZipper::App { args, rec, .. } => Some(&args[rec.len()]),
-        TermZipper::LetBindings { vs, vs_rec, .. } => Some(&vs[vs_rec.len()].2),
-        TermZipper::LetBody {
-            vs, vs_rec, body, ..
-        } => {
-            recursor.setup_let_scope(vs, body, vs_rec)?;
-            Some(body)
-        }
-        TermZipper::Quantifier {
-            vs,
-            body,
-            is_forall,
-            ..
-        } => {
-            // this branch is not expected to get hit
-            recursor.setup_quantifier_scope(vs, body, *is_forall)?;
-            Some(body)
-        }
-        TermZipper::MatchScrutinee { scrutinee, .. } => Some(scrutinee),
-        TermZipper::MatchCases {
-            scrutinee,
-            cases,
-            case_rec,
-            scrutinee_rec,
-            ..
-        } => {
-            recursor.setup_match_case_scope(scrutinee, cases, scrutinee_rec, case_rec.len())?;
-            Some(&cases[case_rec.len()].body)
-        }
-        TermZipper::EqL { l, .. } => Some(l),
-        TermZipper::EqR { r, .. } => Some(r),
-        TermZipper::AnnotatedBody { body, .. } => Some(body),
-        TermZipper::AnnotatedAttrs {
-            anns,
-            anns_rec,
-            cur_pattern_rec,
-            ..
-        } => {
-            // Find the current Pattern attribute and the next sub-term within it.
-            match &anns[anns_rec.len()] {
-                Attribute::Pattern(ts) => Some(&ts[cur_pattern_rec.len()]),
-                _ => unreachable!(),
+    match stack.last() {
+        None => Ok(None),
+        Some(frame) => match frame {
+            Frame::App { args, rec, .. } => Ok(Some(&args[rec.len()])),
+            Frame::LetBindings { vs, vs_rec, .. } => Ok(Some(&vs[vs_rec.len()].2)),
+            Frame::LetBody {
+                vs, vs_rec, body, ..
+            } => {
+                recursor.setup_let_scope(vs, body, vs_rec)?;
+                Ok(Some(body))
             }
-        }
-        TermZipper::Nary { ts, rec, .. } => Some(&ts[rec.len()]),
-        TermZipper::Not { t, .. } => Some(t),
-        TermZipper::ImpliesPremises { ts, rec, .. } => Some(&ts[rec.len()]),
-        TermZipper::ImpliesConclusion { t, .. } => Some(t),
-        TermZipper::IteB { b, .. } => Some(b),
-        TermZipper::IteT { t, .. } => Some(t),
-        TermZipper::IteE { e, .. } => Some(e),
-    };
-    if let Some(t) = t {
-        term_recursion_zipper_expand(recursor, zipper, t)
-    } else {
-        Ok(zipper)
+            Frame::Quantifier {
+                vs,
+                body,
+                is_forall,
+                ..
+            } => {
+                recursor.setup_quantifier_scope(vs, body, *is_forall)?;
+                Ok(Some(body))
+            }
+            Frame::MatchScrutinee { scrutinee, .. } => Ok(Some(scrutinee)),
+            Frame::MatchCases {
+                scrutinee,
+                cases,
+                scrutinee_rec,
+                case_rec,
+                ..
+            } => {
+                recursor.setup_match_case_scope(scrutinee, cases, scrutinee_rec, case_rec.len())?;
+                Ok(Some(&cases[case_rec.len()].body))
+            }
+            Frame::EqL { l, .. } => Ok(Some(l)),
+            Frame::EqR { r, .. } => Ok(Some(r)),
+            Frame::AnnotatedBody { body, .. } => Ok(Some(body)),
+            Frame::AnnotatedAttrs {
+                anns,
+                anns_rec,
+                cur_pattern_rec,
+                ..
+            } => match &anns[anns_rec.len()] {
+                Attribute::Pattern(ts) => Ok(Some(&ts[cur_pattern_rec.len()])),
+                _ => unreachable!(),
+            },
+            Frame::Nary { ts, rec, .. } => Ok(Some(&ts[rec.len()])),
+            Frame::Not { t, .. } => Ok(Some(t)),
+            Frame::ImpliesPremises { ts, rec, .. } => Ok(Some(&ts[rec.len()])),
+            Frame::ImpliesConclusion { t, .. } => Ok(Some(t)),
+            Frame::IteB { b, .. } => Ok(Some(b)),
+            Frame::IteT { t, .. } => Ok(Some(t)),
+            Frame::IteE { e, .. } => Ok(Some(e)),
+        },
     }
 }
 
-/// Descend from `t` to its leftmost leaf, pushing a zipper frame for each intermediate node.
-///
-/// This is a tail-recursive loop: for compound nodes it pushes a frame onto `parent` and
-/// moves `t` to the first child. For scoped constructs (`Exists`, `Forall`) it calls
-/// `setup_quantifier_scope` before descending. The loop terminates when a leaf is reached,
-/// returning a zipper positioned at that leaf.
-fn term_recursion_zipper_expand<'a, R, Str: 'a, So: 'a, T>(
+/// Descend from `t` to its leftmost leaf, pushing a frame for each intermediate node.
+fn expand<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
-    mut parent: RZip<'a, R, Str, So, T>,
+    stack: &mut RStack<'a, R, Str, So, T>,
     mut t: &'a T,
-) -> Result<RZip<'a, R, Str, So, T>, R::Err>
+) -> Result<Leaf<'a, Str, So>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     loop {
         match t.inner().repr() {
-            Term::Constant(constant, sort) => {
-                return Ok(Box::new(TermZipper::Constant {
-                    parent,
-                    constant,
-                    sort,
-                }));
-            }
-            Term::Global(id, sort) => return Ok(Box::new(TermZipper::Global { parent, id, sort })),
-            Term::Local(id) => return Ok(Box::new(TermZipper::Local { parent, id })),
+            Term::Constant(constant, sort) => return Ok(Leaf::Constant { constant, sort }),
+            Term::Global(id, sort) => return Ok(Leaf::Global { id, sort }),
+            Term::Local(id) => return Ok(Leaf::Local { id }),
             Term::App(id, args, sort) => {
-                parent = Box::new(TermZipper::App {
-                    parent,
+                stack.push(Frame::App {
                     id,
                     args,
                     sort,
@@ -882,8 +711,7 @@ where
                 t = &args[0];
             }
             Term::Let(vs, body) => {
-                parent = Box::new(TermZipper::LetBindings {
-                    parent,
+                stack.push(Frame::LetBindings {
                     vs,
                     body,
                     vs_rec: vec![],
@@ -892,8 +720,7 @@ where
             }
             Term::Exists(vs, body) => {
                 recursor.setup_quantifier_scope(vs, body, false)?;
-                parent = Box::new(TermZipper::Quantifier {
-                    parent,
+                stack.push(Frame::Quantifier {
                     vs,
                     body,
                     is_forall: false,
@@ -902,8 +729,7 @@ where
             }
             Term::Forall(vs, body) => {
                 recursor.setup_quantifier_scope(vs, body, true)?;
-                parent = Box::new(TermZipper::Quantifier {
-                    parent,
+                stack.push(Frame::Quantifier {
                     vs,
                     body,
                     is_forall: true,
@@ -911,24 +737,19 @@ where
                 t = body;
             }
             Term::Matching(scrutinee, cases) => {
-                parent = Box::new(TermZipper::MatchScrutinee {
-                    parent,
-                    scrutinee,
-                    cases,
-                });
+                stack.push(Frame::MatchScrutinee { scrutinee, cases });
                 t = scrutinee;
             }
             Term::Annotated(body, anns) => {
-                parent = Box::new(TermZipper::AnnotatedBody { parent, body, anns });
+                stack.push(Frame::AnnotatedBody { body, anns });
                 t = body;
             }
             Term::Eq(l, r) => {
-                parent = Box::new(TermZipper::EqL { parent, l, r });
+                stack.push(Frame::EqL { l, r });
                 t = l;
             }
             Term::Distinct(ts) => {
-                parent = Box::new(TermZipper::Nary {
-                    parent,
+                stack.push(Frame::Nary {
                     kind: NaryKind::Distinct,
                     ts,
                     rec: vec![],
@@ -936,8 +757,7 @@ where
                 t = &ts[0];
             }
             Term::And(ts) => {
-                parent = Box::new(TermZipper::Nary {
-                    parent,
+                stack.push(Frame::Nary {
                     kind: NaryKind::And,
                     ts,
                     rec: vec![],
@@ -945,8 +765,7 @@ where
                 t = &ts[0];
             }
             Term::Or(ts) => {
-                parent = Box::new(TermZipper::Nary {
-                    parent,
+                stack.push(Frame::Nary {
                     kind: NaryKind::Or,
                     ts,
                     rec: vec![],
@@ -954,8 +773,7 @@ where
                 t = &ts[0];
             }
             Term::Xor(ts) => {
-                parent = Box::new(TermZipper::Nary {
-                    parent,
+                stack.push(Frame::Nary {
                     kind: NaryKind::Xor,
                     ts,
                     rec: vec![],
@@ -963,8 +781,7 @@ where
                 t = &ts[0];
             }
             Term::Implies(ts, concl) => {
-                parent = Box::new(TermZipper::ImpliesPremises {
-                    parent,
+                stack.push(Frame::ImpliesPremises {
                     ts,
                     t: concl,
                     rec: vec![],
@@ -972,77 +789,48 @@ where
                 t = &ts[0];
             }
             Term::Not(inner) => {
-                parent = Box::new(TermZipper::Not { parent, t: inner });
+                stack.push(Frame::Not { t: inner });
                 t = inner;
             }
             Term::Ite(b, th, e) => {
-                parent = Box::new(TermZipper::IteB {
-                    parent,
-                    b,
-                    t: th,
-                    e,
-                });
+                stack.push(Frame::IteB { b, t: th, e });
                 t = b;
             }
         }
     }
 }
-/// Perform one atomic step: find the next child, expand to a leaf, resolve it, and push.
-///
-/// Returns `Right(value)` if the entire traversal is complete, or `Left(zipper)` if more
-/// children remain to be processed.
-fn term_recursion_zip_one_step<'a, R, Str, So, T>(
-    recursor: &mut R,
-    mut zipper: Zip<'a, Str, So, T, R::Out, R::Attr>,
-) -> PushResult<'a, R, Str, So, T>
+
+/// Resolve a leaf node into a result by calling the appropriate callback.
+fn resolve_leaf<R, Str, So, T>(recursor: &mut R, leaf: Leaf<'_, Str, So>) -> Result<R::Out, R::Err>
 where
     R: TermRecursor<Str, So, T>,
-    T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
-    zipper = term_recursion_zipper_next(recursor, zipper)?;
-
-    match *zipper {
-        TermZipper::Constant {
-            parent,
-            constant,
-            sort,
-        } => {
-            let result = recursor.on_constant(constant, sort)?;
-            term_recursion_zipper_push(recursor, parent, result)
-        }
-        TermZipper::Global { parent, id, sort } => {
-            let result = recursor.on_global(id, sort)?;
-            term_recursion_zipper_push(recursor, parent, result)
-        }
-        TermZipper::Local { parent, id } => {
-            let result = recursor.on_local(id)?;
-            term_recursion_zipper_push(recursor, parent, result)
-        }
-        _ => {
-            unreachable!()
-        }
+    match leaf {
+        Leaf::Constant { constant, sort } => recursor.on_constant(constant, sort),
+        Leaf::Global { id, sort } => recursor.on_global(id, sort),
+        Leaf::Local { id } => recursor.on_local(id),
     }
 }
 
-/// Main entry point: iteratively traverse `term` using the zipper and return the final result.
-///
-/// Initializes the zipper at `Root`, expands to the leftmost leaf, then loops over
-/// [`term_recursion_zip_one_step`] until the traversal completes.
+/// Main entry point: iteratively traverse `term` using a Vec-based stack and return the
+/// final result.
 fn term_recursion<R, Str, So, T>(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
-    let mut zipper = Box::new(TermZipper::Root);
-    zipper = term_recursion_zipper_expand(recursor, zipper, term)?;
+    let mut stack: RStack<'_, R, Str, So, T> = Vec::new();
+    let leaf = expand(recursor, &mut stack, term)?;
+    let mut result = resolve_leaf(recursor, leaf)?;
     loop {
-        let result = term_recursion_zip_one_step(recursor, zipper)?;
-        match result {
-            Either::Left(l) => {
-                zipper = l;
-            }
-            Either::Right(r) => {
-                return Ok(r);
+        match push_result(recursor, &mut stack, result)? {
+            Some(final_result) => return Ok(final_result),
+            None => {
+                // unwrap is safe below, as an empy stack should return Some in push_result and
+                // hit the previous case.
+                let child = next_child(recursor, &stack)?.unwrap();
+                let leaf = expand(recursor, &mut stack, child)?;
+                result = resolve_leaf(recursor, leaf)?;
             }
         }
     }
