@@ -159,7 +159,7 @@ where
 
 /// The concrete type-checking environment used by [`Typecheck`] impls.
 ///
-/// This specializes [`TCEnvGen`] with [`TCLocal`] as the local scope, providing
+/// This specializes the generic environment with a concrete local scope, providing
 /// the full environment needed for type-checking terms, sorts, and commands.
 pub type TCEnv<'a, 'b, T> = TCEnvGen<'a, TCLocal<'b, T>>;
 

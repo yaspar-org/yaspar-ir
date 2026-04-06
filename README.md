@@ -407,7 +407,7 @@ fn depth(t: &Term) -> usize {
             let b = depth(b);
             1 + a.max(b)
         }
-        ATerm::App(_, ts, _) | ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) => {
+        ATerm::App(_, ts, _) | ATerm::Distinct(ts) | ATerm::And(ts) | ATerm::Or(ts) | ATerm::Xor(ts) => {
             1 + ts.iter().map(depth).max().unwrap()
         }
         ATerm::Let(ts, t) | ATerm::Implies(ts, t) => 1 + ts.iter().chain([t]).map(depth).max().unwrap(),
@@ -420,6 +420,103 @@ fn depth(t: &Term) -> usize {
     }
 }
 ```
+
+### Stack-safe term recursion with `TermRecursor`
+
+The manual pattern-matching approach above works well for simple analyses, but it uses the call
+stack for recursion, which can overflow on deeply nested terms. It also requires the implementor
+to handle every `ATerm` variant explicitly.
+
+The `TermRecursor` trait provides a stack-safe, callback-driven alternative. The traversal is
+driven by an internal `Vec`-based stack, so it never overflows regardless of term depth.
+Implementors define one callback per term variant and receive the already-computed results for
+child terms.
+
+Every callback receives a `current: &T` parameter — a reference to the original term node being
+recursed on. This gives access to the hashconsed identity, sort information, or other metadata
+without reconstructing the term from its parts.
+
+Here is the `depth` example rewritten using `TermRecursor`:
+
+```rust
+use yaspar_ir::ast::alg::{
+    Attribute, Constant, Local, PatternArm, QualifiedIdentifier, VarBinding,
+};
+use yaspar_ir::ast::{Sort, Str, Term, TermRecursor, TypedTermRecursor};
+
+enum Bottom {}
+struct TermDepth;
+
+impl TermRecursor<Str, Sort, Term> for TermDepth {
+    type Out = usize;
+    type Attr = ();
+    type Binding = usize;
+    type Pattern = ();
+    type Arm = usize;
+    type Err = Bottom;
+
+    // Leaves have depth 1
+    fn on_constant(&mut self, _: &Term, _: &Constant<Str>, _: &Option<Sort>) -> Result<usize, Bottom> { Ok(1) }
+    fn on_global(&mut self, _: &Term, _: &QualifiedIdentifier<Str, Sort>, _: &Option<Sort>) -> Result<usize, Bottom> { Ok(1) }
+    fn on_local(&mut self, _: &Term, _: &Local<Str, Sort>) -> Result<usize, Bottom> { Ok(1) }
+
+    // Compound nodes: 1 + max of children
+    fn on_app(&mut self, _: &Term, _: &QualifiedIdentifier<Str, Sort>, _: &[Term], _: &Option<Sort>, recs: Vec<usize>) -> Result<usize, Bottom> {
+        Ok(1 + recs.into_iter().max().unwrap())
+    }
+    fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: usize, b: usize) -> Result<usize, Bottom> { Ok(1 + a.max(b)) }
+    fn on_not(&mut self, _: &Term, _: &Term, r: usize) -> Result<usize, Bottom> { Ok(1 + r) }
+    fn on_and(&mut self, _: &Term, _: &[Term], r: Vec<usize>) -> Result<usize, Bottom> { Ok(1 + r.into_iter().max().unwrap()) }
+    fn on_or(&mut self, _: &Term, _: &[Term], r: Vec<usize>) -> Result<usize, Bottom> { Ok(1 + r.into_iter().max().unwrap()) }
+    fn on_xor(&mut self, _: &Term, _: &[Term], r: Vec<usize>) -> Result<usize, Bottom> { Ok(1 + r.into_iter().max().unwrap()) }
+    fn on_distinct(&mut self, _: &Term, _: &[Term], r: Vec<usize>) -> Result<usize, Bottom> { Ok(1 + r.into_iter().max().unwrap()) }
+    fn on_implies(&mut self, _: &Term, _: &[Term], _: &Term, ps: Vec<usize>, c: usize) -> Result<usize, Bottom> {
+        Ok(1 + ps.into_iter().chain([c]).max().unwrap())
+    }
+    fn on_ite(&mut self, _: &Term, _: &Term, _: &Term, _: &Term, b: usize, t: usize, e: usize) -> Result<usize, Bottom> {
+        Ok(1 + b.max(t.max(e)))
+    }
+
+    // Scoped constructs
+    fn setup_let_scope(&mut self, _: &Term, _: &[VarBinding<Str, Term>], _: &Term, _: &[usize]) -> Result<(), Bottom> { Ok(()) }
+    fn on_let_binding(&mut self, _: &Term, _: &[VarBinding<Str, Term>], _: &Term, _: usize, r: usize) -> Result<usize, Bottom> { Ok(r) }
+    fn on_let(&mut self, _: &Term, _: &[VarBinding<Str, Term>], _: &Term, vs: Vec<usize>, body: usize) -> Result<usize, Bottom> {
+        Ok(1 + vs.into_iter().chain([body]).max().unwrap())
+    }
+    fn setup_quantifier_scope(&mut self, _: &Term, _: &[VarBinding<Str, Sort>], _: &Term, _: bool) -> Result<(), Bottom> { Ok(()) }
+    fn on_forall(&mut self, _: &Term, _: &[VarBinding<Str, Sort>], _: &Term, r: usize) -> Result<usize, Bottom> { Ok(1 + r) }
+    fn on_exists(&mut self, _: &Term, _: &[VarBinding<Str, Sort>], _: &Term, r: usize) -> Result<usize, Bottom> { Ok(1 + r) }
+    fn setup_match_case_scope(&mut self, _: &Term, _: &Term, _: &[PatternArm<Str, Term>], _: &usize, _: usize) -> Result<(), Bottom> { Ok(()) }
+    fn on_match_arm(&mut self, _: &Term, _: &Term, _: &[PatternArm<Str, Term>], _: usize, r: usize) -> Result<usize, Bottom> { Ok(r) }
+    fn on_match(&mut self, _: &Term, _: &Term, _: &[PatternArm<Str, Term>], s: usize, arms: Vec<usize>) -> Result<usize, Bottom> {
+        Ok(1 + arms.into_iter().chain([s]).max().unwrap())
+    }
+    fn on_annotated(&mut self, _: &Term, _: &Term, _: &[Attribute<Str, Term>], r: usize, _: Vec<()>) -> Result<usize, Bottom> { Ok(1 + r) }
+
+    // Attributes
+    fn on_attribute_keyword(&mut self, _: &Term, _: &yaspar::ast::Keyword) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_constant(&mut self, _: &Term, _: &yaspar::ast::Keyword, _: &Constant<Str>) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_symbol(&mut self, _: &Term, _: &yaspar::ast::Keyword, _: &Str) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_named(&mut self, _: &Term, _: &Str) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_pattern(&mut self, _: &Term, _: &[Term], r: Vec<usize>) -> Result<(), Bottom> {
+        Ok(())
+    }
+}
+
+impl TypedTermRecursor for TermDepth {}
+```
+
+To use it:
+
+```rust
+let depth = match TermDepth.recurse_on_term( & some_term) {
+Ok(d) => d,
+Err(b) => match b {},  // Bottom is uninhabited
+};
+```
+
+The convenience trait `TypedTermRecursor` is a marker for recursors specialized to the typed AST
+(`Str`, `Sort`, `Term`). An analogous `UntypedTermRecursor` exists for untyped ASTs.
 
 ### More examples
 
