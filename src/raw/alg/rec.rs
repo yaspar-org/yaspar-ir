@@ -32,12 +32,20 @@
 
 use crate::ast::Repr;
 use crate::raw::alg::*;
+use either::Either;
 
 /// A visitor trait for performing stack-safe, bottom-up recursion over [`Term`] trees.
 ///
 /// Implementors define one callback per `Term` variant. Leaf callbacks (`on_constant`,
 /// `on_global`, `on_local`) receive only the original node data. Compound callbacks
 /// additionally receive the already-computed recursive results for their children.
+///
+/// Every callback receives a `current: &T` parameter as its first argument (after `&mut self`).
+/// This is a reference to the original term node being recursed on — i.e. the `T` whose
+/// internal representation was destructured to produce the other arguments. For example,
+/// in `on_app(current, id, ts, s, recs)`, `current` is the `T` that wraps the
+/// `Term::App(id, ts, s)` variant. This allows callbacks to inspect the original node
+/// (e.g. for hash-consing identity, location information, or metadata).
 ///
 /// Three special `setup_*` hooks are called *before* descending into a scoped body, giving
 /// the implementor a chance to extend its environment with the new bindings:
@@ -48,6 +56,7 @@ use crate::raw::alg::*;
 ///   entering the body of a `Forall` or `Exists`.
 /// - [`setup_match_case_scope`](TermRecursor::setup_match_case_scope) – called before
 ///   entering each match arm body.
+#[allow(clippy::too_many_arguments)]
 pub trait TermRecursor<Str, So, T> {
     /// The type produced by each recursive step.
     type Out;
@@ -55,6 +64,8 @@ pub trait TermRecursor<Str, So, T> {
     type Attr;
     /// The type produced by a let binding.
     type Binding;
+    /// The type produced by a pattern in a match expression.
+    type Pattern;
     /// The type produced by an arm in a match expression.
     type Arm;
     /// The error type returned when a callback fails.
@@ -74,23 +85,26 @@ pub trait TermRecursor<Str, So, T> {
     /// Called for a constant literal.
     fn on_constant(
         &mut self,
+        current: &T,
         constant: &Constant<Str>,
         sort: &Option<So>,
     ) -> Result<Self::Out, Self::Err>;
     /// Called for a globally declared/defined identifier.
     fn on_global(
         &mut self,
+        current: &T,
         id: &QualifiedIdentifier<Str, So>,
         sort: &Option<So>,
     ) -> Result<Self::Out, Self::Err>;
     /// Called for a locally bound variable.
-    fn on_local(&mut self, id: &Local<Str, So>) -> Result<Self::Out, Self::Err>;
+    fn on_local(&mut self, current: &T, id: &Local<Str, So>) -> Result<Self::Out, Self::Err>;
 
     // --- Compound callbacks ---
 
     /// Called for a function application after all arguments have been recursed.
     fn on_app(
         &mut self,
+        current: &T,
         id: &QualifiedIdentifier<Str, So>,
         ts: &[T],
         s: &Option<So>,
@@ -102,6 +116,7 @@ pub trait TermRecursor<Str, So, T> {
     /// Called after a let binding term has been recursed.
     fn on_let_binding(
         &mut self,
+        current: &T,
         vs: &[VarBinding<Str, T>],
         body: &T,
         binding_idx: usize,
@@ -112,6 +127,7 @@ pub trait TermRecursor<Str, So, T> {
     /// Use this to extend the environment with the new bindings.
     fn setup_let_scope(
         &mut self,
+        current: &T,
         vs: &[VarBinding<Str, T>],
         body: &T,
         vs_rec: &[Self::Binding],
@@ -120,6 +136,7 @@ pub trait TermRecursor<Str, So, T> {
     /// Called after all let-binding RHS and the body have been recursed.
     fn on_let(
         &mut self,
+        current: &T,
         vs: &[VarBinding<Str, T>],
         body: &T,
         vs_rec: Vec<Self::Binding>,
@@ -129,6 +146,7 @@ pub trait TermRecursor<Str, So, T> {
     /// Called before descending into the body of a `Forall` or `Exists`.
     fn setup_quantifier_scope(
         &mut self,
+        current: &T,
         vs: &[VarBinding<Str, So>],
         t: &T,
         is_forall: bool,
@@ -136,6 +154,7 @@ pub trait TermRecursor<Str, So, T> {
     /// Called for `exists` after the body has been recursed.
     fn on_exists(
         &mut self,
+        current: &T,
         vs: &[VarBinding<Str, So>],
         t: &T,
         t_rec: Self::Out,
@@ -143,6 +162,7 @@ pub trait TermRecursor<Str, So, T> {
     /// Called for `forall` after the body has been recursed.
     fn on_forall(
         &mut self,
+        current: &T,
         vs: &[VarBinding<Str, So>],
         t: &T,
         t_rec: Self::Out,
@@ -151,22 +171,26 @@ pub trait TermRecursor<Str, So, T> {
     /// Called before descending into each match arm body.
     fn setup_match_case_scope(
         &mut self,
+        current: &T,
         scrutinee: &T,
         cases: &[PatternArm<Str, T>],
         scrutinee_rec: &Self::Out,
         case_idx: usize,
-    ) -> Result<(), Self::Err>;
+    ) -> Result<Self::Pattern, Self::Err>;
     /// Called after each match arm body has been recursed.
     fn on_match_arm(
         &mut self,
+        current: &T,
         scrutinee: &T,
         cases: &[PatternArm<Str, T>],
         case_idx: usize,
+        current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Result<Self::Arm, Self::Err>;
     /// Called after all match arms and the scrutinee have been recursed.
     fn on_match(
         &mut self,
+        current: &T,
         scrutinee: &T,
         cases: &[PatternArm<Str, T>],
         scrutinee_rec: Self::Out,
@@ -176,6 +200,7 @@ pub trait TermRecursor<Str, So, T> {
     /// have been processed via their respective `on_attribute_*` callbacks.
     fn on_annotated(
         &mut self,
+        current: &T,
         t: &T,
         anns: &[Attribute<Str, T>],
         t_rec: Self::Out,
@@ -185,24 +210,31 @@ pub trait TermRecursor<Str, So, T> {
     // --- Attribute callbacks ---
 
     /// Called for a keyword-only attribute (e.g. `:keyword`).
-    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err>;
+    fn on_attribute_keyword(
+        &mut self,
+        current: &T,
+        keyword: &Keyword,
+    ) -> Result<Self::Attr, Self::Err>;
     /// Called for a keyword attribute with a constant value (e.g. `:keyword 42`).
     fn on_attribute_constant(
         &mut self,
+        current: &T,
         keyword: &Keyword,
         constant: &Constant<Str>,
     ) -> Result<Self::Attr, Self::Err>;
     /// Called for a keyword attribute with a symbol value (e.g. `:keyword sym`).
     fn on_attribute_symbol(
         &mut self,
+        current: &T,
         keyword: &Keyword,
         symbol: &Str,
     ) -> Result<Self::Attr, Self::Err>;
     /// Called for a `:named` attribute.
-    fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err>;
+    fn on_attribute_named(&mut self, current: &T, name: &Str) -> Result<Self::Attr, Self::Err>;
     /// Called for a `:pattern` attribute after all pattern sub-terms have been recursed.
     fn on_attribute_pattern(
         &mut self,
+        current: &T,
         patterns: &[T],
         patterns_rec: Vec<Self::Out>,
     ) -> Result<Self::Attr, Self::Err>;
@@ -212,24 +244,46 @@ pub trait TermRecursor<Str, So, T> {
     /// Called for `(= a b)` after both sides have been recursed.
     fn on_eq(
         &mut self,
+        current: &T,
         a: &T,
         b: &T,
         a_rec: Self::Out,
         b_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err>;
     /// Called for `(distinct ...)` after all children have been recursed.
-    fn on_distinct(&mut self, ts: &[T], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err>;
+    fn on_distinct(
+        &mut self,
+        current: &T,
+        ts: &[T],
+        ts_rec: Vec<Self::Out>,
+    ) -> Result<Self::Out, Self::Err>;
     /// Called for `(and ...)`.
-    fn on_and(&mut self, ts: &[T], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err>;
+    fn on_and(
+        &mut self,
+        current: &T,
+        ts: &[T],
+        ts_rec: Vec<Self::Out>,
+    ) -> Result<Self::Out, Self::Err>;
     /// Called for `(or ...)`.
-    fn on_or(&mut self, ts: &[T], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err>;
+    fn on_or(
+        &mut self,
+        current: &T,
+        ts: &[T],
+        ts_rec: Vec<Self::Out>,
+    ) -> Result<Self::Out, Self::Err>;
     /// Called for `(xor ...)`.
-    fn on_xor(&mut self, ts: &[T], ts_rec: Vec<Self::Out>) -> Result<Self::Out, Self::Err>;
+    fn on_xor(
+        &mut self,
+        current: &T,
+        ts: &[T],
+        ts_rec: Vec<Self::Out>,
+    ) -> Result<Self::Out, Self::Err>;
     /// Called for `(not t)`.
-    fn on_not(&mut self, t: &T, t_rec: Self::Out) -> Result<Self::Out, Self::Err>;
+    fn on_not(&mut self, current: &T, t: &T, t_rec: Self::Out) -> Result<Self::Out, Self::Err>;
     /// Called for `(=> p1 ... pn concl)`.
     fn on_implies(
         &mut self,
+        current: &T,
         ts: &[T],
         t: &T,
         ts_rec: Vec<Self::Out>,
@@ -238,12 +292,13 @@ pub trait TermRecursor<Str, So, T> {
     /// Called for `(ite cond then else)`.
     fn on_ite(
         &mut self,
+        current: &T,
         b: &T,
         t: &T,
         e: &T,
         b_rec: Self::Out,
         t_rec: Self::Out,
-        e_rec: &Self::Out,
+        e_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err>;
 }
 
@@ -259,6 +314,7 @@ pub trait TermRecursor<Str, So, T> {
 enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
     /// Function application: collecting argument results left-to-right.
     App {
+        current: &'a T,
         id: &'a QualifiedIdentifier<Str, So>,
         args: &'a [T],
         sort: &'a Option<So>,
@@ -266,45 +322,58 @@ enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
     },
     /// Let-binding phase 1: recursing on binding RHS values left-to-right.
     LetBindings {
+        current: &'a T,
         vs: &'a [VarBinding<Str, T>],
         body: &'a T,
         vs_rec: Vec<R::Binding>,
     },
     /// Let-binding phase 2: recursing on the body (after `setup_let_scope`).
     LetBody {
+        current: &'a T,
         vs: &'a [VarBinding<Str, T>],
         body: &'a T,
         vs_rec: Vec<R::Binding>,
     },
     /// `Forall` / `Exists`: recursing on the body (after `setup_quantifier_scope`).
     Quantifier {
+        current: &'a T,
         vs: &'a [VarBinding<Str, So>],
         body: &'a T,
         is_forall: bool,
     },
     /// Match phase 1: recursing on the scrutinee.
     MatchScrutinee {
+        current: &'a T,
         scrutinee: &'a T,
         cases: &'a [PatternArm<Str, T>],
     },
     /// Match phase 2: recursing on arm bodies left-to-right (after `setup_match_case_scope`).
     MatchCases {
+        current: &'a T,
         scrutinee: &'a T,
         cases: &'a [PatternArm<Str, T>],
         scrutinee_rec: R::Out,
         case_rec: Vec<R::Arm>,
+        current_pattern: Option<R::Pattern>,
     },
     /// Equality phase 1: recursing on the left operand.
-    EqL { l: &'a T, r: &'a T },
+    EqL { current: &'a T, l: &'a T, r: &'a T },
     /// Equality phase 2: recursing on the right operand.
-    EqR { l: &'a T, r: &'a T, l_rec: R::Out },
+    EqR {
+        current: &'a T,
+        l: &'a T,
+        r: &'a T,
+        l_rec: R::Out,
+    },
     /// Annotated phase 1: recursing on the inner term.
     AnnotatedBody {
+        current: &'a T,
         body: &'a T,
         anns: &'a [Attribute<Str, T>],
     },
     /// Annotated phase 2: recursing on `Attribute::Pattern` sub-terms.
     AnnotatedAttrs {
+        current: &'a T,
         body: &'a T,
         anns: &'a [Attribute<Str, T>],
         t_rec: R::Out,
@@ -313,28 +382,37 @@ enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
     },
     /// `Distinct`, `And`, `Or`, or `Xor`: collecting child results left-to-right.
     Nary {
+        current: &'a T,
         kind: NaryKind,
         ts: &'a [T],
         rec: Vec<R::Out>,
     },
     /// `Not`: single child.
-    Not { t: &'a T },
+    Not { current: &'a T, t: &'a T },
     /// `Implies` phase 1: collecting premise results left-to-right.
     ImpliesPremises {
+        current: &'a T,
         ts: &'a [T],
         t: &'a T,
         rec: Vec<R::Out>,
     },
     /// `Implies` phase 2: recursing on the conclusion.
     ImpliesConclusion {
+        current: &'a T,
         ts: &'a [T],
         t: &'a T,
         ts_rec: Vec<R::Out>,
     },
     /// `Ite` phase 1: recursing on the condition.
-    IteB { b: &'a T, t: &'a T, e: &'a T },
+    IteB {
+        current: &'a T,
+        b: &'a T,
+        t: &'a T,
+        e: &'a T,
+    },
     /// `Ite` phase 2: recursing on the then-branch.
     IteT {
+        current: &'a T,
         b: &'a T,
         t: &'a T,
         e: &'a T,
@@ -342,6 +420,7 @@ enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
     },
     /// `Ite` phase 3: recursing on the else-branch.
     IteE {
+        current: &'a T,
         b: &'a T,
         t: &'a T,
         e: &'a T,
@@ -360,16 +439,19 @@ enum NaryKind {
 }
 
 /// The leaf information returned by [`expand`] when a leaf node is reached.
-enum Leaf<'a, Str, So> {
+enum Leaf<'a, Str, So, T> {
     Constant {
+        current: &'a T,
         constant: &'a Constant<Str>,
         sort: &'a Option<So>,
     },
     Global {
+        current: &'a T,
         id: &'a QualifiedIdentifier<Str, So>,
         sort: &'a Option<So>,
     },
     Local {
+        current: &'a T,
         id: &'a Local<Str, So>,
     },
 }
@@ -383,6 +465,7 @@ type RStack<'a, R, Str, So, T> = Vec<Frame<'a, Str, So, T, R>>;
 /// `on_attribute_*` callbacks.
 fn advance_attributes_until_pattern<R, Str, So, T>(
     recursor: &mut R,
+    current: &T,
     anns: &[Attribute<Str, T>],
     anns_rec: &mut Vec<R::Attr>,
 ) -> Result<(), R::Err>
@@ -392,18 +475,15 @@ where
     while anns_rec.len() < anns.len() {
         match &anns[anns_rec.len()] {
             Attribute::Pattern(_) => break,
-            Attribute::Keyword(k) => anns_rec.push(recursor.on_attribute_keyword(k)?),
-            Attribute::Constant(k, c) => anns_rec.push(recursor.on_attribute_constant(k, c)?),
-            Attribute::Symbol(k, s) => anns_rec.push(recursor.on_attribute_symbol(k, s)?),
-            Attribute::Named(s) => anns_rec.push(recursor.on_attribute_named(s)?),
+            Attribute::Keyword(k) => anns_rec.push(recursor.on_attribute_keyword(current, k)?),
+            Attribute::Constant(k, c) => {
+                anns_rec.push(recursor.on_attribute_constant(current, k, c)?)
+            }
+            Attribute::Symbol(k, s) => anns_rec.push(recursor.on_attribute_symbol(current, k, s)?),
+            Attribute::Named(s) => anns_rec.push(recursor.on_attribute_named(current, s)?),
         }
     }
     Ok(())
-}
-
-enum Either<A, B> {
-    Left(A),
-    Right(B),
 }
 
 /// Result of [`push_result`]: either the final value or a frame needing more children.
@@ -433,6 +513,7 @@ where
         };
         match frame {
             Frame::App {
+                current,
                 id,
                 args,
                 sort,
@@ -440,9 +521,10 @@ where
             } => {
                 rec.push(result);
                 if rec.len() >= args.len() {
-                    result = recursor.on_app(id, args, sort, rec)?;
+                    result = recursor.on_app(current, id, args, sort, rec)?;
                 } else {
                     return Ok(Either::Right(Frame::App {
+                        current,
                         id,
                         args,
                         sort,
@@ -451,76 +533,122 @@ where
                 }
             }
             Frame::LetBindings {
+                current,
                 vs,
                 body,
                 mut vs_rec,
             } => {
-                vs_rec.push(recursor.on_let_binding(vs, body, vs_rec.len(), result)?);
+                vs_rec.push(recursor.on_let_binding(current, vs, body, vs_rec.len(), result)?);
                 let frame = if vs_rec.len() >= vs.len() {
-                    Frame::LetBody { vs, vs_rec, body }
+                    Frame::LetBody {
+                        current,
+                        vs,
+                        vs_rec,
+                        body,
+                    }
                 } else {
-                    Frame::LetBindings { vs, body, vs_rec }
+                    Frame::LetBindings {
+                        current,
+                        vs,
+                        body,
+                        vs_rec,
+                    }
                 };
                 return Ok(Either::Right(frame));
             }
-            Frame::LetBody { vs, vs_rec, body } => {
-                result = recursor.on_let(vs, body, vs_rec, result)?;
+            Frame::LetBody {
+                current,
+                vs,
+                vs_rec,
+                body,
+            } => {
+                result = recursor.on_let(current, vs, body, vs_rec, result)?;
             }
             Frame::Quantifier {
+                current,
                 vs,
                 body,
                 is_forall,
             } => {
                 result = if is_forall {
-                    recursor.on_forall(vs, body, result)
+                    recursor.on_forall(current, vs, body, result)
                 } else {
-                    recursor.on_exists(vs, body, result)
+                    recursor.on_exists(current, vs, body, result)
                 }?;
             }
-            Frame::MatchScrutinee { scrutinee, cases } => {
+            Frame::MatchScrutinee {
+                current,
+                scrutinee,
+                cases,
+            } => {
                 return Ok(Either::Right(Frame::MatchCases {
+                    current,
                     scrutinee,
                     cases,
                     scrutinee_rec: result,
                     case_rec: vec![],
+                    current_pattern: None,
                 }));
             }
             Frame::MatchCases {
+                current,
                 scrutinee,
                 cases,
                 scrutinee_rec,
                 mut case_rec,
+                current_pattern,
             } => {
-                let arm = recursor.on_match_arm(scrutinee, cases, case_rec.len(), result)?;
+                let arm = recursor.on_match_arm(
+                    current,
+                    scrutinee,
+                    cases,
+                    case_rec.len(),
+                    current_pattern.unwrap(),
+                    result,
+                )?;
                 case_rec.push(arm);
                 if case_rec.len() >= cases.len() {
-                    result = recursor.on_match(scrutinee, cases, scrutinee_rec, case_rec)?;
+                    result =
+                        recursor.on_match(current, scrutinee, cases, scrutinee_rec, case_rec)?;
                 } else {
                     return Ok(Either::Right(Frame::MatchCases {
+                        current,
                         scrutinee,
                         cases,
                         scrutinee_rec,
                         case_rec,
+                        current_pattern: None,
                     }));
                 }
             }
-            Frame::EqL { l, r } => {
+            Frame::EqL { current, l, r } => {
                 return Ok(Either::Right(Frame::EqR {
+                    current,
                     l,
                     r,
                     l_rec: result,
                 }));
             }
-            Frame::EqR { l, r, l_rec } => {
-                result = recursor.on_eq(l, r, l_rec, result)?;
+            Frame::EqR {
+                current,
+                l,
+                r,
+                l_rec,
+            } => {
+                result = recursor.on_eq(current, l, r, l_rec, result)?;
             }
-            Frame::AnnotatedBody { body, anns } => {
+            Frame::AnnotatedBody {
+                current,
+                body,
+                anns,
+            } => {
                 let mut anns_rec: Vec<R::Attr> = vec![];
-                advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
+                advance_attributes_until_pattern(recursor, current, anns, &mut anns_rec)?;
                 if anns_rec.len() >= anns.len() {
-                    result = recursor.on_annotated(body, anns, result, anns_rec)?;
+                    result = recursor.on_annotated(current, body, anns, result, anns_rec)?;
                 } else {
                     return Ok(Either::Right(Frame::AnnotatedAttrs {
+                        current,
                         body,
                         anns,
                         t_rec: result,
@@ -530,6 +658,7 @@ where
                 }
             }
             Frame::AnnotatedAttrs {
+                current,
                 body,
                 anns,
                 t_rec,
@@ -542,13 +671,18 @@ where
                     _ => unreachable!(),
                 };
                 if cur_pattern_rec.len() >= pat_ts.len() {
-                    anns_rec.push(recursor.on_attribute_pattern(pat_ts, cur_pattern_rec)?);
+                    anns_rec.push(recursor.on_attribute_pattern(
+                        current,
+                        pat_ts,
+                        cur_pattern_rec,
+                    )?);
                     cur_pattern_rec = vec![];
-                    advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
+                    advance_attributes_until_pattern(recursor, current, anns, &mut anns_rec)?;
                     if anns_rec.len() >= anns.len() {
-                        result = recursor.on_annotated(body, anns, t_rec, anns_rec)?;
+                        result = recursor.on_annotated(current, body, anns, t_rec, anns_rec)?;
                     } else {
                         return Ok(Either::Right(Frame::AnnotatedAttrs {
+                            current,
                             body,
                             anns,
                             t_rec,
@@ -558,6 +692,7 @@ where
                     }
                 } else {
                     return Ok(Either::Right(Frame::AnnotatedAttrs {
+                        current,
                         body,
                         anns,
                         t_rec,
@@ -566,44 +701,82 @@ where
                     }));
                 }
             }
-            Frame::Nary { kind, ts, mut rec } => {
+            Frame::Nary {
+                current,
+                kind,
+                ts,
+                mut rec,
+            } => {
                 rec.push(result);
                 if rec.len() >= ts.len() {
                     result = match kind {
-                        NaryKind::Distinct => recursor.on_distinct(ts, rec)?,
-                        NaryKind::And => recursor.on_and(ts, rec)?,
-                        NaryKind::Or => recursor.on_or(ts, rec)?,
-                        NaryKind::Xor => recursor.on_xor(ts, rec)?,
+                        NaryKind::Distinct => recursor.on_distinct(current, ts, rec)?,
+                        NaryKind::And => recursor.on_and(current, ts, rec)?,
+                        NaryKind::Or => recursor.on_or(current, ts, rec)?,
+                        NaryKind::Xor => recursor.on_xor(current, ts, rec)?,
                     };
                 } else {
-                    return Ok(Either::Right(Frame::Nary { kind, ts, rec }));
+                    return Ok(Either::Right(Frame::Nary {
+                        current,
+                        kind,
+                        ts,
+                        rec,
+                    }));
                 }
             }
-            Frame::Not { t } => {
-                result = recursor.on_not(t, result)?;
+            Frame::Not { current, t } => {
+                result = recursor.on_not(current, t, result)?;
             }
-            Frame::ImpliesPremises { ts, t, mut rec } => {
+            Frame::ImpliesPremises {
+                current,
+                ts,
+                t,
+                mut rec,
+            } => {
                 rec.push(result);
                 let frame = if rec.len() >= ts.len() {
-                    Frame::ImpliesConclusion { ts, t, ts_rec: rec }
+                    Frame::ImpliesConclusion {
+                        current,
+                        ts,
+                        t,
+                        ts_rec: rec,
+                    }
                 } else {
-                    Frame::ImpliesPremises { ts, t, rec }
+                    Frame::ImpliesPremises {
+                        current,
+                        ts,
+                        t,
+                        rec,
+                    }
                 };
                 return Ok(Either::Right(frame));
             }
-            Frame::ImpliesConclusion { ts, t, ts_rec } => {
-                result = recursor.on_implies(ts, t, ts_rec, result)?;
+            Frame::ImpliesConclusion {
+                current,
+                ts,
+                t,
+                ts_rec,
+            } => {
+                result = recursor.on_implies(current, ts, t, ts_rec, result)?;
             }
-            Frame::IteB { b, t, e } => {
+            Frame::IteB { current, b, t, e } => {
                 return Ok(Either::Right(Frame::IteT {
+                    current,
                     b,
                     t,
                     e,
                     b_rec: result,
                 }));
             }
-            Frame::IteT { b, t, e, b_rec } => {
+            Frame::IteT {
+                current,
+                b,
+                t,
+                e,
+                b_rec,
+            } => {
                 return Ok(Either::Right(Frame::IteE {
+                    current,
                     b,
                     t,
                     e,
@@ -612,25 +785,22 @@ where
                 }));
             }
             Frame::IteE {
+                current,
                 b,
                 t,
                 e,
                 b_rec,
                 t_rec,
             } => {
-                result = recursor.on_ite(b, t, e, b_rec, t_rec, &result)?;
+                result = recursor.on_ite(current, b, t, e, b_rec, t_rec, result)?;
             }
         }
     }
 }
 
-/// Determine the next child term to descend into.
-///
-/// Peeks at the top frame to find the next unprocessed child, invoking `setup_*`
-/// callbacks for scoped constructs before returning the child reference.
 fn next_child<'a, R, Str, So, T>(
     recursor: &mut R,
-    frame: &Frame<'a, Str, So, T, R>,
+    frame: &mut Frame<'a, Str, So, T, R>,
 ) -> Result<&'a T, R::Err>
 where
     R: TermRecursor<Str, So, T>,
@@ -639,29 +809,42 @@ where
         Frame::App { args, rec, .. } => Ok(&args[rec.len()]),
         Frame::LetBindings { vs, vs_rec, .. } => Ok(&vs[vs_rec.len()].2),
         Frame::LetBody {
-            vs, vs_rec, body, ..
+            current,
+            vs,
+            vs_rec,
+            body,
+            ..
         } => {
-            recursor.setup_let_scope(vs, body, vs_rec)?;
+            recursor.setup_let_scope(current, vs, body, vs_rec)?;
             Ok(body)
         }
         Frame::Quantifier {
+            current,
             vs,
             body,
             is_forall,
             ..
         } => {
-            recursor.setup_quantifier_scope(vs, body, *is_forall)?;
+            recursor.setup_quantifier_scope(current, vs, body, *is_forall)?;
             Ok(body)
         }
         Frame::MatchScrutinee { scrutinee, .. } => Ok(scrutinee),
         Frame::MatchCases {
+            current,
             scrutinee,
             cases,
             scrutinee_rec,
             case_rec,
-            ..
+            current_pattern,
         } => {
-            recursor.setup_match_case_scope(scrutinee, cases, scrutinee_rec, case_rec.len())?;
+            let pat = recursor.setup_match_case_scope(
+                current,
+                scrutinee,
+                cases,
+                scrutinee_rec,
+                case_rec.len(),
+            )?;
+            *current_pattern = Some(pat);
             Ok(&cases[case_rec.len()].body)
         }
         Frame::EqL { l, .. } => Ok(l),
@@ -686,134 +869,167 @@ where
     }
 }
 
-/// Descend from `t` to its leftmost leaf, pushing a frame for each intermediate node.
 fn expand<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
     stack: &mut RStack<'a, R, Str, So, T>,
-    mut t: &'a T,
-) -> Result<Leaf<'a, Str, So>, R::Err>
+    mut current: &'a T,
+) -> Result<Leaf<'a, Str, So, T>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     loop {
-        match t.inner().repr() {
-            Term::Constant(constant, sort) => return Ok(Leaf::Constant { constant, sort }),
-            Term::Global(id, sort) => return Ok(Leaf::Global { id, sort }),
-            Term::Local(id) => return Ok(Leaf::Local { id }),
+        match current.inner().repr() {
+            Term::Constant(constant, sort) => {
+                return Ok(Leaf::Constant {
+                    current,
+                    constant,
+                    sort,
+                });
+            }
+            Term::Global(id, sort) => {
+                return Ok(Leaf::Global { current, id, sort });
+            }
+            Term::Local(id) => return Ok(Leaf::Local { current, id }),
             Term::App(id, args, sort) => {
                 stack.push(Frame::App {
+                    current,
                     id,
                     args,
                     sort,
                     rec: vec![],
                 });
-                t = &args[0];
+                current = &args[0];
             }
             Term::Let(vs, body) => {
                 stack.push(Frame::LetBindings {
+                    current,
                     vs,
                     body,
                     vs_rec: vec![],
                 });
-                t = &vs[0].2;
+                current = &vs[0].2;
             }
             Term::Exists(vs, body) => {
-                recursor.setup_quantifier_scope(vs, body, false)?;
+                recursor.setup_quantifier_scope(current, vs, body, false)?;
                 stack.push(Frame::Quantifier {
+                    current,
                     vs,
                     body,
                     is_forall: false,
                 });
-                t = body;
+                current = body;
             }
             Term::Forall(vs, body) => {
-                recursor.setup_quantifier_scope(vs, body, true)?;
+                recursor.setup_quantifier_scope(current, vs, body, true)?;
                 stack.push(Frame::Quantifier {
+                    current,
                     vs,
                     body,
                     is_forall: true,
                 });
-                t = body;
+                current = body;
             }
             Term::Matching(scrutinee, cases) => {
-                stack.push(Frame::MatchScrutinee { scrutinee, cases });
-                t = scrutinee;
+                stack.push(Frame::MatchScrutinee {
+                    current,
+                    scrutinee,
+                    cases,
+                });
+                current = scrutinee;
             }
             Term::Annotated(body, anns) => {
-                stack.push(Frame::AnnotatedBody { body, anns });
-                t = body;
+                stack.push(Frame::AnnotatedBody {
+                    current,
+                    body,
+                    anns,
+                });
+                current = body;
             }
             Term::Eq(l, r) => {
-                stack.push(Frame::EqL { l, r });
-                t = l;
+                stack.push(Frame::EqL { current, l, r });
+                current = l;
             }
             Term::Distinct(ts) => {
                 stack.push(Frame::Nary {
+                    current,
                     kind: NaryKind::Distinct,
                     ts,
                     rec: vec![],
                 });
-                t = &ts[0];
+                current = &ts[0];
             }
             Term::And(ts) => {
                 stack.push(Frame::Nary {
+                    current,
                     kind: NaryKind::And,
                     ts,
                     rec: vec![],
                 });
-                t = &ts[0];
+                current = &ts[0];
             }
             Term::Or(ts) => {
                 stack.push(Frame::Nary {
+                    current,
                     kind: NaryKind::Or,
                     ts,
                     rec: vec![],
                 });
-                t = &ts[0];
+                current = &ts[0];
             }
             Term::Xor(ts) => {
                 stack.push(Frame::Nary {
+                    current,
                     kind: NaryKind::Xor,
                     ts,
                     rec: vec![],
                 });
-                t = &ts[0];
+                current = &ts[0];
             }
             Term::Implies(ts, concl) => {
                 stack.push(Frame::ImpliesPremises {
+                    current,
                     ts,
                     t: concl,
                     rec: vec![],
                 });
-                t = &ts[0];
+                current = &ts[0];
             }
             Term::Not(inner) => {
-                stack.push(Frame::Not { t: inner });
-                t = inner;
+                stack.push(Frame::Not { current, t: inner });
+                current = inner;
             }
             Term::Ite(b, th, e) => {
-                stack.push(Frame::IteB { b, t: th, e });
-                t = b;
+                stack.push(Frame::IteB {
+                    current,
+                    b,
+                    t: th,
+                    e,
+                });
+                current = b;
             }
         }
     }
 }
 
-/// Resolve a leaf node into a result by calling the appropriate callback.
-fn resolve_leaf<R, Str, So, T>(recursor: &mut R, leaf: Leaf<'_, Str, So>) -> Result<R::Out, R::Err>
+fn resolve_leaf<R, Str, So, T>(
+    recursor: &mut R,
+    leaf: Leaf<'_, Str, So, T>,
+) -> Result<R::Out, R::Err>
 where
     R: TermRecursor<Str, So, T>,
 {
     match leaf {
-        Leaf::Constant { constant, sort } => recursor.on_constant(constant, sort),
-        Leaf::Global { id, sort } => recursor.on_global(id, sort),
-        Leaf::Local { id } => recursor.on_local(id),
+        Leaf::Constant {
+            current,
+            constant,
+            sort,
+        } => recursor.on_constant(current, constant, sort),
+        Leaf::Global { current, id, sort } => recursor.on_global(current, id, sort),
+        Leaf::Local { current, id } => recursor.on_local(current, id),
     }
 }
 
-/// Main entry point: iteratively traverse `term` using a Vec-based stack and return the
-/// final result.
 fn term_recursion<R, Str, So, T>(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
 where
     R: TermRecursor<Str, So, T>,
@@ -825,10 +1041,8 @@ where
     loop {
         match push_result(recursor, &mut stack, result)? {
             Either::Left(final_result) => return Ok(final_result),
-            Either::Right(frame) => {
-                // unwrap is safe below, as an empty stack should return Left in push_result and
-                // hit the previous case.
-                let child = next_child(recursor, &frame)?;
+            Either::Right(mut frame) => {
+                let child = next_child(recursor, &mut frame)?;
                 stack.push(frame);
                 let leaf = expand(recursor, &mut stack, child)?;
                 result = resolve_leaf(recursor, leaf)?;
