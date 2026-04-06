@@ -34,13 +34,13 @@ pub mod utils;
 
 #[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::{ImplicantEnumerator, ImplicantIterator};
-use crate::locenv::{LocEnv, valid_char};
+use crate::containers::{LocEnv, valid_symbol_char};
 pub use crate::raw::alg::{
     Command as ACommand, Constant as AConstant, Index as AIndex, SortDef as ASortDef, StrQuote,
     SymbolQuote, Term as ATerm,
 };
 pub use crate::raw::instance::*;
-use crate::raw::tc::{TC, TCEnv};
+use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};
 pub use checked::{CheckedApi, ScopedSortApi};
 use lazy_static::lazy_static;
 use std::collections::hash_map::Keys;
@@ -195,16 +195,36 @@ impl FunctionMeta {
     }
 }
 
+/// Read-only metadata about the current logic and its associated theories.
+///
+/// This is separated from [`ContextFrame`] so that it can be borrowed independently
+/// of the mutable declaration state.
+pub(crate) struct ContextMeta {
+    /// The name of the active logic (e.g. `"QF_LIA"`, `"ALL"`), or `None` if unset.
+    pub(crate) logic: Option<String>,
+    /// The set of theories enabled by the current logic (e.g. `Ints`, `Reals`, `Datatypes`).
+    pub(crate) theories: &'static HashSet<Theory>,
+}
+
+/// The mutable declaration state: sorts and symbols.
+///
+/// This is separated from [`ContextMeta`] so that the arena can be mutably borrowed
+/// while the frame is shared-borrowed (e.g. during type-checking).
+pub(crate) struct ContextFrame {
+    /// Custom sorts; mapping sort names to arities or definitions.
+    pub(crate) sorts: HashMap<Str, SortDef>,
+    /// Mapping custom functions to their signatures and potentially their definitions.
+    pub(crate) symbol_table: HashMap<Str, Vec<(Sig, FunctionMeta)>>,
+}
+
 /// Global context for the current session
 pub struct Context {
-    /// The memory arena
+    /// The memory arena for hash-consed allocation.
     pub(crate) arena: Arena,
-    /// Logic
-    pub(crate) logic: Option<String>,
-    /// Custom sorts; mapping sort names to arities
-    pub(crate) sorts: HashMap<Str, SortDef>,
-    /// Mapping custom functions to their signatures and potentially their definitions
-    pub(crate) symbol_table: HashMap<Str, Vec<(Sig, FunctionMeta)>>,
+    /// Logic metadata (logic name and enabled theories).
+    pub(crate) meta: ContextMeta,
+    /// Declaration frame (sorts and symbol table).
+    pub(crate) frame: ContextFrame,
     /// Caches for various algorithms
     #[cfg(feature = "cache")]
     pub caches: Caches,
@@ -215,12 +235,12 @@ pub(crate) type Result<T> = std::result::Result<T, String>;
 impl Context {
     /// Return the name of the logic; need to make sure the logic is set
     pub fn get_logic(&self) -> &str {
-        self.logic.as_ref().unwrap()
+        self.meta.logic.as_ref().unwrap()
     }
 
     /// Return the theories
     pub fn get_theories(&self) -> &'static HashSet<Theory> {
-        match &self.logic {
+        match &self.meta.logic {
             None => &EMP_SET,
             Some(l) => LOGICS.get(l.as_str()).unwrap(),
         }
@@ -239,7 +259,7 @@ impl Context {
         self.check_sym_chars(symbol)?;
         self.check_special_symbols(symbol)?;
         self.check_bv(symbol)?;
-        if self.sorts.contains_key(symbol) {
+        if self.frame.sorts.contains_key(symbol) {
             Err(format!("sort {} is already defined!", symbol.sym_quote()))
         } else {
             Ok(())
@@ -253,7 +273,9 @@ impl Context {
     {
         let sort = sort.allocate(self.arena());
         self.can_add_sort(&sort)?;
-        self.sorts.insert(sort, SortDef::OpaqueDeclared(arity));
+        self.frame
+            .sorts
+            .insert(sort, SortDef::OpaqueDeclared(arity));
         Ok(())
     }
 
@@ -263,7 +285,7 @@ impl Context {
         S: AllocatableString<Arena>,
     {
         let sort = sort.allocate(self.arena());
-        self.sorts.remove(&sort);
+        self.frame.sorts.remove(&sort);
     }
 
     /// Extend the given context with a custom sort with its definition
@@ -282,7 +304,8 @@ impl Context {
             .into_iter()
             .map(|p| p.allocate(self.arena()))
             .collect();
-        self.sorts
+        self.frame
+            .sorts
             .insert(sort, SortDef::Transparent { params, sort: s });
         Ok(())
     }
@@ -293,12 +316,12 @@ impl Context {
     {
         let sort = sort.allocate(self.arena());
         self.can_add_sort(&sort)?;
-        self.sorts.insert(sort, SortDef::Datatype(dt));
+        self.frame.sorts.insert(sort, SortDef::Datatype(dt));
         Ok(())
     }
 
     fn check_sym_chars(&self, sym: &Str) -> Result<()> {
-        if sym.inner().contains(|c| !valid_char(c)) {
+        if sym.inner().contains(|c| !valid_symbol_char(c)) {
             Err(format!(
                 "Symbols can only contain printable chars and white spaces, but not `\\` or `|`: {sym}!"
             ))
@@ -341,13 +364,13 @@ impl Context {
 
     /// Check whether a symbol is contained in the symbol table
     pub fn contain_symbol(&self, sym: &Str) -> bool {
-        self.symbol_table.contains_key(sym)
+        self.frame.symbol_table.contains_key(sym)
     }
 
     /// Check whether a given symbol can be added to the symbol table
     pub fn can_add_symbol(&self, symbol: &Str) -> Result<()> {
         self.check_sym_validity(symbol)?;
-        if self.symbol_table.contains_key(symbol) {
+        if self.frame.symbol_table.contains_key(symbol) {
             Err(format!("symbol {} is already defined!", symbol.sym_quote()))
         } else {
             Ok(())
@@ -357,13 +380,13 @@ impl Context {
     /// Insert the symbol to the table without any checks. Use it only when invariance is known
     /// to have been maintained.
     pub(crate) fn insert_symbol(&mut self, symbol: Str, sig: Sig, meta: FunctionMeta) {
-        self.symbol_table.insert(symbol, vec![(sig, meta)]);
+        self.frame.symbol_table.insert(symbol, vec![(sig, meta)]);
     }
 
     /// Insert the symbol to the table with its definition without any checks. Use it only when
     /// invariance is known to have been maintained.
     pub(crate) fn insert_symbol_with_def(&mut self, rec_deps: HashSet<Str>, def: FunctionDef) {
-        self.symbol_table.insert(
+        self.frame.symbol_table.insert(
             def.name.clone(),
             vec![(
                 Sig::func(
@@ -396,7 +419,8 @@ impl Context {
     /// Push the symbol to the table without any checks. Use it only when invariance is known
     /// to have been maintained.
     pub(crate) fn push_symbol(&mut self, symbol: Str, sig: Sig, meta: FunctionMeta) {
-        self.symbol_table
+        self.frame
+            .symbol_table
             .entry(symbol)
             .or_default()
             .push((sig, meta));
@@ -422,24 +446,25 @@ impl Context {
         S: AllocatableString<Arena>,
     {
         let symbol = symbol.allocate(self.arena());
-        self.symbol_table.remove(&symbol);
+        self.frame.symbol_table.remove(&symbol);
     }
 
     /// Return the number of symbols; overloaded symbols are considered multiple times
     pub fn symbol_count(&self) -> usize {
-        self.symbol_table
+        self.frame
+            .symbol_table
             .values()
             .fold(0, |acc, sigs| acc + sigs.len())
     }
 
     /// Return the number of symbols in the symbol table without considering overloading
     pub fn symbol_count_no_dup(&self) -> usize {
-        self.symbol_table.len()
+        self.frame.symbol_table.len()
     }
 
     /// Return the number of defined sorts
     pub fn sort_count(&self) -> usize {
-        self.sorts.len()
+        self.frame.sorts.len()
     }
 
     /// Given a SAT solver, produce an iterator that iterates through the implicants of given assertions.
@@ -485,26 +510,29 @@ impl Context {
     }
 
     pub fn expose_symbol_table(&self) -> &HashMap<Str, Vec<(Sig, FunctionMeta)>> {
-        &self.symbol_table
+        &self.frame.symbol_table
     }
 
     pub fn expose_sorts(&self) -> &HashMap<Str, SortDef> {
-        &self.sorts
+        &self.frame.sorts
     }
 
     /// Return an iterable for all symbols
     pub fn all_symbols(&self) -> Keys<'_, Str, Vec<(Sig, FunctionMeta)>> {
-        self.symbol_table.keys()
+        self.frame.symbol_table.keys()
     }
 
     /// Return an iterable for all sorts
     pub fn all_sorts(&self) -> Keys<'_, Str, SortDef> {
-        self.sorts.keys()
+        self.frame.sorts.keys()
     }
 
     /// Get the binding associated with the given symbol in the symbol table
     pub fn get_symbol_binding(&self, symbol: &Str) -> Option<&[(Sig, FunctionMeta)]> {
-        self.symbol_table.get(symbol).map(|sigs| sigs.as_slice())
+        self.frame
+            .symbol_table
+            .get(symbol)
+            .map(|sigs| sigs.as_slice())
     }
 
     /// Get the signature and definition associated with the given name
@@ -528,12 +556,13 @@ impl Context {
 
     /// Return the definition of the sort bound to a given name
     pub fn get_sort_def(&self, name: &Str) -> Option<&SortDef> {
-        self.sorts.get(name)
+        self.frame.sorts.get(name)
     }
 
     /// Get all the symbols with a definition body
     pub fn all_defined_symbols(&self) -> HashSet<Str> {
-        self.symbol_table
+        self.frame
+            .symbol_table
             .iter()
             .filter_map(|(name, sigs)| {
                 // scan all signatures for one that has a defined body
@@ -552,7 +581,8 @@ impl Context {
 
     /// Returns the set of all builtin symbols in the current context
     pub fn builtin_symbols(&self) -> HashSet<Str> {
-        self.symbol_table
+        self.frame
+            .symbol_table
             .iter()
             .filter_map(|(name, sigs)| {
                 if sigs.iter().any(|(_, meta)| meta.is_builtin()) {
@@ -566,7 +596,8 @@ impl Context {
 
     /// Returns the set of all user defined symbols in the current context
     pub fn user_defined_symbols(&self) -> HashSet<Str> {
-        self.symbol_table
+        self.frame
+            .symbol_table
             .iter()
             .filter_map(|(name, sigs)| {
                 if sigs.iter().any(|(_, meta)| meta.is_from_user()) {
@@ -580,7 +611,8 @@ impl Context {
 
     /// Returns the set of all builtin sorts
     pub fn builtin_sorts(&self) -> HashSet<Str> {
-        self.sorts
+        self.frame
+            .sorts
             .iter()
             .filter_map(|(name, def)| {
                 if def.is_builtin() {
@@ -594,7 +626,8 @@ impl Context {
 
     /// Returns the set of all user-defined sorts
     pub fn user_defined_sorts(&self) -> HashSet<Str> {
-        self.sorts
+        self.frame
+            .sorts
             .iter()
             .filter_map(|(name, def)| {
                 if def.is_from_user() {
@@ -615,7 +648,8 @@ impl Context {
         symbol: &str,
     ) -> Option<(QualifiedIdentifier, &Vec<(Sig, FunctionMeta)>)> {
         let symbol = self.allocate_symbol(symbol);
-        self.symbol_table
+        self.frame
+            .symbol_table
             .get(&symbol)
             .map(|sigs| (QualifiedIdentifier::simple(symbol.clone()), sigs))
     }
@@ -642,14 +676,7 @@ impl HasArena for Context {
 
 impl CheckedApi for Context {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
-        let theories = self.get_theories();
-        TCEnv {
-            arena: &mut self.arena,
-            theories,
-            sorts: &mut self.sorts,
-            symbol_table: &self.symbol_table,
-            local: LocEnv::Nil,
-        }
+        TCEnvGen::new(self, Default::default())
     }
 
     fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {

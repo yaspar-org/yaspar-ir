@@ -95,7 +95,7 @@ where
     }
 }
 
-/// zthese type constraints say that
+/// these type constraints say that
 ///
 /// If an environment implements [CheckedApi], then it can provide a type-checking environment [TCEnv],
 /// so we can use that for type-checking.

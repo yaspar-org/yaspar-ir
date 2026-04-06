@@ -6,9 +6,11 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::matching::MatchContext;
 use crate::ast::ctx::quantifier::QuantifierContext;
-use crate::ast::ctx::{Arena, CheckedApi, Context, FetchSort, SymbolQuote, TCEnv};
+use crate::ast::ctx::{
+    Arena, CheckedApi, Context, FetchSort, SymbolQuote, TCEnv, TCEnvGen, TCLocal,
+};
 use crate::ast::ctx::{Command, FunctionDef, Sort, Str, TC, Term};
-use crate::locenv::{LocEnv, sanitize_bindings};
+use crate::containers::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::traits::AllocatableString;
 use std::collections::HashSet;
@@ -115,15 +117,16 @@ impl HasArena for FunctionContext<'_> {
 
 impl CheckedApi for FunctionContext<'_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
-        let theories = self.context.get_theories();
-        TCEnv {
+        TCEnvGen {
             arena: &mut self.context.arena,
-            theories,
-            sorts: &mut self.context.sorts,
-            symbol_table: &self.context.symbol_table,
-            local: LocEnv::Cons {
-                car: &self.inputs,
-                cdr: &LocEnv::Nil,
+            meta: &self.context.meta,
+            frame: &self.context.frame,
+            local: TCLocal {
+                loc: LocEnv::Cons {
+                    car: &self.inputs,
+                    cdr: &LocEnv::Nil,
+                },
+                ..Default::default()
             },
         }
     }

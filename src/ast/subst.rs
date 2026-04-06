@@ -31,7 +31,7 @@
 use crate::allocator::TermAllocator;
 use crate::ast::alg::VarBinding;
 use crate::ast::{ATerm, Arena, Attribute, HasArena, HasArenaAlt, PatternArm, Str, Term};
-use crate::locenv::MemLinkedList;
+use crate::containers::MemLinkedList;
 use crate::traits::{AllocatableString, Repr};
 use std::collections::HashMap;
 

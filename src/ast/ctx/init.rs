@@ -11,8 +11,8 @@ use crate::ast::alg::BvLenExpr;
 use crate::ast::cnf::CNFCache;
 #[cfg(feature = "cache")]
 use crate::ast::ctx::Caches;
-use crate::ast::ctx::{Arena, BvInSort, BvOutSort, Sig, SigIndex, SortDef, Str, Theory};
-use crate::ast::ctx::{Context, LOGICS};
+use crate::ast::ctx::{Arena, BvInSort, BvOutSort, EMP_SET, Sig, SigIndex, SortDef, Str, Theory};
+use crate::ast::ctx::{Context, ContextFrame, ContextMeta, LOGICS};
 use crate::statics::{ARRAY, BOOL};
 use crate::traits::Repr;
 use dashu::integer::UBig;
@@ -45,9 +45,14 @@ impl Context {
         let sorts = Self::default_sorts(&mut arena);
         Self {
             arena,
-            logic: None,
-            sorts,
-            symbol_table: Default::default(),
+            meta: ContextMeta {
+                logic: None,
+                theories: &EMP_SET,
+            },
+            frame: ContextFrame {
+                sorts,
+                symbol_table: Default::default(),
+            },
             #[cfg(feature = "cache")]
             caches: Caches {
                 #[cfg(feature = "cnf")]
@@ -58,7 +63,8 @@ impl Context {
 
     fn extend_theory_ints(&mut self) {
         let int = self.int_sort();
-        self.sorts
+        self.frame
+            .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
 
         let minus = self.allocate_symbol("-");
@@ -88,12 +94,13 @@ impl Context {
             builtin(ge, bin_pred_sig.clone()),
             builtin(gt, bin_pred_sig.clone()),
         ]);
-        self.symbol_table.extend(default_symbol_table);
+        self.frame.symbol_table.extend(default_symbol_table);
     }
 
     fn extend_theory_reals(&mut self) {
         let real = self.real_sort();
-        self.sorts
+        self.frame
+            .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
         let minus = self.allocate_symbol("-");
         let plus = self.allocate_symbol("+");
@@ -116,15 +123,17 @@ impl Context {
             builtin(ge, bin_pred_sig.clone()),
             builtin(gt, bin_pred_sig.clone()),
         ]);
-        self.symbol_table.extend(default_symbol_table);
+        self.frame.symbol_table.extend(default_symbol_table);
     }
 
     fn extend_theory_real_ints(&mut self) {
         let int = self.int_sort();
         let real = self.real_sort();
-        self.sorts
+        self.frame
+            .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.sorts
+        self.frame
+            .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
 
         let minus = self.allocate_symbol("-");
@@ -173,7 +182,7 @@ impl Context {
             builtin(to_int, Sig::func(vec![real.clone()], int.clone())),
             builtin(is_int, Sig::func(vec![real.clone()], self.bool_sort())),
         ]);
-        self.symbol_table.extend(default_symbol_table);
+        self.frame.symbol_table.extend(default_symbol_table);
     }
 
     fn extend_theory_strings(&mut self) {
@@ -182,11 +191,14 @@ impl Context {
         let int = self.int_sort();
         let bool = self.bool_sort();
 
-        self.sorts
+        self.frame
+            .sorts
             .insert(string.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.sorts
+        self.frame
+            .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.sorts
+        self.frame
+            .sorts
             .insert(reglan.repr().0.symbol.clone(), SortDef::Opaque(0));
 
         let str_unary_sig = Sig::func(vec![string.clone()], int.clone());
@@ -324,12 +336,12 @@ impl Context {
             builtin(str_to_int, Sig::func(vec![string.clone()], int.clone())),
             builtin(str_from_int, Sig::func(vec![int.clone()], string.clone())),
         ]);
-        self.symbol_table.extend(default_symbol_table);
+        self.frame.symbol_table.extend(default_symbol_table);
     }
 
     fn extend_theory_array_ex(&mut self) {
         let array = self.allocate_symbol(ARRAY);
-        self.sorts.insert(array, SortDef::Opaque(2));
+        self.frame.sorts.insert(array, SortDef::Opaque(2));
 
         let x = self.allocate_symbol("X");
         let y = self.allocate_symbol("Y");
@@ -361,7 +373,7 @@ impl Context {
                 ),
             ),
         ]);
-        self.symbol_table.extend(default_symbol_table);
+        self.frame.symbol_table.extend(default_symbol_table);
     }
 
     fn extend_theory_floating_points(&mut self) {
@@ -372,11 +384,13 @@ impl Context {
         let float32 = self.allocate_symbol("Float32");
         let float64 = self.allocate_symbol("Float64");
         let float128 = self.allocate_symbol("Float128");
-        self.sorts.insert(rm.clone(), SortDef::Opaque(0));
-        self.sorts.insert(float16.clone(), SortDef::Opaque(0));
-        self.sorts.insert(float32.clone(), SortDef::Opaque(0));
-        self.sorts.insert(float64.clone(), SortDef::Opaque(0));
-        self.sorts.insert(float128.clone(), SortDef::Opaque(0));
+        self.frame.sorts.insert(rm.clone(), SortDef::Opaque(0));
+        self.frame.sorts.insert(float16.clone(), SortDef::Opaque(0));
+        self.frame.sorts.insert(float32.clone(), SortDef::Opaque(0));
+        self.frame.sorts.insert(float64.clone(), SortDef::Opaque(0));
+        self.frame
+            .sorts
+            .insert(float128.clone(), SortDef::Opaque(0));
 
         let rm = self.sort0(rm);
         let rm = Sig::sort(rm);
@@ -403,7 +417,7 @@ impl Context {
             builtin(rtn, rm.clone()),
             builtin(rtz, rm.clone()),
         ]);
-        self.symbol_table.extend(default_symbol_table);
+        self.frame.symbol_table.extend(default_symbol_table);
     }
 
     /// c.f. <https://smt-lib.org/logics-all.shtml#QF_BV> and <https://smt-lib.org/theories-FixedSizeBitVectors.shtml>
@@ -592,7 +606,7 @@ impl Context {
             builtin(bvsgt, bin_pred_sig.clone()),
             builtin(bvsge, bin_pred_sig.clone()),
         ]);
-        self.symbol_table.extend(default_symbol_table);
+        self.frame.symbol_table.extend(default_symbol_table);
 
         if self.get_theories().iter().any(|t| t.has_int()) {
             let more_symbols = HashMap::from([
@@ -605,12 +619,12 @@ impl Context {
                 builtin(int2bv, to_bv_sig.clone()),
             ]);
 
-            self.symbol_table.extend(more_symbols);
+            self.frame.symbol_table.extend(more_symbols);
         }
     }
 
     pub fn check_logic(&self) -> Result<(), String> {
-        if self.logic.is_none() {
+        if self.meta.logic.is_none() {
             Err("logic is not set".into())
         } else {
             Ok(())
@@ -629,11 +643,12 @@ impl Context {
 
     /// set the current theory; error if current theory has been set
     pub fn set_ctx_logic(&mut self, s: &str) -> Result<&mut Self, String> {
-        match &self.logic {
+        match &self.meta.logic {
             None => match LOGICS.get(s.to_ascii_uppercase().as_str()) {
                 None => Err(format!("Theory {} not defined", s)),
                 Some(ts) => {
-                    self.logic = Some(s.to_string());
+                    self.meta.logic = Some(s.to_string());
+                    self.meta.theories = ts;
                     for t in ts {
                         match t {
                             Theory::Quantifiers => {}
@@ -656,7 +671,7 @@ impl Context {
 
     /// make sure logic is set; if not, set it to ALL
     pub fn ensure_logic(&mut self) {
-        if self.logic.is_none() {
+        if self.meta.logic.is_none() {
             self.set_ctx_logic("ALL").unwrap();
         }
     }

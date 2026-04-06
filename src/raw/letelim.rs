@@ -17,7 +17,7 @@
 use super::alg;
 use super::instance::{Arena, Attribute, Pattern, Str, Term};
 use crate::allocator::TermAllocator;
-use crate::locenv::LocEnv;
+use crate::containers::{LocEnv, Mapping};
 use crate::raw::alg::VarBinding;
 use crate::traits::Repr;
 use std::collections::HashMap;

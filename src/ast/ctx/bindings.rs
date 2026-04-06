@@ -7,7 +7,7 @@ use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, FetchSort, Result, TCEnv};
 use crate::ast::ctx::{Sort, Str, Term};
 use crate::ast::{MatchContext, QuantifierContext, TC};
-use crate::locenv::LocEnv;
+use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::traits::AllocatableString;
 

@@ -8,7 +8,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::checked::CheckedApi;
 use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
 use crate::ast::{FetchSort, LetContext, MatchContext, QuantifierContext, SymbolQuote, Term};
-use crate::locenv::{LocEnv, sanitize_bindings};
+use crate::containers::{LocEnv, sanitize_bindings};
 use crate::traits::AllocatableString;
 use std::collections::{HashMap, HashSet};
 

@@ -16,35 +16,42 @@
 //! The core types are:
 //!
 //! - [`TC<T>`] — alias for `Result<T, String>`, the type-checking monad.
-//! - [`TCEnv`] — the type-checking environment, carrying the arena, theory set, sort table,
-//!   symbol table, and local variable scope.
+//! - [`TCEnvGen`] — the generic type-checking environment, parameterized over the local
+//!   scope representation. Carries borrowed references to the arena, context metadata,
+//!   and context frame (sorts + symbol table).
+//! - [`TCEnv`] — the concrete type-checking environment used during traversal, which
+//!   specializes `TCEnvGen` with [`TCLocal`] as the local scope.
+//! - [`TCLocal`] — the local scope state during type-checking, holding the local variable
+//!   environment, incremental scope extensions, and a scrutinee map for match expressions.
 //! - [`Typecheck`] — the trait implemented by all AST nodes; call `.type_check(&mut env)` to
 //!   perform type-checking.
 
 use super::alg;
 use super::alg::VarBinding;
 use super::instance::{
-    Arena, Attribute, BvInSort, BvOutSort, Constant, DatatypeDec, Identifier, Index, Pattern,
-    QualifiedIdentifier, Sig, SigIndex, Sort, SortDef, Str, Term,
+    Arena, Attribute, Constant, DatatypeDec, Identifier, Index, Pattern, PatternArm,
+    QualifiedIdentifier, Sort, SortDef, Str, Term,
 };
 use crate::allocator::*;
 use crate::ast::utils::is_term_bool_alt;
-use crate::ast::{FetchSort, FunctionMeta, HasArenaAlt, SymbolQuote, Theory};
-use crate::locenv::LocEnv;
+use crate::ast::{
+    Context, ContextFrame, ContextMeta, FetchSort, HasArenaAlt, Monomorphization, SymbolQuote,
+    TermRecursor, Theory,
+};
+use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::meta::WithMeta;
-use crate::statics::{BITVEC, BOOL, BV_RE, INT, REAL, STRING};
+use crate::statics::{BITVEC, BOOL, INT, REAL, STRING};
 use crate::traits::{AllocatableString, Contains};
 use crate::traits::{MetaData, Repr};
-use dashu::base::BitTest;
+pub(crate) use app::{typed_app, typed_qualified_identifier};
 use dashu::integer::UBig;
-use either::Either;
 use num_traits::cast::ToPrimitive;
-use regex::Captures;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
-use std::str::FromStr;
 use unif::SortSubst;
+use yaspar::ast::Keyword;
 
+mod app;
 pub(crate) mod unif;
 
 /// Type-checking monad
@@ -57,66 +64,34 @@ pub trait Typecheck<Env> {
     fn type_check(&self, env: &mut Env) -> TC<Self::Out>;
 }
 
-/// An extended environment to get below binders
-pub struct TCEnv<'a, 'b, S> {
+/// The generic type-checking environment.
+///
+/// Holds borrowed references to the [`Arena`], [`ContextMeta`] (logic and theories),
+/// and [`ContextFrame`] (sorts and symbol table), plus a generic `Local` scope.
+/// The `Local` parameter is [`TCLocal`] during normal type-checking, but can be
+/// any type implementing [`Mapping`] for reuse in helper functions.
+pub struct TCEnvGen<'a, Local> {
     pub(crate) arena: &'a mut Arena,
-    pub(crate) theories: &'static HashSet<Theory>,
-    pub(crate) sorts: &'a HashMap<Str, SortDef>,
-    pub(crate) symbol_table: &'a HashMap<Str, Vec<(Sig, FunctionMeta)>>,
-    pub(crate) local: LocEnv<'b, Str, S>,
+    pub(crate) meta: &'a ContextMeta,
+    pub(crate) frame: &'a ContextFrame,
+    pub(crate) local: Local,
 }
 
-impl<'a, 'b, S> TCEnv<'a, 'b, S> {
-    pub(crate) fn convert_to_new_local<'c, T>(self, local: LocEnv<'c, Str, T>) -> TCEnv<'a, 'c, T> {
-        TCEnv {
-            arena: self.arena,
-            theories: self.theories,
-            sorts: self.sorts,
-            symbol_table: self.symbol_table,
+impl<'a, Local> TCEnvGen<'a, Local> {
+    /// Create a new environment from a [`Context`] and a local scope.
+    pub(crate) fn new(context: &'a mut Context, local: Local) -> Self {
+        Self {
+            arena: &mut context.arena,
+            meta: &context.meta,
+            frame: &context.frame,
             local,
         }
     }
 
-    pub(crate) fn with_empty_local<T>(&mut self) -> TCEnv<'_, 'static, T> {
-        TCEnv {
-            arena: self.arena,
-            theories: self.theories,
-            sorts: self.sorts,
-            symbol_table: self.symbol_table,
-            local: LocEnv::Nil,
-        }
-    }
-
-    pub(crate) fn convert_to_empty_local<T>(self) -> TCEnv<'a, 'static, T> {
-        TCEnv {
-            arena: self.arena,
-            theories: self.theories,
-            sorts: self.sorts,
-            symbol_table: self.symbol_table,
-            local: LocEnv::Nil,
-        }
-    }
-
-    pub(crate) fn push_local<'d>(
-        &'d mut self,
-        head: &'d [VarBinding<Str, S>],
-    ) -> TC<TCEnv<'d, 'd, S>>
-    where
-        S: Clone,
-    {
-        let local = self.local.insert(head)?;
-        Ok(TCEnv {
-            arena: self.arena,
-            theories: self.theories,
-            sorts: self.sorts,
-            symbol_table: self.symbol_table,
-            local,
-        })
-    }
-
+    /// Look up a sort definition by name, allocating the symbol in the arena.
     fn get_sort_def(&mut self, s: &str) -> TC<&'a SortDef> {
         let symbol = self.arena.allocate_symbol(s);
-        match self.sorts.get(&symbol) {
+        match self.frame.sorts.get(&symbol) {
             None => Err(format!("TC: unknown sort: {}!", s)),
             Some(d) => Ok(d),
         }
@@ -150,7 +125,7 @@ impl<'a, 'b, S> TCEnv<'a, 'b, S> {
     }
 
     /// Obtain a [DatatypeDec] if a sort is a datatype declaration.
-    pub(crate) fn get_datatype_dec(&mut self, s: &str) -> TC<&'a DatatypeDec> {
+    pub(crate) fn get_datatype_dec(&mut self, s: &Str) -> TC<&'a DatatypeDec> {
         match self.get_sort_def(s)? {
             SortDef::Datatype(d) => Ok(d),
             _ => Err(format!("TC: sort {} is not datatype!", s)),
@@ -158,7 +133,53 @@ impl<'a, 'b, S> TCEnv<'a, 'b, S> {
     }
 }
 
-impl<T> HasArenaAlt for TCEnv<'_, '_, T> {
+#[allow(private_bounds)]
+impl<'a, Local> TCEnvGen<'a, Local>
+where
+    Local: Mapping,
+{
+    pub(crate) fn with_empty_local<L: Mapping>(&mut self) -> TCEnvGen<'_, L> {
+        TCEnvGen {
+            arena: self.arena,
+            meta: self.meta,
+            frame: self.frame,
+            local: L::empty(),
+        }
+    }
+
+    pub(crate) fn convert_to_empty_local<L: Mapping>(self) -> TCEnvGen<'a, L> {
+        TCEnvGen {
+            arena: self.arena,
+            meta: self.meta,
+            frame: self.frame,
+            local: L::empty(),
+        }
+    }
+}
+
+/// The concrete type-checking environment used by [`Typecheck`] impls.
+///
+/// This specializes [`TCEnvGen`] with [`TCLocal`] as the local scope, providing
+/// the full environment needed for type-checking terms, sorts, and commands.
+pub type TCEnv<'a, 'b, T> = TCEnvGen<'a, TCLocal<'b, T>>;
+
+impl<'a, 'b, S> TCEnv<'a, 'b, S> {
+    /// Replace the local scope with a new one built from the given [`LocEnv`].
+    pub(crate) fn convert_to_new_local<'c, T>(self, local: LocEnv<'c, Str, T>) -> TCEnv<'a, 'c, T> {
+        TCEnv {
+            arena: self.arena,
+            meta: self.meta,
+            frame: self.frame,
+            local: TCLocal {
+                loc: local,
+                loc_inc: vec![],
+                scrutinee_map: Default::default(),
+            },
+        }
+    }
+}
+
+impl<T> HasArenaAlt for TCEnvGen<'_, T> {
     #[inline]
     fn arena_alt(&mut self) -> &mut Arena {
         self.arena
@@ -181,13 +202,27 @@ where
     }
 }
 
-impl<Str> Typecheck<TCEnv<'_, '_, Sort>> for alg::Constant<Str> {
+/// Check and return a valid bit vector sort
+fn valid_bv_sort<T>(env: &mut T, sz: UBig) -> TC<Sort>
+where
+    T: HasArenaAlt,
+{
+    match sz.to_usize() {
+        None | Some(0) => Err(format!(
+            "TC: BitVec has size {sz} but it should be > 0 and small enough to fit in the memory (<= {})!",
+            usize::MAX
+        )),
+        Some(_) => Ok(env.arena_alt().bv_sort(sz)),
+    }
+}
+
+impl<Str, L> Typecheck<TCEnvGen<'_, L>> for alg::Constant<Str> {
     type Out = Sort;
 
-    fn type_check(&self, env: &mut TCEnv<Sort>) -> TC<Sort> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Sort> {
         match self {
             alg::Constant::Numeral(_) => {
-                if env.theories.contains(&Theory::Reals) {
+                if env.meta.theories.contains(&Theory::Reals) {
                     env.get_ground_sort(REAL)
                 } else {
                     env.get_ground_sort(INT)
@@ -196,14 +231,14 @@ impl<Str> Typecheck<TCEnv<'_, '_, Sort>> for alg::Constant<Str> {
             alg::Constant::Decimal(_) => env.get_ground_sort(REAL),
             alg::Constant::String(_) => env.get_ground_sort(STRING),
             alg::Constant::Binary(_, n) => {
-                if env.theories.contains(&Theory::Bitvectors) {
+                if env.meta.theories.contains(&Theory::Bitvectors) {
                     valid_bv_sort(env, UBig::from(*n))
                 } else {
                     Err("TC: the current logic does not support bit vectors!".into())
                 }
             }
             alg::Constant::Hexadecimal(_, n) => {
-                if env.theories.contains(&Theory::Bitvectors) {
+                if env.meta.theories.contains(&Theory::Bitvectors) {
                     valid_bv_sort(env, UBig::from(4u8) * UBig::from(*n))
                 } else {
                     Err("TC: the current logic does not support bit vectors!".into())
@@ -248,8 +283,9 @@ pub(crate) fn check_subst_instantiation(subst: &SortSubst, t: impl Display) -> T
     }
 }
 
-fn check_global_var_locally<T: Clone, S>(env: &mut TCEnv<T>, s: S) -> TC<Str>
+fn check_global_var_locally<L, S>(env: &mut TCEnvGen<L>, s: S) -> TC<Str>
 where
+    L: Mapping<Key = Str>,
     S: AllocatableString<Arena>,
 {
     let sym = s.allocate(env.arena_alt());
@@ -263,76 +299,47 @@ where
     }
 }
 
-fn tc_vec_sort_bool<T>(ts: &[T], env: &mut TCEnv<Sort>) -> TC<Vec<Term>>
+impl<Str, L> Typecheck<TCEnvGen<'_, L>> for alg::Index<Str>
 where
-    T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort>, Out = Term> + Display + MetaData,
+    Str: AllocatableString<Arena>,
 {
-    let mut result = vec![];
-    for t in ts {
-        let nt = t.type_check(env)?;
-        is_term_bool_alt(env, &nt, &t.display_meta_data())?;
-        result.push(nt);
-    }
-    Ok(result)
-}
+    type Out = Index;
 
-fn tc_with_local_env<T>(vs: &[VarBinding<Str, Sort>], t: &T, env: &mut TCEnv<Sort>) -> TC<Term>
-where
-    T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort>, Out = Term>,
-{
-    let mut ext_env = env.push_local(vs)?;
-    t.type_check(&mut ext_env)
-}
-
-pub(crate) fn tc_binder<St, So, T>(
-    vs: &[VarBinding<St, So>],
-    t: &T,
-    env: &mut TCEnv<Sort>,
-) -> TC<(Vec<VarBinding<Str, Sort>>, Term)>
-where
-    St: Contains<T = String>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
-    T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort>, Out = Term> + Display + MetaData,
-{
-    if !env.theories.contains(&Theory::Quantifiers) {
-        return Err("TC: the current logic does not support quantifiers!".to_string());
-    }
-    let vs = {
-        let mut env = env.with_empty_local();
-        let mut ret = vec![];
-        for v in vs {
-            let sym = env.arena.allocate_symbol(v.0.inner());
-            let vid = env.arena.new_local();
-            ret.push(alg::VarBinding(sym, vid, v.2.type_check(&mut env)?));
+    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Self::Out> {
+        match self {
+            alg::Index::Numeral(n) => Ok(Index::Numeral(n.clone())),
+            alg::Index::Symbol(s) => Ok(Index::Symbol(s.allocate(env.arena_alt()))),
+            alg::Index::Hexadecimal(bs, n) => Ok(Index::Hexadecimal(bs.clone(), *n)),
         }
-        ret
-    };
-    let nt = tc_with_local_env(&vs, t, env)?;
-    is_term_bool_alt(env, &nt, &t.display_meta_data())?;
-    Ok((vs, nt))
+    }
 }
 
-/// Check and return a valid bit vector sort
-fn valid_bv_sort<T>(env: &mut T, sz: UBig) -> TC<Sort>
+impl<Str, L> Typecheck<TCEnvGen<'_, L>> for alg::Identifier<Str>
 where
-    T: HasArenaAlt,
+    Str: AllocatableString<Arena>,
 {
-    match sz.to_usize() {
-        None | Some(0) => Err(format!(
-            "TC: BitVec has size {sz} but it should be > 0 and small enough to fit in the memory (<= {})!",
-            usize::MAX
-        )),
-        Some(_) => Ok(env.arena_alt().bv_sort(sz)),
+    type Out = Identifier;
+
+    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Self::Out> {
+        Ok(Identifier {
+            symbol: self.symbol.allocate(env.arena_alt()),
+            indices: self
+                .indices
+                .iter()
+                .map(|ind| ind.type_check(env))
+                .collect::<TC<Vec<_>>>()?,
+        })
     }
 }
 
 /// Type-checking a sort also normalizes it
-pub(crate) fn tc_sort<S>(
-    env: &mut TCEnv<()>,
+pub(crate) fn tc_sort<S, L>(
+    env: &mut TCEnvGen<L>,
     id: &alg::Identifier<S>,
     sorts: impl IntoIterator<Item = Sort>,
 ) -> TC<Sort>
 where
+    L: Mapping<Key = Str>,
     S: AllocatableString<Arena>,
 {
     let meta = id.symbol.display_meta_data();
@@ -350,7 +357,7 @@ where
         } else {
             Ok(env.arena.sort0(id.symbol))
         }
-    } else if let Some(d) = env.sorts.get(&id.symbol) {
+    } else if let Some(d) = env.frame.sorts.get(&id.symbol) {
         // a global sort
         if !id.indices.is_empty() {
             return Err(format!("TC: sort {id}{meta} should not contain indices!"));
@@ -375,16 +382,16 @@ where
                         .zip(sorts)
                         .map(|(k, v)| (k, Some(v)))
                         .collect();
-                    let s = unif::apply_subst(env, &subst, sort);
+                    let s = unif::apply_subst(env.arena, &subst, sort);
                     Ok(s)
                 }
             }
         }
-    } else if env.theories.contains(&Theory::Bitvectors) && id.symbol.inner() == BITVEC {
+    } else if env.meta.theories.contains(&Theory::Bitvectors) && id.symbol.inner() == BITVEC {
         // this is a special case; admit (_ BitVec X) where X is a numeral
         let sorts = sorts.into_iter().collect::<Vec<_>>();
         match id.indices.as_slice() {
-            [Index::Numeral(sz)] if sorts.is_empty() => valid_bv_sort(env, sz.clone()),
+            [alg::Index::Numeral(sz)] if sorts.is_empty() => valid_bv_sort(env, sz.clone()),
             _ => {
                 let sort = env.arena_alt().sort(id, sorts);
                 Err(format!(
@@ -397,14 +404,15 @@ where
     }
 }
 
-impl<Str, So> Typecheck<TCEnv<'_, '_, ()>> for So
+impl<St, So, L> Typecheck<TCEnvGen<'_, L>> for So
 where
-    Str: AllocatableString<Arena>,
-    So: Contains<T: Repr<T = alg::Sort<Str, So>>> + Display,
+    St: AllocatableString<Arena>,
+    So: Contains<T: Repr<T = alg::Sort<St, So>>> + Display,
+    L: Mapping<Key = Str, Value = (usize, ())>,
 {
     type Out = Sort;
 
-    fn type_check(&self, env: &mut TCEnv<()>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<L>) -> TC<Self::Out> {
         let sorts = self
             .inner()
             .repr()
@@ -416,612 +424,708 @@ where
     }
 }
 
-/// Check whether `t` is an argument given an `expected` sort and a `subst`itution.
-///
-/// Return `Right(nt)` where `nt` is the potentially new term for the argument, or `Left(s)` if
-/// `t` should be rejected, where `s` is the actual sort.
-fn type_check_func_arg_with_implicit_coercion(
-    env: &mut TCEnv<Sort>,
-    t: &Term,
-    expected: &Sort,
-    subst: &mut SortSubst,
-) -> TC<Either<Sort, Term>> {
-    let ns = t.get_sort(env);
-    let unifiable = unif::sort_unification(subst, expected, &ns)?;
-    if unifiable {
-        return Ok(Either::Right(t.clone()));
-    }
-    // if the sorts are not unifiable, then there are two possibilities.
-    // 1. if Reals_Ints is not a current theory, then we don't do anything, i.e. reject t as an argument.
-    if !env.theories.contains(&Theory::RealInts) {
-        return Ok(Either::Left(ns));
-    }
+pub(crate) fn typed_constant<L>(env: &mut TCEnvGen<L>, c: Constant) -> TC<Term> {
+    let s = c.type_check(env)?;
+    Ok(env.arena.constant(c, Some(s)))
+}
 
-    // 2. otherwise, we have to check whether there should be an implicit coercion.
-    let expected_substed = unif::apply_subst(env, subst, expected);
-    if ns.is_int() && expected_substed.is_real() {
-        // 3. if `t` has sort `Int` and is expected to have sort `Real`, then `to_real` is inserted.
-        // this seems to be the only specified implicit coercion in the spec, so we just handle it
-        // in the current way.
-        //
-        // c.f. https://smt-lib.org/logics-all.shtml#AUFNIRA
-        let to_real = check_global_var_locally(env, "to_real")?; // this should pass for the sake of symbol table declaration.
-        let to_real = QualifiedIdentifier::simple(to_real);
-        let real = env.arena.real_sort();
-        let coerced = env.arena.app(to_real, vec![t.clone()], Some(real));
-        Ok(Either::Right(coerced))
+pub(crate) fn typed_eq<L>(env: &mut TCEnvGen<L>, at: Term, bt: Term, bt_meta: &str) -> TC<Term> {
+    let sa = at.get_sort(env);
+    let sb = bt.get_sort(env);
+    if sa == sb {
+        Ok(env.arena.eq(at, bt))
     } else {
-        // 4. otherwise, we reject t as an argument
-        Ok(Either::Left(ns))
+        sort_mismatch(&sa, &sb, bt, bt_meta)
     }
 }
 
-/// Unify bit vector len variable
-fn bv_len_unification(params: &mut [Option<UBig>], expected: UBig, idx: usize) -> TC<bool> {
-    if idx >= params.len() {
-        return Err(format!("TC: index {idx} is out of bounds!"));
-    }
-    if let Some(ex) = &params[idx] {
-        Ok(*ex == expected)
-    } else {
-        if expected.is_zero() {
-            return Err("TC: bit vector cannot have length 0!".to_string());
-        }
-        params[idx] = Some(expected);
-        Ok(true)
-    }
-}
-
-fn check_bv_param_instantiation(params: Vec<Option<UBig>>) -> TC<Vec<UBig>> {
-    let mut ret = vec![];
-    for (i, p) in params.into_iter().enumerate() {
-        if let Some(p) = p {
-            ret.push(p);
-        } else {
-            return Err(format!("TC: index {i} is not instantiated!"));
-        }
-    }
-    Ok(ret)
-}
-
-fn bv_len_apply<T: HasArenaAlt>(env: &mut T, out: &BvOutSort, params: &[UBig]) -> TC<Sort> {
-    match out {
-        BvOutSort::BitVec(expr) => {
-            let len = expr.eval(params)?;
-            valid_bv_sort(env, len)
-        }
-        BvOutSort::Sort(s) => Ok(s.clone()),
-    }
-}
-
-fn type_check_bv_func_arg_with_implicit_coercion(
-    env: &mut TCEnv<Sort>,
-    t: &Term,
-    expected: &BvInSort,
-    params: &mut [Option<UBig>],
-) -> TC<Either<Sort, Term>> {
-    match expected {
-        BvInSort::Sort(s) => {
-            type_check_func_arg_with_implicit_coercion(env, t, s, &mut HashMap::new())
-        }
-        BvInSort::BitVec(n) => {
-            let ns = t.get_sort(env);
-            if let Some(len) = ns.is_bv() {
-                // t has sort (_ BitVec len)
-                if !bv_len_unification(params, len, *n)? {
-                    Err(format!(
-                        "TC: bit vector sort {ns} cannot be unified with length {}!",
-                        params[*n].clone().unwrap()
-                    ))
-                } else {
-                    Ok(Either::Right(t.clone()))
-                }
-            } else {
-                Ok(Either::Left(ns))
-            }
-        }
-    }
-}
-
-fn type_check_with_func_sig(
-    t: impl Display,
-    env: &mut TCEnv<Sort>,
-    f: WithMeta<&QualifiedIdentifier, &str>,
-    args: &[WithMeta<Term, String>],
-    outs: &Option<Sort>,
-    sig: &Sig,
-    app_string: &str,
+pub(crate) fn typed_distinct<L>(
+    env: &mut TCEnvGen<L>,
+    ts: Vec<WithMeta<Term, String>>,
 ) -> TC<Term> {
-    let WithMeta {
-        data: f,
-        meta: f_meta,
-    } = f;
-    match sig {
-        Sig::VarLenFunc(s, n, o) => {
-            // 3.0 overloaded functions don't take indices
-            check_empty_index(f, f_meta)?;
-
-            // 3.1 make sure all arguments have the expected sort [s]
-            let mut new_args = vec![];
-            for (
-                i,
-                WithMeta {
-                    data: nt,
-                    meta: nt_meta,
-                },
-            ) in args.iter().enumerate()
-            {
-                match type_check_func_arg_with_implicit_coercion(env, nt, s, &mut HashMap::new())? {
-                    Either::Left(ns) => {
-                        return Err(format!(
-                            "TC: the {i}'th argument{nt_meta} of function '{}' expects sort {s} but was given {ns}!",
-                            f.id_str().sym_quote(),
-                        ));
-                    }
-                    Either::Right(t) => {
-                        new_args.push(t);
-                    }
-                }
-            }
-
-            if new_args.len() < *n {
-                return Err(format!(
-                    "TC: function '{}'{f_meta} expects at least {} argument(s)!",
-                    f.id_str().sym_quote(),
-                    n
-                ));
-            }
-
-            // 3.2 if sorts of the overall application is ascribed, then this sort must also match.
-            if let Some(fs) = &f.1
-                && *fs != *o
-            {
-                return sort_mismatch(fs, o, t, app_string);
-            }
-
-            // 3.3 do the same for the ascribed sort
-            if let Some(outs) = outs
-                && *outs != *o
-            {
-                return sort_mismatch(outs, o, t, app_string);
-            }
-
-            // passing all tests
-            Ok(env.arena.app(f.clone(), new_args, Some(o.clone())))
-        }
-        Sig::ParFunc(sig_indices, vs, ss, s) => {
-            let mut subst: SortSubst = unif::empty_subst(vs);
-
-            // 3.0 determine the sorts for indices
-            check_sig_indices(f, f_meta, sig_indices)?;
-
-            // 3.1 # of input sorts in the signature must match # of arguments.
-            check_arg_length(f, f_meta, args, ss.len())?;
-
-            // 3.2 input sorts must match the argument sorts.
-            let mut new_args = vec![];
-            for (
-                i,
-                (
-                    WithMeta {
-                        data: nt,
-                        meta: nt_meta,
-                    },
-                    s,
-                ),
-            ) in args.iter().zip(ss).enumerate()
-            {
-                match type_check_func_arg_with_implicit_coercion(env, nt, s, &mut subst)? {
-                    Either::Left(ns) => {
-                        return Err(format!(
-                            "TC: the {i}'th argument{nt_meta} of function '{}' expects sort {s} but was given {ns}! subst: {}",
-                            f.id_str().sym_quote(),
-                            unif::format_subst(&subst)
-                        ));
-                    }
-                    Either::Right(nt) => new_args.push(nt),
-                }
-            }
-
-            // 3.3 if sorts of the overall application is ascribed, then this sort must also match.
-            if let Some(fs) = &f.1
-                && !unif::sort_unification(&mut subst, s, fs)?
-            {
-                return sort_mismatch(fs, s, t, app_string);
-            }
-
-            // 3.4 do the same for the ascribed sort
-            if let Some(outs) = outs
-                && !unif::sort_unification(&mut subst, s, outs)?
-            {
-                return sort_mismatch(outs, s, t, app_string);
-            }
-
-            // 3.5 make sure all vars in the substitution have been materialized
-            check_subst_instantiation(&subst, t)?;
-
-            // passing all tests
-            let ret_sort = unif::apply_subst(env, &subst, s);
-            Ok(env.arena.app(f.clone(), new_args, Some(ret_sort)))
-        }
-        Sig::BvFunc(m, n, is_extract, ss, s) => {
-            let mut params = vec![None; *m + *n];
-
-            // 3.0 check indices
-            check_bv_sig_indices(f, f_meta, *m, &mut params)?;
-            // at this point, the first m in params are instantiated.
-
-            // 3.1 # of input sorts in the signature must match # of arguments.
-            check_arg_length(f, f_meta, args, ss.len())?;
-
-            let mut new_args = vec![];
-            for (
-                i,
-                (
-                    WithMeta {
-                        data: nt,
-                        meta: nt_meta,
-                    },
-                    s,
-                ),
-            ) in args.iter().zip(ss).enumerate()
-            {
-                match type_check_bv_func_arg_with_implicit_coercion(env, nt, s, &mut params)? {
-                    Either::Left(ns) => {
-                        return Err(format!(
-                            "TC: the {i}'th argument{nt_meta} of function '{}' expects sort {s} but was given {ns}!",
-                            f.id_str().sym_quote(),
-                        ));
-                    }
-                    Either::Right(nt) => new_args.push(nt),
-                }
-            }
-
-            // 3.2.1 we then make sure all parameters have been instantiated
-            let params = check_bv_param_instantiation(params)?;
-
-            // 3.2.2 we obtain the output sort
-            let out_sort = bv_len_apply(env, s, &params)?;
-
-            // 3.3 if sorts of the overall application is ascribed, then this sort must also match.
-            if let Some(fs) = &f.1
-                && *fs != out_sort
-            {
-                return sort_mismatch(fs, &out_sort, t, app_string);
-            }
-
-            // 3.4 do the same for the ascribed sort
-            if let Some(outs) = outs
-                && *outs != out_sort
-            {
-                return sort_mismatch(outs, &out_sort, t, app_string);
-            }
-
-            // 3.5 special check for extract
-            if *is_extract {
-                for i in *m..params.len() {
-                    for j in 0..*m {
-                        if params[i] <= params[j] {
-                            return Err(format!(
-                                "TC: invalid index in bit-vector extract{f_meta}: Index {} should be less than the bit-vector width {}",
-                                params[j], params[i]
-                            ));
-                        }
-                    }
-                }
-            }
-
-            Ok(env.arena.app(f.clone(), new_args, Some(out_sort)))
-        }
-        Sig::BvVarLenFunc(m, s, n, o) => {
-            let mut params = vec![None; *m];
-
-            // 3.0 overloaded functions don't take indices
-            check_empty_index(f, app_string)?;
-
-            // 3.1 make sure all arguments have the expected sort [s]
-            let mut new_args = vec![];
-            for (
-                i,
-                WithMeta {
-                    data: nt,
-                    meta: nt_meta,
-                },
-            ) in args.iter().enumerate()
-            {
-                match type_check_bv_func_arg_with_implicit_coercion(env, nt, s, &mut params)? {
-                    Either::Left(ns) => {
-                        return Err(format!(
-                            "TC: the {i}'th argument{nt_meta} of function '{}' expects sort {s} but was given {ns}!",
-                            f.id_str().sym_quote(),
-                        ));
-                    }
-                    Either::Right(t) => {
-                        new_args.push(t);
-                    }
-                }
-            }
-
-            if new_args.len() < *n {
-                return Err(format!(
-                    "TC: function '{}'{f_meta} expects at least {n} argument(s)!",
-                    f.id_str().sym_quote(),
-                ));
-            }
-
-            // 3.2.1 we then make sure all parameters have been instantiated
-            let params = check_bv_param_instantiation(params)?;
-
-            // 3.2.2 we obtain the output sort
-            let out_sort = bv_len_apply(env, o, &params)?;
-
-            // 3.3 if sorts of the overall application is ascribed, then this sort must also match.
-            if let Some(fs) = &f.1
-                && *fs != out_sort
-            {
-                return sort_mismatch(fs, &out_sort, t, app_string);
-            }
-
-            // 3.4 do the same for the ascribed sort
-            if let Some(outs) = outs
-                && *outs != out_sort
-            {
-                return sort_mismatch(outs, &out_sort, t, app_string);
-            }
-
-            // passing all tests
-            Ok(env.arena.app(f.clone(), new_args, Some(out_sort)))
-        }
-        Sig::BvConcat => {
-            let mut lengths = vec![];
-
-            // 3.0 overloaded functions don't take indices
-            check_empty_index(f, app_string)?;
-
-            // 3.1 make sure all arguments have sort BitVec
-            if args.is_empty() {
-                return Err(format!(
-                    "TC: function '{}'{f_meta} expects at least 1 argument(s)!",
-                    f.id_str().sym_quote(),
-                ));
-            }
-
-            let mut new_args = vec![];
-            for (
-                i,
-                WithMeta {
-                    data: nt,
-                    meta: nt_meta,
-                },
-            ) in args.iter().enumerate()
-            {
-                let ns = nt.get_sort(env);
-                if let Some(l) = ns.is_bv() {
-                    new_args.push(nt.clone());
-                    lengths.push(l);
-                } else {
-                    return Err(format!(
-                        "TC: the {i}'th argument{nt_meta} of function '{}' expects a BitVec but given {ns}!",
-                        f.id_str().sym_quote(),
-                    ));
-                }
-            }
-
-            // 3.2.2 we obtain the output sort
-            let total = lengths.iter().sum();
-            let out_sort = env.arena_alt().bv_sort(total);
-
-            // 3.3 if sorts of the overall application is ascribed, then this sort must also match.
-            if let Some(fs) = &f.1
-                && *fs != out_sort
-            {
-                return sort_mismatch(fs, &out_sort, t, app_string);
-            }
-
-            // 3.4 do the same for the ascribed sort
-            if let Some(outs) = outs
-                && *outs != out_sort
-            {
-                return sort_mismatch(outs, &out_sort, t, app_string);
-            }
-
-            // passing all tests
-            Ok(env.arena.app(f.clone(), new_args, Some(out_sort)))
-        }
+    if ts.len() < 2 {
+        return Err("TC: distinct requires at least two terms!".into());
     }
+    let s = ts[0].data.get_sort(env);
+    let mut terms = vec![];
+    for WithMeta { data: t, meta } in ts {
+        let ts = t.get_sort(env);
+        if s != ts {
+            return sort_mismatch(&s, &ts, t, &meta);
+        }
+        terms.push(t);
+    }
+    Ok(env.arena.distinct(terms))
 }
 
-fn check_empty_index(f: &QualifiedIdentifier, meta_string: &str) -> TC<()> {
-    if !f.0.indices.is_empty() {
-        Err(format!(
-            "TC: function '{}'{meta_string} shouldn't contain indices!",
-            f.0.symbol
-        ))
-    } else {
-        Ok(())
-    }
+pub(crate) fn typed_not<L>(env: &mut TCEnvGen<L>, t: Term, meta: &str) -> TC<Term> {
+    is_term_bool_alt(env, &t, meta)?;
+    Ok(env.arena.not(t))
 }
 
-fn check_arg_length<T>(
-    f: &QualifiedIdentifier,
-    meta_string: &str,
-    args: &[T],
-    arg_len: usize,
-) -> TC<()> {
-    if arg_len != args.len() {
-        Err(format!(
-            "TC: function '{}'{meta_string} expects {arg_len} arguments but {} were given!",
-            f.id_str(),
-            args.iter().len()
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-pub(crate) fn typed_app(
-    env: &mut TCEnv<Sort>,
-    f: QualifiedIdentifier,
-    args: Vec<WithMeta<Term, String>>,
-    outs: Option<Sort>,
-    id_meta: &str,
-    app_meta: &str,
-) -> TC<Term> {
-    let symbol = &f.0.symbol;
-
-    // 1. we fetch the list of signatures of f (a list because of overloading).
-    let sigs = match env.symbol_table.get(symbol) {
-        None => identifier_not_found(symbol, id_meta),
-        Some(sigs) => Ok(sigs),
-    }?;
-
-    let print_struct = alg::AppFmt::new(&f, &args);
-
-    // 2. we check each signature using this closure.
-    if sigs.len() == 1 {
-        type_check_with_func_sig(
-            &print_struct,
-            env,
-            WithMeta::new(&f, id_meta),
-            &args,
-            &outs,
-            &sigs[0].0,
-            app_meta,
+/// This function, given `t` a term of some datatype, determines a map from its constructors to
+/// the sorts of arguments.
+pub(crate) fn tc_determine_datatype_sort_map<L>(
+    env: &mut TCEnvGen<L>,
+    t: &Term,
+    meta: &str,
+) -> TC<HashMap<Str, Vec<Sort>>> {
+    let so = t.get_sort(env);
+    let dt = env.get_datatype_dec(so.sort_name()).map_err(|_| {
+        format!(
+            "TC: sort {} of the given term{meta} is not a datatype!",
+            so.sort_name()
         )
-    } else {
-        // 3. if the function is overloaded, we try all signatures.
-        let mut tc_res = Err(format!(
-            "TC: overloaded function {f}{id_meta} does not have a case to match its list of arguments! '{print_struct}'",
-        ));
-        for (sig, _) in sigs {
-            tc_res = type_check_with_func_sig(
-                &print_struct,
-                env,
-                WithMeta::new(&f, id_meta),
-                &args,
-                &outs,
-                sig,
-                app_meta,
-            );
-            if tc_res.is_ok() {
-                break;
-            }
-        }
-        tc_res
-    }
-}
+    })?;
+    // monomorphization instantiates the sort variables, if exist.
+    let dt = dt.monomorphize(&so, env).map_err(|e| format!("TC: {e}"))?;
 
-fn check_sig_indices(
-    f: &QualifiedIdentifier,
-    meta_string: &str,
-    sig_indices: &[SigIndex],
-) -> TC<()> {
-    if sig_indices.len() != f.0.indices.len() {
-        return Err(format!(
-            "TC: function '{f}'{meta_string} expects {} indices but {} were given!",
-            sig_indices.len(),
-            f.0.indices.len()
-        ));
-    }
-    for (spec, i) in sig_indices.iter().zip(&f.0.indices) {
-        match (spec, i) {
-            (SigIndex::Numeral, Index::Numeral(_)) => {}
-            (SigIndex::Symbol(sym), Index::Symbol(s)) if *sym == *s => {}
-            (SigIndex::Hexadecimal, Index::Hexadecimal(_, _)) => {}
-            (SigIndex::Numeral, _) => {
-                return Err(format!(
-                    "TC: function '{f}'{meta_string} expects a numeral index, but {i} was given!",
-                ));
-            }
-            (SigIndex::Symbol(s), _) => {
-                return Err(format!(
-                    "TC: function '{f}'{meta_string} expects a symbolic index {s}, but {i} was given!",
-                ));
-            }
-            (SigIndex::Hexadecimal, _) => {
-                return Err(format!(
-                    "TC: function '{f}'{meta_string} expects a hexadecimal index, but {i} was given!",
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn check_bv_sig_indices(
-    f: &QualifiedIdentifier,
-    meta_string: &str,
-    m: usize,
-    params: &mut [Option<UBig>],
-) -> TC<()> {
-    if f.0.indices.len() != m {
-        return Err(format!(
-            "TC: function '{f}'{meta_string} expects {m} indices but {} were given!",
-            f.0.indices.len()
-        ));
-    }
-    for (i, idx) in f.0.indices.iter().enumerate() {
-        match idx {
-            Index::Numeral(n) => {
-                params[i] = Some(n.clone());
-            }
-            Index::Symbol(_) | Index::Hexadecimal(_, _) => {
-                return Err(format!(
-                    "TC: function '{f}'{meta_string} expects a numeral index, but {idx} was given!",
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-impl<Str, T> Typecheck<TCEnv<'_, '_, T>> for alg::Index<Str>
-where
-    Str: AllocatableString<Arena>,
-{
-    type Out = Index;
-
-    fn type_check(&self, env: &mut TCEnv<'_, '_, T>) -> TC<Self::Out> {
-        match self {
-            alg::Index::Numeral(n) => Ok(Index::Numeral(n.clone())),
-            alg::Index::Symbol(s) => Ok(Index::Symbol(s.allocate(env.arena_alt()))),
-            alg::Index::Hexadecimal(bs, n) => Ok(Index::Hexadecimal(bs.clone(), *n)),
-        }
-    }
-}
-
-impl<Str, T> Typecheck<TCEnv<'_, '_, T>> for alg::Identifier<Str>
-where
-    Str: AllocatableString<Arena>,
-{
-    type Out = Identifier;
-
-    fn type_check(&self, env: &mut TCEnv<'_, '_, T>) -> TC<Self::Out> {
-        Ok(Identifier {
-            symbol: self.symbol.allocate(env.arena_alt()),
-            indices: self
-                .indices
-                .iter()
-                .map(|ind| ind.type_check(env))
-                .collect::<TC<Vec<_>>>()?,
+    Ok(dt
+        .constructors
+        .iter()
+        .map(|ctor| {
+            (
+                ctor.ctor.clone(),
+                ctor.args.iter().map(|arg| arg.2.clone()).collect(),
+            )
         })
+        .collect())
+}
+
+/// Local scope state carried during type-checking.
+///
+/// - `loc`: the linked-list local variable environment (bindings from `let`, quantifiers, etc.)
+/// - `loc_inc`: incremental scope extensions accumulated during traversal
+/// - `scrutinee_map`: tracks datatype sort information for match scrutinees, used to
+///   resolve constructor patterns
+pub struct TCLocal<'b, T> {
+    pub(crate) loc: LocEnv<'b, Str, T>,
+    pub(crate) loc_inc: Vec<Vec<VarBinding<Str, T>>>,
+    pub(crate) scrutinee_map: HashMap<Term, HashMap<Str, Vec<Sort>>>,
+}
+
+impl<T> Default for TCLocal<'_, T> {
+    fn default() -> Self {
+        Self {
+            loc: LocEnv::Nil,
+            loc_inc: vec![],
+            scrutinee_map: Default::default(),
+        }
     }
 }
 
-impl<Str, So, T> Typecheck<TCEnv<'_, '_, T>> for alg::QualifiedIdentifier<Str, So>
+impl<T> Mapping for TCLocal<'_, T>
+where
+    T: Clone,
+{
+    type Key = Str;
+    type Value = (usize, T);
+
+    fn empty() -> Self {
+        Default::default()
+    }
+
+    fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
+        self.loc_inc.lookup(key).or_else(|| self.loc.lookup(key))
+    }
+}
+
+fn check_all_bool_terms<'a, E>(
+    terms: impl Iterator<Item = WithMeta<&'a Term, String>>,
+    e: &mut E,
+) -> TC<()>
+where
+    E: HasArenaAlt,
+{
+    for t in terms {
+        is_term_bool_alt(e, t.data, &t.meta)?;
+    }
+    Ok(())
+}
+
+impl<Str, So, L> Typecheck<TCEnvGen<'_, L>> for alg::QualifiedIdentifier<Str, So>
 where
     Str: AllocatableString<Arena>,
     So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    L: Mapping,
 {
     type Out = QualifiedIdentifier;
 
-    fn type_check(&self, env: &mut TCEnv<'_, '_, T>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Self::Out> {
         let i = self.0.type_check(env)?;
         let s = match &self.1 {
             None => None,
             Some(s) => Some(s.type_check(&mut env.with_empty_local())?),
         };
         Ok(alg::QualifiedIdentifier(i, s))
+    }
+}
+
+impl<St, So, T> TermRecursor<St, So, T> for TCEnv<'_, '_, Sort>
+where
+    St: AllocatableString<Arena> + Contains<T = String>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    T: Display + MetaData,
+{
+    type Out = Term;
+    type Attr = Attribute;
+    type Binding = VarBinding<Str, Term>;
+    type Pattern = Pattern;
+    type Arm = PatternArm;
+    type Err = String;
+
+    fn on_constant(
+        &mut self,
+        current: &T,
+        constant: &alg::Constant<St>,
+        sort: &Option<So>,
+    ) -> TC<Term> {
+        let c = constant_conv(constant, self);
+        let t = typed_constant(self, c)
+            .map_err(|e| format!("{e} for {current}{}", current.display_meta_data()))?;
+        if let Some(sort) = sort {
+            let sort = sort.type_check(&mut self.with_empty_local())?;
+            let s = t.get_sort(self);
+            if s != sort {
+                return sort_mismatch(&sort, &s, current, &current.display_meta_data());
+            }
+        }
+        Ok(t)
+    }
+
+    fn on_global(
+        &mut self,
+        current: &T,
+        id: &alg::QualifiedIdentifier<St, So>,
+        sort: &Option<So>,
+    ) -> TC<Term> {
+        let qid = id.type_check(self)?;
+        let sort = match sort {
+            None => None,
+            Some(sort) => Some(sort.type_check(&mut self.with_empty_local())?),
+        };
+        app::typed_qualified_identifier(self, qid, sort, &current.display_meta_data())
+    }
+
+    fn on_local(&mut self, current: &T, id: &alg::Local<St, So>) -> TC<Term> {
+        let symbol = id.symbol.allocate(self.arena);
+        match self.local.lookup(&symbol) {
+            None => Err(format!(
+                "TC: local variable {}{} is not bound!",
+                symbol.sym_quote(),
+                current.display_meta_data()
+            )),
+            Some((id, s)) => Ok(self.arena.local(alg::Local {
+                id,
+                symbol,
+                sort: Some(s),
+            })),
+        }
+    }
+
+    fn on_app(
+        &mut self,
+        current: &T,
+        id: &alg::QualifiedIdentifier<St, So>,
+        ts: &[T],
+        s: &Option<So>,
+        recs: Vec<Self::Out>,
+    ) -> TC<Term> {
+        // 1. first we make sure f is not a local variable.
+        check_global_var_locally(self, id.id_str())?;
+        let nf = id.type_check(self)?;
+
+        // 2. then we associate the type-checked arguments with potential location information
+        let args = ts
+            .iter()
+            .zip(recs)
+            .map(|(a, t)| WithMeta::new(t, a.display_meta_data()))
+            .collect();
+        let outs = match s {
+            None => None,
+            Some(outs) => Some(outs.type_check(&mut self.with_empty_local())?),
+        };
+
+        app::typed_app(
+            self,
+            nf,
+            args,
+            outs,
+            &id.id_str().display_meta_data(),
+            &current.display_meta_data(),
+        )
+    }
+
+    fn on_let_binding(
+        &mut self,
+        _current: &T,
+        vs: &[VarBinding<St, T>],
+        _body: &T,
+        binding_idx: usize,
+        binding_rec: Self::Out,
+    ) -> Result<Self::Binding, Self::Err> {
+        let v = &vs[binding_idx];
+        let sym = v.0.allocate(self.arena);
+        let new_id = self.arena.new_local();
+        Ok(VarBinding(sym, new_id, binding_rec))
+    }
+
+    fn setup_let_scope(
+        &mut self,
+        _current: &T,
+        _vs: &[VarBinding<St, T>],
+        _body: &T,
+        vs_rec: &[Self::Binding],
+    ) -> Result<(), Self::Err> {
+        let sorts = vs_rec
+            .iter()
+            .map(|v| VarBinding(v.0.clone(), v.1, v.2.get_sort(self)))
+            .collect::<Vec<_>>();
+        sanitize_bindings(&sorts, |v| v.0.clone())?;
+        self.local.loc_inc.push(sorts);
+        Ok(())
+    }
+
+    fn on_let(
+        &mut self,
+        _current: &T,
+        _vs: &[VarBinding<St, T>],
+        _body: &T,
+        vs_rec: Vec<Self::Binding>,
+        body_rec: Self::Out,
+    ) -> TC<Term> {
+        self.local.loc_inc.pop();
+        Ok(self.arena.let_term(vs_rec, body_rec))
+    }
+
+    fn setup_quantifier_scope(
+        &mut self,
+        _current: &T,
+        vs: &[VarBinding<St, So>],
+        _t: &T,
+        _is_forall: bool,
+    ) -> Result<(), Self::Err> {
+        let sorts = vs
+            .iter()
+            .map(|v| {
+                let sym = v.0.allocate(self.arena);
+                let sort = v.2.type_check(&mut self.with_empty_local())?;
+                Ok(VarBinding(sym, self.arena.new_local(), sort))
+            })
+            .collect::<TC<Vec<_>>>()?;
+        sanitize_bindings(&sorts, |v| v.0.clone())?;
+        self.local.loc_inc.push(sorts);
+        Ok(())
+    }
+
+    fn on_exists(
+        &mut self,
+        current: &T,
+        _vs: &[VarBinding<St, So>],
+        t: &T,
+        t_rec: Self::Out,
+    ) -> TC<Term> {
+        let sorts =
+            self.local.loc_inc.pop().ok_or_else(|| {
+                format!("TC: scoping error, failed to manage scope for {current}")
+            })?;
+        is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
+        Ok(self.arena.exists(sorts, t_rec))
+    }
+
+    fn on_forall(
+        &mut self,
+        current: &T,
+        _vs: &[VarBinding<St, So>],
+        t: &T,
+        t_rec: Self::Out,
+    ) -> TC<Term> {
+        let sorts =
+            self.local.loc_inc.pop().ok_or_else(|| {
+                format!("TC: scoping error, failed to manage scope for {current}")
+            })?;
+        is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
+        Ok(self.arena.forall(sorts, t_rec))
+    }
+
+    fn setup_match_case_scope(
+        &mut self,
+        _current: &T,
+        scrutinee: &T,
+        cases: &[alg::PatternArm<St, T>],
+        scrutinee_rec: &Self::Out,
+        case_idx: usize,
+    ) -> TC<Self::Pattern> {
+        if !self.meta.theories.contains(&Theory::Datatypes) {
+            return Err("TC: current logic does not support the theory of datatypes!".into());
+        }
+
+        // We determine the sorts of constructors if not already exists
+        if !self.local.scrutinee_map.contains_key(scrutinee_rec) {
+            let constructors = tc_determine_datatype_sort_map(
+                self,
+                scrutinee_rec,
+                &scrutinee.display_meta_data(),
+            )?;
+            self.local
+                .scrutinee_map
+                .insert(scrutinee_rec.clone(), constructors);
+        }
+        let so = scrutinee_rec.get_sort(self);
+        let constructors = self.local.scrutinee_map.get(scrutinee_rec).unwrap();
+        let case = &cases[case_idx];
+        let pattern = match &case.pattern {
+            alg::Pattern::Ctor(ctor) => {
+                let ctr = ctor.allocate(self.arena);
+                match constructors.get(&ctr) {
+                    None => {
+                        return Err(format!(
+                            "case {ctr}{} is not a constructor!",
+                            ctor.display_meta_data()
+                        ));
+                    }
+                    Some(args) => {
+                        if !args.is_empty() {
+                            return Err(format!(
+                                "case {ctr}{} is not a constructor with a non-empty argument list!",
+                                ctor.display_meta_data()
+                            ));
+                        }
+                    }
+                }
+                self.local.loc_inc.push(vec![]);
+                Pattern::Ctor(ctr)
+            }
+            alg::Pattern::Wildcard(ctor) => {
+                // in this case, [ctor] is either a wildcard variable, or a nullary constructor.
+                // depending on the case, we just need to TC with an extra variable [ctor],
+                // if it is a wildcard.
+                let (sorts, pattern) = match ctor {
+                    None => (vec![], Pattern::Wildcard(None)),
+                    Some((ctor, _)) => {
+                        let ctr = ctor.allocate(self.arena);
+                        match constructors.get(&ctr) {
+                            None => {
+                                let id = self.arena.new_local();
+                                (
+                                    vec![VarBinding(ctr.clone(), id, so.clone())],
+                                    Pattern::Wildcard(Some((ctr.clone(), id))),
+                                )
+                            }
+                            Some(args) => {
+                                if args.is_empty() {
+                                    (vec![], Pattern::Ctor(ctr.clone()))
+                                } else {
+                                    return Err(format!(
+                                        "case {ctr}{} is not a constructor with a non-empty argument list!",
+                                        ctr.display_meta_data()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                };
+                sanitize_bindings(&sorts, |v| v.0.clone())?;
+                self.local.loc_inc.push(sorts);
+                pattern
+            }
+            alg::Pattern::Applied { ctor, arguments } => {
+                // in this case, [ctor] must be a constructor, so we must extract its signature
+                // from [constructors].
+                let ctr = ctor.allocate(self.arena);
+                match constructors.get(&ctr) {
+                    None => {
+                        return Err(format!(
+                            "TC: {ctr}{} is not a constructor of sort {so}!",
+                            ctor.display_meta_data()
+                        ));
+                    }
+                    Some(sig) => {
+                        // first, the signature and the provided arguments must have the same
+                        // length.
+                        if sig.len() != arguments.len() {
+                            return Err(format!(
+                                "TC: {ctr}{} include {} arguments, but {} are required of sorts {}!",
+                                ctor.display_meta_data(),
+                                arguments.len(),
+                                sig.len(),
+                                sig.iter()
+                                    .map(|s| s.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ));
+                        }
+                        let arguments = arguments
+                            .iter()
+                            .map(|o| {
+                                o.as_ref().map(|(name, _)| {
+                                    let symbol = name.allocate(self.arena);
+                                    let fresh_id = self.arena.new_local();
+                                    (symbol, fresh_id)
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let sorts = arguments
+                            .iter()
+                            .zip(sig)
+                            .filter_map(|(o, s)| {
+                                o.as_ref()
+                                    .map(|(name, id)| alg::VarBinding(name.clone(), *id, s.clone()))
+                            })
+                            .collect::<Vec<_>>();
+                        sanitize_bindings(&sorts, |v| v.0.clone())?;
+                        self.local.loc_inc.push(sorts);
+                        Pattern::Applied {
+                            ctor: ctr,
+                            arguments,
+                        }
+                    }
+                }
+            }
+        };
+        Ok(pattern)
+    }
+
+    fn on_match_arm(
+        &mut self,
+        _current: &T,
+        _scrutinee: &T,
+        _cases: &[alg::PatternArm<St, T>],
+        _case_idx: usize,
+        current_pattern: Self::Pattern,
+        arm: Self::Out,
+    ) -> Result<Self::Arm, Self::Err> {
+        self.local.loc_inc.pop();
+        Ok(PatternArm {
+            pattern: current_pattern,
+            body: arm,
+        })
+    }
+
+    fn on_match(
+        &mut self,
+        current: &T,
+        _scrutinee: &T,
+        _cases: &[alg::PatternArm<St, T>],
+        scrutinee_rec: Self::Out,
+        cases_rec: Vec<Self::Arm>,
+    ) -> TC<Term> {
+        let constructors = self.local.scrutinee_map.get(&scrutinee_rec).unwrap();
+        let mut unseen_ctors: HashSet<Str> = constructors.keys().cloned().collect();
+        let mut covered = false;
+        for case in &cases_rec {
+            match &case.pattern {
+                alg::Pattern::Wildcard(_) => {
+                    covered = true;
+                    break;
+                }
+                alg::Pattern::Ctor(ctor) | alg::Pattern::Applied { ctor, .. } => {
+                    unseen_ctors.remove(ctor);
+                }
+            }
+        }
+        if unseen_ctors.is_empty() {
+            covered = true;
+        }
+        if !covered {
+            Err(format!(
+                "TC: arms for constructors {} are needed in the match expression{}!",
+                unseen_ctors
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                current.display_meta_data()
+            ))
+        } else {
+            Ok(self.arena.matching(scrutinee_rec, cases_rec))
+        }
+    }
+
+    fn on_annotated(
+        &mut self,
+        _current: &T,
+        _t: &T,
+        _anns: &[alg::Attribute<St, T>],
+        t_rec: Self::Out,
+        anns_rec: Vec<Self::Attr>,
+    ) -> TC<Term> {
+        Ok(self.arena.annotated(t_rec, anns_rec))
+    }
+
+    fn on_attribute_keyword(&mut self, _current: &T, keyword: &Keyword) -> TC<Self::Attr> {
+        Ok(Attribute::Keyword(keyword.clone()))
+    }
+
+    fn on_attribute_constant(
+        &mut self,
+        _current: &T,
+        keyword: &Keyword,
+        constant: &alg::Constant<St>,
+    ) -> TC<Self::Attr> {
+        Ok(Attribute::Constant(
+            keyword.clone(),
+            constant_conv(constant, self),
+        ))
+    }
+
+    fn on_attribute_symbol(
+        &mut self,
+        _current: &T,
+        keyword: &Keyword,
+        symbol: &St,
+    ) -> TC<Self::Attr> {
+        Ok(Attribute::Symbol(
+            keyword.clone(),
+            symbol.allocate(self.arena),
+        ))
+    }
+
+    fn on_attribute_named(&mut self, _current: &T, name: &St) -> TC<Self::Attr> {
+        Ok(Attribute::Named(name.allocate(self.arena)))
+    }
+
+    fn on_attribute_pattern(
+        &mut self,
+        _current: &T,
+        _patterns: &[T],
+        patterns_rec: Vec<Self::Out>,
+    ) -> TC<Self::Attr> {
+        Ok(Attribute::Pattern(patterns_rec))
+    }
+
+    fn on_eq(
+        &mut self,
+        _current: &T,
+        _a: &T,
+        b: &T,
+        a_rec: Self::Out,
+        b_rec: Self::Out,
+    ) -> TC<Term> {
+        typed_eq(self, a_rec, b_rec, &b.display_meta_data())
+    }
+
+    fn on_distinct(&mut self, _current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
+        typed_distinct(
+            self,
+            ts.iter()
+                .zip(ts_rec)
+                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data()))
+                .collect(),
+        )
+    }
+
+    fn on_and(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
+        if ts_rec.is_empty() {
+            return Err(format!(
+                "TC: 'and'{} requires at least one argument!",
+                current.display_meta_data()
+            ));
+        }
+
+        check_all_bool_terms(
+            ts.iter()
+                .zip(&ts_rec)
+                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+            self,
+        )?;
+        Ok(self.arena.and(ts_rec))
+    }
+
+    fn on_or(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
+        if ts_rec.is_empty() {
+            return Err(format!(
+                "TC: 'and'{} requires at least one argument!",
+                current.display_meta_data()
+            ));
+        }
+
+        check_all_bool_terms(
+            ts.iter()
+                .zip(&ts_rec)
+                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+            self,
+        )?;
+        Ok(self.arena.or(ts_rec))
+    }
+
+    fn on_xor(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
+        if ts_rec.is_empty() {
+            return Err(format!(
+                "TC: 'and'{} requires at least one argument!",
+                current.display_meta_data()
+            ));
+        }
+
+        check_all_bool_terms(
+            ts.iter()
+                .zip(&ts_rec)
+                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+            self,
+        )?;
+        Ok(self.arena.xor(ts_rec))
+    }
+
+    fn on_not(&mut self, _current: &T, t: &T, t_rec: Self::Out) -> TC<Term> {
+        typed_not(self, t_rec, &t.display_meta_data())
+    }
+
+    fn on_implies(
+        &mut self,
+        current: &T,
+        ts: &[T],
+        t: &T,
+        ts_rec: Vec<Self::Out>,
+        t_rec: Self::Out,
+    ) -> TC<Term> {
+        if ts_rec.is_empty() {
+            return Err(format!(
+                "TC: implies '=>'{} should take at least one antecedent!",
+                current.display_meta_data()
+            ));
+        }
+        check_all_bool_terms(
+            ts.iter()
+                .zip(&ts_rec)
+                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+            self,
+        )?;
+
+        is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
+        Ok(self.arena.implies(ts_rec, t_rec))
+    }
+
+    fn on_ite(
+        &mut self,
+        _current: &T,
+        b: &T,
+        _t: &T,
+        e: &T,
+        b_rec: Self::Out,
+        t_rec: Self::Out,
+        e_rec: Self::Out,
+    ) -> TC<Term> {
+        is_term_bool_alt(self, &b_rec, &b.display_meta_data())?;
+        let ts = t_rec.get_sort(self);
+        let es = e_rec.get_sort(self);
+        if ts != es {
+            sort_mismatch(&ts, &es, e, &e.display_meta_data())
+        } else {
+            Ok(self.arena.ite(b_rec, t_rec, e_rec))
+        }
+    }
+}
+
+impl<St, So, T> Typecheck<TCEnv<'_, '_, Sort>> for T
+where
+    St: AllocatableString<Arena> + Contains<T = String>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
+{
+    type Out = Term;
+
+    fn type_check(&self, env: &mut TCEnvGen<'_, TCLocal<Sort>>) -> TC<Self::Out> {
+        env.recurse_on_term(self)
     }
 }
 
@@ -1032,7 +1136,7 @@ where
 {
     type Out = Attribute;
 
-    fn type_check(&self, env: &mut TCEnv<'_, '_, Sort>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, TCLocal<Sort>>) -> TC<Self::Out> {
         match self {
             alg::Attribute::Keyword(kw) => Ok(Attribute::Keyword(kw.clone())),
             alg::Attribute::Constant(kw, c) => {
@@ -1050,623 +1154,4 @@ where
             )),
         }
     }
-}
-
-/// Type-check a quantifier that we know is of the form `(_ bvX n)`.
-fn handle_special_identifiers_of_bv<Str, So>(
-    qid: &alg::QualifiedIdentifier<Str, So>,
-    cap: Captures,
-    env: &mut TCEnv<Sort>,
-    sort: Option<Sort>,
-    meta_string: &str,
-) -> TC<Term>
-where
-    Str: Display + Contains<T = String>,
-    So: Display,
-{
-    let x = UBig::from_str(cap.get(1).unwrap().as_str())
-        .map_err(|e| format!("TC: numeric conversion error: {e}{meta_string}"))?;
-    if qid.0.indices.len() != 1 {
-        return Err(format!(
-            "TC: {qid}{meta_string} is a bit vector, so it can only have exactly one numeral index!"
-        ));
-    }
-    let n = match &qid.0.indices[0] {
-        alg::Index::Numeral(n) => match n.to_usize() {
-            None | Some(0) => {
-                return Err(format!(
-                    "TC: {qid}{meta_string} specifies a bit vector of an inappropriate length!"
-                ));
-            }
-            Some(n) => n,
-        },
-        _ => {
-            return Err(format!(
-                "TC: {qid}{meta_string} is a bit vector, so it can only have one exactly numeral index!"
-            ));
-        }
-    };
-    if x.bit_len() > n {
-        return Err(format!(
-            "TC: {qid}{meta_string} requires {} bits, but {n} bits are specified! there are insufficient bits!",
-            x.bit_len()
-        ));
-    }
-    let mut bv = Vec::new();
-    bv.extend(x.to_le_bytes());
-    // pad bv to the right number of bytes
-    let mut c = n.saturating_sub(8 * bv.len());
-    while c != 0 {
-        bv.push(0);
-        c = c.saturating_sub(8);
-    }
-    let c = alg::Constant::Binary(bv, n);
-    let s = c.type_check(env)?;
-    if let Some(sort) = sort
-        && s != sort
-    // we know it's a bv, so there is no need to invoke substitution
-    {
-        return sort_mismatch(&s, &sort, c, meta_string);
-    }
-    Ok(env.arena.constant(c, Some(s)))
-}
-
-pub(crate) fn typed_qualified_identifier(
-    env: &mut TCEnv<Sort>,
-    qid: QualifiedIdentifier,
-    sort: Option<Sort>,
-    meta_string: &str,
-) -> TC<Term> {
-    if env.theories.contains(&Theory::Bitvectors) {
-        // special handling for (_ bvX n)
-        // c.f. https://smt-lib.org/logics-all.shtml#QF_BV
-        let cap = BV_RE.captures(qid.id_str());
-        if let Some(cap) = cap {
-            return handle_special_identifiers_of_bv(&qid, cap, env, sort, meta_string);
-        }
-    }
-    let symbol = qid.id_str();
-    match env.local.lookup(symbol) {
-        None => {
-            // in this case, we hit a global variable
-            let sig = match env.symbol_table.get(symbol) {
-                None => {
-                    return identifier_not_found(symbol, meta_string);
-                }
-                Some(sigs) => {
-                    if sigs.len() != 1 {
-                        return Err(format!(
-                            "TC: identifier {qid}{meta_string} should not be overloaded!"
-                        ));
-                    }
-                    &sigs[0].0
-                }
-            };
-            match sig {
-                Sig::VarLenFunc(_, _, _) => Err(format!(
-                    "TC: {qid}{meta_string} has a signature of a variable length function, which cannot be used as a variable!"
-                )),
-                Sig::ParFunc(idx, pars, inps, out) => {
-                    if !inps.is_empty() {
-                        return Err(format!(
-                            "TC: {qid}{meta_string} has signature {sig}, which cannot be used as a variable!"
-                        ));
-                    }
-                    check_sig_indices(&qid, meta_string, idx)?;
-
-                    let reference_ground_sort = match (&qid.1, sort) {
-                        (Some(s), Some(sort)) => {
-                            if *s != sort {
-                                return sort_mismatch(s, &sort, &qid, meta_string);
-                            } else {
-                                Some(sort)
-                            }
-                        }
-                        (Some(s), None) => Some(s.clone()),
-                        (None, Some(sort)) => Some(sort),
-                        (None, None) => None,
-                    };
-
-                    match reference_ground_sort {
-                        None => {
-                            // in this case, the variable does not have a known ground sort, so
-                            // we ask this variable has a declared ground sort.
-                            if pars.is_empty() {
-                                Ok(env.arena.global(qid, Some(out.clone())))
-                            } else {
-                                Err(format!(
-                                    "TC: {qid}{meta_string} has a polymorphic signature {sig}, which requires an explicit sort ascription!"
-                                ))
-                            }
-                        }
-                        Some(s) => {
-                            // now we prepare a substitution
-                            let mut subst: SortSubst = unif::empty_subst(pars);
-                            // we first unify the ascribed sort with the sort in the symbol table
-                            if !unif::sort_unification(&mut subst, out, &s)? {
-                                return sort_mismatch(&s, out, &qid, meta_string);
-                            }
-
-                            // then we check whether all variables have been instantiated
-                            check_subst_instantiation(&subst, &qid)?;
-
-                            // now we have passed all tests
-                            if subst.is_empty() {
-                                Ok(env.arena.global(qid, Some(s)))
-                            } else {
-                                // if this variable requires non-trivial sort unification, then
-                                // we should tag the ground sort.
-                                Ok(env.arena.global(qid.with_sort(s.clone()), Some(s)))
-                            }
-                        }
-                    }
-                }
-                Sig::BvFunc(_, _, _, _, _) | Sig::BvVarLenFunc(_, _, _, _) | Sig::BvConcat => {
-                    Err(format!(
-                        "TC: {qid}{meta_string} has a signature of a bit vector function, which cannot be used as a variable!"
-                    ))
-                }
-            }
-        }
-        Some((l, s)) => {
-            // in this case, we convert an untyped global variable into a typed local variable.
-            if !qid.0.indices.is_empty() {
-                Err(format!(
-                    "TC: {qid}{meta_string} is a local variable and should not have indices!"
-                ))
-            } else if qid.1.as_ref().map(|qs| *qs != s).unwrap_or(false)
-                || sort.as_ref().map(|qs| *qs != s).unwrap_or(false)
-            {
-                Err(format!(
-                    "TC: {qid}{meta_string} is expected to have sort {s}!"
-                ))
-            } else {
-                Ok(env.arena.local(alg::Local {
-                    id: l,
-                    symbol: symbol.clone(),
-                    sort: Some(s.clone()),
-                }))
-            }
-        }
-    }
-}
-
-pub(crate) fn typed_constant(env: &mut TCEnv<Sort>, c: Constant) -> TC<Term> {
-    let s = c.type_check(env)?;
-    Ok(env.arena.constant(c, Some(s)))
-}
-
-pub(crate) fn typed_eq(env: &mut TCEnv<Sort>, at: Term, bt: Term, bt_meta: &str) -> TC<Term> {
-    let sa = at.get_sort(env);
-    let sb = bt.get_sort(env);
-    if sa == sb {
-        Ok(env.arena.eq(at, bt))
-    } else {
-        sort_mismatch(&sa, &sb, bt, bt_meta)
-    }
-}
-
-pub(crate) fn typed_distinct(env: &mut TCEnv<Sort>, ts: Vec<WithMeta<Term, String>>) -> TC<Term> {
-    if ts.len() < 2 {
-        return Err("TC: distinct requires at least two terms!".into());
-    }
-    let s = ts[0].data.get_sort(env);
-    let mut terms = vec![];
-    for WithMeta { data: t, meta } in ts {
-        let ts = t.get_sort(env);
-        if s != ts {
-            return sort_mismatch(&s, &ts, t, &meta);
-        }
-        terms.push(t);
-    }
-    Ok(env.arena.distinct(terms))
-}
-
-pub(crate) fn typed_not(env: &mut TCEnv<Sort>, t: Term, meta: &str) -> TC<Term> {
-    is_term_bool_alt(env, &t, meta)?;
-    Ok(env.arena.not(t))
-}
-
-/// this function determines whether a given term `t` is a datatype, and if it is the case,
-/// the function returns the declaration of the datatype and a sort substitution for sort variables.
-fn tc_determine_datatype_dec<'a>(
-    env: &mut TCEnv<'a, '_, Sort>,
-    t: &Term,
-    meta: &str,
-) -> TC<(&'a DatatypeDec, SortSubst)> {
-    let so = t.get_sort(env);
-    let sort_name = so.repr().0.symbol.clone();
-    let dt = env
-        .get_datatype_dec(&sort_name)
-        .map_err(|_| format!("TC: sort {sort_name} of the given term{meta} is not a datatype!"))?;
-    let mut subst: SortSubst = unif::empty_subst(&dt.params);
-    let expected = env.arena.sort_n_params(sort_name, dt.params.clone());
-    if !unif::sort_unification(&mut subst, &expected, &so)? {
-        return Err(format!(
-            "TC: {t}{meta} has sort {so}, which fails to unify with {expected}!"
-        ));
-    }
-    check_subst_instantiation(&subst, t)?;
-    Ok((dt, subst))
-}
-
-/// This function, given `t` a term of some datatype, determines a map from its constructors to
-/// the sorts of arguments.
-pub(crate) fn tc_determine_datatype_sort_map(
-    env: &mut TCEnv<'_, '_, Sort>,
-    t: &Term,
-    meta: &str,
-) -> TC<HashMap<Str, Vec<Sort>>> {
-    let (dt, subst) = tc_determine_datatype_dec(env, t, meta)?;
-    // now at this point, we know how to instantiate all sort variables.
-    Ok(dt
-        .constructors
-        .iter()
-        .map(|ctor| {
-            (
-                ctor.ctor.clone(),
-                ctor.args
-                    .iter()
-                    .map(|arg| unif::apply_subst(env, &subst, &arg.2))
-                    .collect(),
-            )
-        })
-        .collect())
-}
-
-impl<St, So, T> Typecheck<TCEnv<'_, '_, Sort>> for T
-where
-    St: AllocatableString<Arena> + Contains<T = String>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
-    T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
-{
-    type Out = Term;
-
-    fn type_check(&self, env: &mut TCEnv<Sort>) -> TC<Self::Out> {
-        match self.inner().repr() {
-            alg::Term::Constant(c, _) => {
-                let c = constant_conv(c, env);
-                typed_constant(env, c)
-                    .map_err(|e| format!("{e} for {self}{}", self.display_meta_data()))
-            }
-            alg::Term::Global(qid, sort) => {
-                let qid = qid.type_check(env)?;
-                let sort = match sort {
-                    None => None,
-                    Some(sort) => Some(sort.type_check(&mut env.with_empty_local())?),
-                };
-                typed_qualified_identifier(env, qid, sort, &self.display_meta_data())
-            }
-            alg::Term::Local(id) => {
-                let symbol = id.symbol.allocate(env.arena_alt());
-                match env.local.lookup(&symbol) {
-                    None => Err(format!(
-                        "TC: local variable {}{} is not bound!",
-                        symbol.sym_quote(),
-                        self.display_meta_data()
-                    )),
-                    Some((id, s)) => Ok(env.arena_alt().local(alg::Local {
-                        id,
-                        symbol,
-                        sort: Some(s),
-                    })),
-                }
-            }
-            alg::Term::App(f, args, outs) => {
-                // 1. first we make sure f is not a local variable.
-                check_global_var_locally(env, f.id_str())?;
-                let nf = f.type_check(env)?;
-
-                // 2. then we typecheck the arguments
-                let args = args
-                    .iter()
-                    .map(|a| Ok(WithMeta::new(a.type_check(env)?, a.display_meta_data())))
-                    .collect::<TC<Vec<_>>>()?;
-                let outs = match outs {
-                    None => None,
-                    Some(outs) => Some(outs.type_check(&mut env.with_empty_local())?),
-                };
-
-                typed_app(
-                    env,
-                    nf,
-                    args,
-                    outs,
-                    &f.id_str().display_meta_data(),
-                    &self.display_meta_data(),
-                )
-            }
-            alg::Term::Let(vs, t) => {
-                let ext = vs
-                    .iter()
-                    .map(|v| {
-                        let t = v.2.type_check(env)?;
-                        let vid = env.arena.new_local();
-                        let sym = env.arena.allocate_symbol(v.0.inner());
-                        Ok(VarBinding(sym, vid, t))
-                    })
-                    .collect::<TC<Vec<_>>>()?;
-                let sorts = ext
-                    .iter()
-                    .map(|v| VarBinding(v.0.clone(), v.1, v.2.get_sort(env)))
-                    .collect::<Vec<_>>();
-                let nt = tc_with_local_env(&sorts, t, env)?;
-                Ok(env.arena.let_term(ext, nt))
-            }
-            alg::Term::Exists(vs, t) => {
-                let (vs, nt) = tc_binder(vs, t, env)?;
-                Ok(env.arena.exists(vs, nt))
-            }
-            alg::Term::Forall(vs, t) => {
-                let (vs, nt) = tc_binder(vs, t, env)?;
-                Ok(env.arena.forall(vs, nt))
-            }
-            alg::Term::Annotated(t, ats) => {
-                let nt = t.type_check(env)?;
-                let nats = ats
-                    .iter()
-                    .map(|a| a.type_check(env))
-                    .collect::<TC<Vec<_>>>()?;
-                Ok(env.arena.annotated(nt, nats))
-            }
-            alg::Term::Eq(a, b) => {
-                let at = a.type_check(env)?;
-                let bt = b.type_check(env)?;
-                typed_eq(env, at, bt, &b.display_meta_data())
-            }
-            alg::Term::Distinct(ts) => {
-                let nts = ts
-                    .iter()
-                    .map(|t| Ok(WithMeta::new(t.type_check(env)?, t.display_meta_data())))
-                    .collect::<TC<Vec<_>>>()?;
-                typed_distinct(env, nts)
-            }
-            alg::Term::And(ts) => {
-                if ts.is_empty() {
-                    return Err(format!(
-                        "TC: 'and'{} requires at least one argument!",
-                        self.display_meta_data()
-                    ));
-                }
-                let nts = tc_vec_sort_bool(ts, env)?;
-                Ok(env.arena.and(nts))
-            }
-            alg::Term::Or(ts) => {
-                if ts.is_empty() {
-                    return Err(format!(
-                        "TC: 'or'{} requires at least one argument!",
-                        self.display_meta_data()
-                    ));
-                }
-                let nts = tc_vec_sort_bool(ts, env)?;
-                Ok(env.arena.or(nts))
-            }
-            alg::Term::Xor(ts) => {
-                if ts.len() < 2 {
-                    return Err(format!(
-                        "TC: 'xor'{} requires at least two arguments!",
-                        self.display_meta_data()
-                    ));
-                }
-                let nts = tc_vec_sort_bool(ts, env)?;
-                Ok(env.arena.xor(nts))
-            }
-            alg::Term::Not(t) => {
-                let nt = t.type_check(env)?;
-                typed_not(env, nt, &t.display_meta_data())
-            }
-            alg::Term::Implies(ts, t) => {
-                if ts.is_empty() {
-                    return Err(format!(
-                        "TC: implies '=>'{} should take at least one left hand side!",
-                        self.display_meta_data()
-                    ));
-                }
-                let nts = tc_vec_sort_bool(ts, env)?;
-                let nt = t.type_check(env)?;
-                is_term_bool_alt(env, &nt, &t.display_meta_data())?;
-                Ok(env.arena.implies(nts, nt))
-            }
-            alg::Term::Ite(c, t, e) => {
-                let nc = c.type_check(env)?;
-                is_term_bool_alt(env, &nc, &c.display_meta_data())?;
-                let nt = t.type_check(env)?;
-                let ne = e.type_check(env)?;
-                let ts = nt.get_sort(env);
-                let es = ne.get_sort(env);
-                if ts != es {
-                    sort_mismatch(&ts, &es, e, &e.display_meta_data())
-                } else {
-                    Ok(env.arena.ite(nc, nt, ne))
-                }
-            }
-            alg::Term::Matching(t, arms) => {
-                if !env.theories.contains(&Theory::Datatypes) {
-                    return Err(
-                        "TC: current logic does not support the theory of datatypes!".into(),
-                    );
-                }
-
-                // 1. we type-check the scrutinee
-                let nt = t.type_check(env)?;
-
-                // 2. then we determine the sorts of constructors
-                let so = nt.get_sort(env);
-                let constructors =
-                    tc_determine_datatype_sort_map(env, &nt, &t.display_meta_data())?;
-
-                // now at this point, we know how to instantiate all sort variables.
-
-                // 3. preparation work
-                let mut unseen_ctors: HashSet<Str> = constructors.keys().cloned().collect();
-                let mut covered = false;
-
-                // 4. check the arms
-                let mut narms = vec![];
-                // need to make sure all branches have the same sort
-                let mut body_sort = None;
-                for arm in arms {
-                    match &arm.pattern {
-                        alg::Pattern::Ctor(ctor) => {
-                            let ctr = ctor.allocate(env.arena);
-                            match constructors.get(&ctr) {
-                                None => {
-                                    return Err(format!(
-                                        "case {ctr}{} is not a constructor!",
-                                        ctor.display_meta_data()
-                                    ));
-                                }
-                                Some(args) => {
-                                    if !args.is_empty() {
-                                        return Err(format!(
-                                            "case {ctr}{} is not a constructor with a non-empty argument list!",
-                                            ctor.display_meta_data()
-                                        ));
-                                    }
-                                }
-                            }
-                            // remove the current constructor from the unseen ones.
-                            unseen_ctors.remove(&ctr);
-                            let body = tc_match_case_body(env, &[], &arm.body, &mut body_sort)?;
-                            narms.push(alg::PatternArm {
-                                pattern: Pattern::Ctor(ctr),
-                                body,
-                            });
-                        }
-                        alg::Pattern::Wildcard(ctor) => {
-                            // in this case, [ctor] is either a wildcard variable, or a nullary constructor.
-                            // depending on the case, we just need to TC with an extra variable [ctor],
-                            // if it is a wildcard.
-                            let (sorts, pattern) = match ctor {
-                                None => (vec![], Pattern::Wildcard(None)),
-                                Some((ctor, id)) => {
-                                    let ctr = ctor.allocate(env.arena_alt());
-                                    match constructors.get(&ctr) {
-                                        None => (
-                                            vec![alg::VarBinding(ctr.clone(), *id, so.clone())],
-                                            Pattern::Wildcard(Some((ctr.clone(), *id))),
-                                        ),
-                                        Some(args) => {
-                                            if args.is_empty() {
-                                                // remove the current constructor from the unseen ones.
-                                                unseen_ctors.remove(&ctr);
-
-                                                (vec![], Pattern::Ctor(ctr.clone()))
-                                            } else {
-                                                return Err(format!(
-                                                    "case {ctr}{} is not a constructor with a non-empty argument list!",
-                                                    ctr.display_meta_data()
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            };
-                            let body = tc_match_case_body(env, &sorts, &arm.body, &mut body_sort)?;
-                            narms.push(alg::PatternArm { pattern, body });
-                            covered = true;
-                        }
-                        alg::Pattern::Applied { ctor, arguments } => {
-                            // in this case, [ctor] must be a constructor, so we must extract its signature
-                            // from [constructors].
-                            let ctr = ctor.allocate(env.arena_alt());
-                            match constructors.get(&ctr) {
-                                None => {
-                                    return Err(format!(
-                                        "TC: {ctr}{} is not a constructor of sort {so}!",
-                                        ctor.display_meta_data()
-                                    ));
-                                }
-                                Some(sig) => {
-                                    // first, the signature and the provided arguments must have the same
-                                    // length.
-                                    if sig.len() != arguments.len() {
-                                        return Err(format!(
-                                            "TC: {ctr}{} include {} arguments, but {} are required of sorts {}!",
-                                            ctor.display_meta_data(),
-                                            arguments.len(),
-                                            sig.len(),
-                                            sig.iter()
-                                                .map(|s| s.to_string())
-                                                .collect::<Vec<_>>()
-                                                .join(", ")
-                                        ));
-                                    }
-                                    // remove the current constructor from the unseen ones.
-                                    unseen_ctors.remove(&ctr);
-                                    let arguments = arguments
-                                        .iter()
-                                        .map(|o| {
-                                            o.as_ref().map(|(name, _)| {
-                                                let symbol =
-                                                    env.arena.allocate_symbol(name.inner());
-                                                let fresh_id = env.arena.new_local();
-                                                (symbol, fresh_id)
-                                            })
-                                        })
-                                        .collect::<Vec<_>>();
-                                    let sorts = arguments
-                                        .iter()
-                                        .zip(sig)
-                                        .filter_map(|(o, s)| {
-                                            o.as_ref().map(|(name, id)| {
-                                                alg::VarBinding(name.clone(), *id, s.clone())
-                                            })
-                                        })
-                                        .collect::<Vec<_>>();
-                                    let body =
-                                        tc_match_case_body(env, &sorts, &arm.body, &mut body_sort)?;
-                                    narms.push(alg::PatternArm {
-                                        pattern: Pattern::Applied {
-                                            ctor: ctr,
-                                            arguments,
-                                        },
-                                        body,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                if unseen_ctors.is_empty() {
-                    covered = true;
-                }
-                if !covered {
-                    Err(format!(
-                        "TC: arms for constructors {} are needed in the match expression{}!",
-                        unseen_ctors
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        self.display_meta_data()
-                    ))
-                } else {
-                    Ok(env.arena.matching(nt, narms))
-                }
-            }
-        }
-    }
-}
-
-fn tc_match_case_body<T>(
-    env: &mut TCEnv<'_, '_, Sort>,
-    bindings: &[VarBinding<Str, Sort>],
-    body: &T,
-    body_sort: &mut Option<Sort>,
-) -> TC<Term>
-where
-    T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort>, Out = Term>,
-    T: MetaData,
-{
-    let nbody = tc_with_local_env(bindings, body, env)?;
-    let sort = nbody.get_sort(env);
-    if let Some(s) = body_sort.as_ref() {
-        if *s != sort {
-            return sort_mismatch(s, &sort, nbody, &body.display_meta_data());
-        }
-    } else {
-        *body_sort = Some(sort);
-    }
-    Ok(nbody)
 }

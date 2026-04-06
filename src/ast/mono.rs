@@ -13,7 +13,7 @@ use crate::ast::{
     ATerm, Attribute, ConstructorDec, DatatypeDec, HasArenaAlt, Local, QualifiedIdentifier, Sort,
     Str, TC, Term,
 };
-use crate::locenv::LocEnv;
+use crate::containers::{LocEnv, Mapping};
 use crate::raw::tc::unif::{SortSubst, apply_subst};
 use crate::traits::Repr;
 

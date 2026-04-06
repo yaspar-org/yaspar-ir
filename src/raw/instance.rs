@@ -22,8 +22,8 @@ pub use crate::allocator::{
     TermAllocator,
 };
 use crate::ast::{ACommand, ATerm, Context};
+use crate::containers::valid_symbol_char;
 use crate::instantiate_ast;
-use crate::locenv::valid_char;
 use crate::traits::{Allocatable, Contains, MetaData, Repr};
 use hashconsing::{HConsed, HConsign, HashConsign};
 use serde::{Deserialize, Serialize};
@@ -242,7 +242,7 @@ impl FreshVar for Arena {
 
     fn fresh_var(&mut self, prefix: &str) -> Self::Str {
         // avoid special char
-        let prefix = prefix.replace(|c| !valid_char(c), "");
+        let prefix = prefix.replace(|c| !valid_symbol_char(c), "");
         // we make sure the prefix is not empty
         let prefix = if prefix.is_empty() { "x" } else { &prefix };
         // it is ok for prefix to be weird; when it is printed, pipes will be added if it contains

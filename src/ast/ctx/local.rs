@@ -7,9 +7,9 @@ use crate::ast::ctx::{
     Arena, CheckedApi, Context, LetContext, QuantifierContext, Result, Sort, Str, Term,
 };
 use crate::ast::{MatchContext, SymbolQuote};
-use crate::locenv::LocEnv;
+use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
-use crate::raw::tc::{TC, TCEnv};
+use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};
 use crate::traits::{AllocatableString, Contains};
 use std::collections::HashSet;
 
@@ -103,15 +103,16 @@ impl HasArena for LocalContext<'_, '_> {
 
 impl CheckedApi for LocalContext<'_, '_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
-        let theories = self.context.get_theories();
-        TCEnv {
+        TCEnvGen {
             arena: &mut self.context.arena,
-            theories,
-            sorts: &mut self.context.sorts,
-            symbol_table: &self.context.symbol_table,
-            local: LocEnv::Cons {
-                car: &self.env,
-                cdr: &self.tail,
+            meta: &self.context.meta,
+            frame: &self.context.frame,
+            local: TCLocal {
+                loc: LocEnv::Cons {
+                    car: &self.env,
+                    cdr: &self.tail,
+                },
+                ..Default::default()
             },
         }
     }

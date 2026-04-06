@@ -6,10 +6,10 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::Context;
 use crate::ast::ctx::{
     Arena, CheckedApi, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TC, TCEnv,
-    Term,
+    TCEnvGen, TCLocal, Term,
 };
 use crate::ast::{SymbolQuote, Theory};
-use crate::locenv::LocEnv;
+use crate::containers::LocEnv;
 use crate::raw::instance::{FetchSort, HasArena};
 use crate::raw::tc::{sort_mismatch, tc_determine_datatype_sort_map};
 use crate::traits::AllocatableString;
@@ -339,15 +339,16 @@ impl HasArena for ArmContext<'_, '_, '_> {
 
 impl CheckedApi for ArmContext<'_, '_, '_> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
-        let theories = self.parent.context.get_theories();
-        TCEnv {
+        TCEnvGen {
             arena: &mut self.parent.context.arena,
-            theories,
-            sorts: &mut self.parent.context.sorts,
-            symbol_table: &self.parent.context.symbol_table,
-            local: LocEnv::Cons {
-                car: &self.env,
-                cdr: &self.parent.tail,
+            meta: &self.parent.context.meta,
+            frame: &self.parent.context.frame,
+            local: TCLocal {
+                loc: LocEnv::Cons {
+                    car: &self.env,
+                    cdr: &self.parent.tail,
+                },
+                ..Default::default()
             },
         }
     }

@@ -15,7 +15,7 @@ use crate::ast::{
     DatatypeFunction, FunctionDef, FunctionMeta, FunctionMetaDefined, Identifier, Index, Local,
     SymbolQuote, Typecheck, alg,
 };
-use crate::locenv::{LocEnv, sanitize_bindings};
+use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, Contains};
 use std::borrow::Borrow;
