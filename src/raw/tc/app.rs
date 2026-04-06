@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::unif::{SortSubst, apply_subst, sort_unification};
 use super::{TC, TCEnvGen, Typecheck, unif};
 use crate::allocator::{ObjectAllocatorExt, TermAllocator};
@@ -20,6 +23,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
+/// Validate that the indices on a qualified identifier match the expected signature indices.
 fn check_sig_indices(
     f: &QualifiedIdentifier,
     meta_string: &str,
@@ -116,6 +120,9 @@ where
     Ok(env.arena.constant(c, Some(s)))
 }
 
+/// Type-check a qualified identifier (possibly with sort ascription) and return a typed term.
+///
+/// Handles local variables, global constants, polymorphic symbols, and bitvector literals.
 pub(crate) fn typed_qualified_identifier<L>(
     env: &mut TCEnvGen<L>,
     qid: QualifiedIdentifier,
@@ -298,6 +305,7 @@ fn bv_len_unification(params: &mut [Option<UBig>], expected: UBig, idx: usize) -
     }
 }
 
+/// Check that all bitvector length parameters have been instantiated.
 fn check_bv_param_instantiation(params: Vec<Option<UBig>>) -> TC<Vec<UBig>> {
     let mut ret = vec![];
     for (i, p) in params.into_iter().enumerate() {
@@ -310,6 +318,7 @@ fn check_bv_param_instantiation(params: Vec<Option<UBig>>) -> TC<Vec<UBig>> {
     Ok(ret)
 }
 
+/// Compute the output sort of a bitvector function given instantiated length parameters.
 fn bv_len_apply<T: HasArenaAlt>(env: &mut T, out: &BvOutSort, params: &[UBig]) -> TC<Sort> {
     match out {
         BvOutSort::BitVec(expr) => {
@@ -320,6 +329,7 @@ fn bv_len_apply<T: HasArenaAlt>(env: &mut T, out: &BvOutSort, params: &[UBig]) -
     }
 }
 
+/// Type-check a bitvector function argument, unifying its length with the expected parameter.
 fn type_check_bv_func_arg_with_implicit_coercion<L>(
     env: &mut TCEnvGen<L>,
     t: &Term,
@@ -352,6 +362,10 @@ where
     }
 }
 
+/// Type-check a function application against a single signature.
+///
+/// Dispatches on the signature variant (`VarLenFunc`, `ParFunc`, `BvFunc`, etc.),
+/// validates argument sorts, performs sort unification, and returns the typed application term.
 fn type_check_with_func_sig<L>(
     t: impl Display,
     env: &mut TCEnvGen<L>,
@@ -663,6 +677,7 @@ where
     }
 }
 
+/// Ensure a function identifier has no indices.
 fn check_empty_index(f: &QualifiedIdentifier, meta_string: &str) -> TC<()> {
     if !f.0.indices.is_empty() {
         Err(format!(
@@ -674,6 +689,7 @@ fn check_empty_index(f: &QualifiedIdentifier, meta_string: &str) -> TC<()> {
     }
 }
 
+/// Validate that the number of arguments matches the expected arity.
 fn check_arg_length<T>(
     f: &QualifiedIdentifier,
     meta_string: &str,
@@ -691,6 +707,7 @@ fn check_arg_length<T>(
     }
 }
 
+/// Validate and extract numeral indices for a bitvector function signature.
 fn check_bv_sig_indices(
     f: &QualifiedIdentifier,
     meta_string: &str,
@@ -718,6 +735,11 @@ fn check_bv_sig_indices(
     Ok(())
 }
 
+/// Type-check a function application `(f args...)`.
+///
+/// Looks up the function's signature(s) in the symbol table and tries each one
+/// (for overloaded functions) until one succeeds. Delegates to [`type_check_with_func_sig`]
+/// for the actual per-signature checking.
 pub(crate) fn typed_app<L>(
     env: &mut TCEnvGen<L>,
     f: QualifiedIdentifier,

@@ -20,7 +20,7 @@
 //!   scope representation. Carries borrowed references to the arena, context metadata,
 //!   and context frame (sorts + symbol table).
 //! - [`TCEnv`] — the concrete type-checking environment used during traversal, which
-//!   specializes `TCEnvGen` with [`TCLocal`] as the local scope.
+//!   specializes [`TCEnvGen`] with [`TCLocal`] as the local scope.
 //! - [`TCLocal`] — the local scope state during type-checking, holding the local variable
 //!   environment, incremental scope extensions, and a scrutinee map for match expressions.
 //! - [`Typecheck`] — the trait implemented by all AST nodes; call `.type_check(&mut env)` to
@@ -249,6 +249,7 @@ impl<Str, L> Typecheck<TCEnvGen<'_, L>> for alg::Constant<Str> {
     }
 }
 
+/// Return an error indicating that the given identifier does not exist.
 fn identifier_not_found<T>(symbol: &Str, meta_string: &str) -> TC<T> {
     Err(format!(
         "TC: identifier {}{meta_string} does not exist!",
@@ -256,6 +257,7 @@ fn identifier_not_found<T>(symbol: &Str, meta_string: &str) -> TC<T> {
     ))
 }
 
+/// Return a sort-mismatch error: `expected` was required but `given` was found for term `t`.
 pub(crate) fn sort_mismatch<T>(
     expected: &Sort,
     given: &Sort,
@@ -267,6 +269,7 @@ pub(crate) fn sort_mismatch<T>(
     ))
 }
 
+/// Check that all sort variables in `subst` have been instantiated; error otherwise.
 pub(crate) fn check_subst_instantiation(subst: &SortSubst, t: impl Display) -> TC<()> {
     let vs = unif::subst_missed_vars(subst);
     if !vs.is_empty() {
@@ -283,6 +286,7 @@ pub(crate) fn check_subst_instantiation(subst: &SortSubst, t: impl Display) -> T
     }
 }
 
+/// Ensure that symbol `s` is NOT bound in the local scope (i.e. it is a global symbol).
 fn check_global_var_locally<L, S>(env: &mut TCEnvGen<L>, s: S) -> TC<Str>
 where
     L: Mapping<Key = Str>,
@@ -424,11 +428,13 @@ where
     }
 }
 
+/// Build a typed [`Term`] from a [`Constant`], inferring its sort.
 pub(crate) fn typed_constant<L>(env: &mut TCEnvGen<L>, c: Constant) -> TC<Term> {
     let s = c.type_check(env)?;
     Ok(env.arena.constant(c, Some(s)))
 }
 
+/// Build a typed equality term `(= a b)`. Both arguments must have the same sort.
 pub(crate) fn typed_eq<L>(env: &mut TCEnvGen<L>, at: Term, bt: Term, bt_meta: &str) -> TC<Term> {
     let sa = at.get_sort(env);
     let sb = bt.get_sort(env);
@@ -439,6 +445,7 @@ pub(crate) fn typed_eq<L>(env: &mut TCEnvGen<L>, at: Term, bt: Term, bt_meta: &s
     }
 }
 
+/// Build a typed `(distinct ...)` term. At least two arguments of the same sort required.
 pub(crate) fn typed_distinct<L>(
     env: &mut TCEnvGen<L>,
     ts: Vec<WithMeta<Term, String>>,
@@ -458,6 +465,7 @@ pub(crate) fn typed_distinct<L>(
     Ok(env.arena.distinct(terms))
 }
 
+/// Build a typed `(not t)` term. The argument must be `Bool`-sorted.
 pub(crate) fn typed_not<L>(env: &mut TCEnvGen<L>, t: Term, meta: &str) -> TC<Term> {
     is_term_bool_alt(env, &t, meta)?;
     Ok(env.arena.not(t))
@@ -530,6 +538,7 @@ where
     }
 }
 
+/// Check that all terms in the iterator are `Bool`-sorted.
 fn check_all_bool_terms<'a, E>(
     terms: impl Iterator<Item = WithMeta<&'a Term, String>>,
     e: &mut E,
