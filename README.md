@@ -224,20 +224,20 @@ context.ensure_logic();
 
 let int = context.int_sort();
 // Option 1: extend incrementally
-let mut q_ctx = context.build_quantifier() ?;
-q_ctx.extend("x", int.clone()) ?.extend("y", int) ?;
+let mut q_ctx = context.build_quantifier()?;
+q_ctx.extend("x", int.clone())?.extend("y", int)?;
 
 // Option 2: provide domain upfront (equivalent)
-let mut q_ctx = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)]) ?;
+let mut q_ctx = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)])?;
 
 // Build terms using the local variables
 let body = q_ctx.typed_simp_app(">", [
-q_ctx.typed_symbol("x") ?,
-q_ctx.typed_symbol("y") ?,
-]) ?;
+q_ctx.typed_symbol("x")?,
+q_ctx.typed_symbol("y")?,
+])?;
 
 // Finalize — consumes the context
-let forall_term = q_ctx.typed_forall(body) ?;  // or .typed_exists(body)?
+let forall_term = q_ctx.typed_forall(body)?;  // or .typed_exists(body)?
 ```
 
 The body must be a `Bool`-sorted term. Duplicate variable names are rejected.
@@ -246,14 +246,14 @@ The body must be a `Bool`-sorted term. Duplicate variable names are rejected.
 
 ```rust
 // Bindings are provided at creation time (they are well-formed in the parent scope)
-let bound_term = context.typed_simp_app("+", [a.clone(), b.clone()]) ?;
-let mut l_ctx = context.build_let([("sum", bound_term)]) ?;
+let bound_term = context.typed_simp_app("+", [a.clone(), b.clone()])?;
+let mut l_ctx = context.build_let([("sum", bound_term)])?;
 
 // "sum" is now available as a local variable
 let body = l_ctx.typed_simp_app("*", [
-l_ctx.typed_symbol("sum") ?,
-l_ctx.typed_symbol("sum") ?,
-]) ?;
+l_ctx.typed_symbol("sum")?,
+l_ctx.typed_symbol("sum")?,
+])?;
 
 // Finalize
 let let_term = l_ctx.typed_let(body);
@@ -266,22 +266,22 @@ validated at context creation.
 
 ```rust
 // Assume List datatype is declared and l1 : (List Int)
-let mut m_ctx = context.build_matching(l1) ?;
+let mut m_ctx = context.build_matching(l1)?;
 
 // Build the nil arm (nullary constructor)
-let nil_arm = m_ctx.build_arm_nullary("nil") ?;
-nil_arm.typed_arm(some_body) ?;
+let nil_arm = m_ctx.build_arm_nullary("nil")?;
+nil_arm.typed_arm(some_body)?;
 
 // Build the cons arm with named variables
-let mut cons_arm = m_ctx.build_arm("cons", [Some("h"), Some("t")]) ?;
+let mut cons_arm = m_ctx.build_arm("cons", [Some("h"), Some("t")])?;
 // "h" and "t" are now in scope within cons_arm
-let h = cons_arm.typed_symbol("h") ?;
-let t = cons_arm.typed_symbol("t") ?;
+let h = cons_arm.typed_symbol("h")?;
+let t = cons_arm.typed_symbol("t")?;
 let body = /* ... build body using h and t ... */;
-cons_arm.typed_arm(body) ?;
+cons_arm.typed_arm(body)?;
 
 // Finalize — all constructors must be covered (or a wildcard must be present)
-let match_term = m_ctx.typed_matching() ?;
+let match_term = m_ctx.typed_matching()?;
 ```
 
 The match context tracks constructor coverage. `typed_matching()` returns `Err` if not all
@@ -294,10 +294,10 @@ arms. All arm bodies must have the same sort.
 let int = context.int_sort();
 let mut f_ctx = context.build_fun_out_sort(
 "double", [("x", int.clone())], int
-) ?;
-let x = f_ctx.typed_symbol("x") ?;
-let body = f_ctx.typed_simp_app("+", [x.clone(), x]) ?;
-let cmd = f_ctx.typed_define_fun(body) ?;
+)?;
+let x = f_ctx.typed_symbol("x")?;
+let body = f_ctx.typed_simp_app("+", [x.clone(), x])?;
+let cmd = f_ctx.typed_define_fun(body)?;
 // "double" is now in the global context
 ```
 
@@ -307,15 +307,15 @@ Use `build_fun` (without output sort) to let the sort be inferred from the body.
 
 ```rust
 let int = context.int_sort();
-let list_int = context.wf_sort_n("List", [int.clone()]) ?;
+let list_int = context.wf_sort_n("List", [int.clone()])?;
 let mut ctx = context.build_rec_funs([
 RecFunc::new("length", [("l", list_int.clone())], int.clone()),
-]) ?;
-let mut f_ctx = ctx.build_function("length") ?;
+])?;
+let mut f_ctx = ctx.build_function("length")?;
 // The function "length" is already in scope (for recursive calls)
 let body = /* ... */;
-f_ctx.typed_function(body) ?;
-let cmd = ctx.typed_define_funs_rec() ?;
+f_ctx.typed_function(body)?;
+let cmd = ctx.typed_define_funs_rec()?;
 ```
 
 All declared functions must be given a body before calling `typed_define_funs_rec()`.
@@ -324,17 +324,17 @@ All declared functions must be given a body before calling `typed_define_funs_re
 
 ```rust
 // Simple enum
-let cmd = context.typed_enum("Color", ["red", "green", "blue"]) ?;
+let cmd = context.typed_enum("Color", ["red", "green", "blue"])?;
 
 // Polymorphic datatype
-let mut d_ctx = context.build_datatypes([("List", ["X"])]) ?;
-let mut c_ctx = d_ctx.build_datatype("List") ?;
-c_ctx.build_datatype_constructor_nullary("nil") ?;
-let xvar = c_ctx.wf_sort("X") ?;  // sort parameter is in scope
-let list_x = c_ctx.wf_sort_n("List", [xvar.clone()]) ?;
-c_ctx.build_datatype_constructor("cons", [("car", xvar), ("cdr", list_x)]) ?;
-c_ctx.typed_datatype() ?;
-let cmd = d_ctx.typed_declare_datatypes() ?;
+let mut d_ctx = context.build_datatypes([("List", ["X"])])?;
+let mut c_ctx = d_ctx.build_datatype("List")?;
+c_ctx.build_datatype_constructor_nullary("nil")?;
+let xvar = c_ctx.wf_sort("X")?;  // sort parameter is in scope
+let list_x = c_ctx.wf_sort_n("List", [xvar.clone()])?;
+c_ctx.build_datatype_constructor("cons", [("car", xvar), ("cdr", list_x)])?;
+c_ctx.typed_datatype()?;
+let cmd = d_ctx.typed_declare_datatypes()?;
 ```
 
 Datatype contexts validate non-emptiness, constructor uniqueness, and selector name uniqueness.
@@ -345,8 +345,8 @@ global context (the operation is transactional).
 
 ```rust
 let int = context.int_sort();
-let s_ctx = context.build_sort_alias("MyInt", []) ?;
-let cmd = s_ctx.typed_define_sort(int) ?;
+let s_ctx = context.build_sort_alias("MyInt", [])?;
+let cmd = s_ctx.typed_define_sort(int)?;
 // "MyInt" is now an alias for Int
 ```
 
@@ -369,16 +369,16 @@ can create another `QuantifierContext`, and so on. Each nested context sees all 
 ancestors:
 
 ```rust
-let mut q_ctx = context.build_quantifier_with_domain([("x", int)]) ?;
-let inc_x = q_ctx.typed_simp_app("+", [q_ctx.typed_symbol("x") ?, one]) ?;
-let mut l_ctx = q_ctx.build_let([("y", inc_x)]) ?;
+let mut q_ctx = context.build_quantifier_with_domain([("x", int)])?;
+let inc_x = q_ctx.typed_simp_app("+", [q_ctx.typed_symbol("x")?, one])?;
+let mut l_ctx = q_ctx.build_let([("y", inc_x)])?;
 // "y" and "x" are both in scope here
 let body = l_ctx.typed_simp_app("*", [
-l_ctx.typed_symbol("x") ?,
-l_ctx.typed_symbol("y") ?,
-]) ?;
+l_ctx.typed_symbol("x")?,
+l_ctx.typed_symbol("y")?,
+])?;
 let let_term = l_ctx.typed_let(body);
-let forall = q_ctx.typed_forall(let_term) ?;
+let forall = q_ctx.typed_forall(let_term)?;
 ```
 
 ### Analyzing hashconsed objects
@@ -442,9 +442,8 @@ Here is the `depth` example rewritten using `TermRecursor`:
 use yaspar_ir::ast::alg::{
     Attribute, Constant, Local, PatternArm, QualifiedIdentifier, VarBinding,
 };
-use yaspar_ir::ast::{Sort, Str, Term, TermRecursor, TypedTermRecursor};
+use yaspar_ir::ast::{Bottom, Sort, Str, Term, TermRecursor, TypedTermRecursor};
 
-enum Bottom {}
 struct TermDepth;
 
 impl TermRecursor<Str, Sort, Term> for TermDepth {
@@ -509,14 +508,49 @@ impl TypedTermRecursor for TermDepth {}
 To use it:
 
 ```rust
-let depth = match TermDepth.recurse_on_term( & some_term) {
-Ok(d) => d,
-Err(b) => match b {},  // Bottom is uninhabited
+let depth = match TermDepth.recurse_on_term(&some_term) {
+    Ok(d) => d,
+    Err(b) => match b {},  // Bottom is uninhabited
 };
 ```
 
 The convenience trait `TypedTermRecursor` is a marker for recursors specialized to the typed AST
 (`Str`, `Sort`, `Term`). An analogous `UntypedTermRecursor` exists for untyped ASTs.
+
+### Memoized term recursion with `Memoize`
+
+Because typed terms are hashconsed, structurally identical sub-terms share the same identity. A
+plain `TermRecursor` traversal will re-visit such shared sub-terms every time they appear. The
+`Memoize` wrapper caches the `Out` result for each term node, so repeated encounters return the
+cached value immediately — skipping the entire sub-tree.
+
+Wrap any recursor with `Memoize::new(recursor)` to get automatic caching backed by a `HashMap`:
+
+```rust
+use yaspar_ir::ast::{Memoize, TermRecursor};
+
+// assuming TermDepth from the previous section
+let mut memo = Memoize::new(TermDepth);
+let depth = memo.recurse_on_term(&some_term).unwrap();
+```
+
+The cache is stored in the public `cache` field, so it can be reused across multiple traversals.
+Pass a pre-populated cache via `Memoize::with_cache` to avoid recomputing results for terms that
+were already visited:
+
+```rust
+// first traversal populates the cache
+let mut memo = Memoize::new(TermDepth);
+let _ = memo.recurse_on_term(&term_a).unwrap();
+
+// second traversal reuses the cache — shared sub-terms are not re-visited
+let mut memo2 = Memoize::with_cache(TermDepth, &mut memo.cache);
+let _ = memo2.recurse_on_term(&term_b).unwrap();
+```
+
+This is particularly beneficial for analyses over assertions that share many common sub-terms,
+where a non-memoized traversal would perform redundant work proportional to the number of
+shared occurrences.
 
 ### More examples
 
@@ -575,9 +609,13 @@ Currently, the crate provides the following functionalities:
    introduces let-bindings to terms, so that they can be compactly printed with let-bindings inserted for sub-terms
    appearing multiple times.
 9. Global and local substitutions; see `ast::Substitute` and `ast::GlobalSubst`.
-10. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
-11. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
-12. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
+10. Stack-free recursors: see `ast::TermRecursor`, `ast::TypedTermRecursor`, `ast::u::UntypedTermRecursor` and `ast::Memoize`.
+    This functionality provides a stack-free, visitor-based implementation of a depth first traversal of `Term`s. General
+    recursions are still available, but for deeply nested terms, general recursions could hit the stack limit of the
+    operating system. Stack-free recursors do not have such risk. Plug-in memoization is also available.  
+11. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
+12. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
+13. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
     `cvc5`. It translates typed `Sort`s, `Term`s, and `Command`s to their cvc5-rs counterparts, with caching and
     support for quantifier `:pattern` annotations.
 

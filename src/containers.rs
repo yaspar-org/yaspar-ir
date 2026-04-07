@@ -7,10 +7,16 @@ use crate::traits::Contains;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+/// A read-only key-value mapping that supports lookup by key.
+///
+/// This trait abstracts over different mapping backends ([`HashMap`], [`Vec`], linked lists,
+/// etc.) so that algorithms can be written generically over the storage strategy.
+/// Values must be [`Clone`] because lookups return owned copies.
 pub trait Mapping {
     type Key;
     type Value: Clone;
 
+    /// Look up a key in the mapping, returning a clone of the associated value if present.
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value>;
 }
 
@@ -78,7 +84,9 @@ where
     }
 }
 
+/// A [`Mapping`] that additionally supports inserting new key-value pairs.
 pub trait InsertableMapping: Mapping {
+    /// Insert a key-value pair into the mapping, overwriting any existing entry for the key.
     fn insert(&mut self, key: Self::Key, value: Self::Value);
 }
 

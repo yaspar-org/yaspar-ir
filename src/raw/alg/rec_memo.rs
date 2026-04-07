@@ -1,6 +1,28 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Memoized term recursion via [`Memoize`], a caching wrapper around [`TermRecursor`].
+//!
+//! When terms implement [Eq] and [Hash], structurally identical sub-terms share the same identity.
+//! A plain [`TermRecursor`] traversal will re-visit such shared sub-terms every time they
+//! appear. [`Memoize`] wraps any [`TermRecursor`] and caches the `Out` result for each
+//! term node, so repeated encounters return the cached value immediately.
+//!
+//! # How it works
+//!
+//! [`Memoize`] holds an `inner` recursor and a `cache` mapping terms to results.
+//!
+//! - **On each `on_*` callback that produces `Out`**: the wrapper delegates to the inner
+//!   recursor, inserts the result into the cache, and returns it.
+//! - **On auxiliary callbacks** (`setup_*`, `on_let_binding`, `on_match_arm`,
+//!   `on_attribute_*`): the wrapper delegates directly without caching.
+//! - **During expansion** ([`memo_expand_and_resolve`]): before descending into a term,
+//!   the cache is checked. On a hit the cached result is returned without expanding the
+//!   node at all, short-circuiting the entire sub-tree.
+//!
+//! The cache type is generic (`M: `[`InsertableMapping`]), so callers can supply a
+//! [`HashMap`], a pre-populated cache from a previous run, or any custom mapping.
+
 use super::rec::*;
 use crate::ast::alg::{
     Attribute, Constant, Local, PatternArm, QualifiedIdentifier, Term, VarBinding,
@@ -11,12 +33,24 @@ use either::Either;
 use std::collections::HashMap;
 use yaspar::ast::Keyword;
 
+/// A caching wrapper that memoizes the `Out` results of a [`TermRecursor`].
+///
+/// Wrap any recursor with [`Memoize::new`] to get automatic caching backed by a
+/// [`HashMap`]. Use [`Memoize::with_cache`] to supply a pre-populated or
+/// custom cache.
+///
+/// The `inner` recursor and `cache` are public fields, so callers can inspect or reuse
+/// the cache after traversal.
 pub struct Memoize<R, M> {
+    /// The wrapped recursor whose callbacks are delegated to.
     pub inner: R,
+    /// The term-to-result cache. Publicly accessible so callers can inspect, reuse,
+    /// or pre-populate it across traversals.
     pub cache: M,
 }
 
 impl<R, T, Out> Memoize<R, HashMap<T, Out>> {
+    /// Create a new memoized recursor backed by an empty `HashMap`.
     pub fn new<Str, So>(inner: R) -> Self
     where
         R: TermRecursor<Str, So, T, Out = Out>,
@@ -29,6 +63,11 @@ impl<R, T, Out> Memoize<R, HashMap<T, Out>> {
 }
 
 impl<R, M> Memoize<R, M> {
+    /// Create a memoized recursor with a caller-supplied cache.
+    ///
+    /// This is useful for reusing a cache across multiple traversals, e.g. passing in
+    /// `previous.cache` or `&mut previous.cache` to avoid recomputing results for terms that were already
+    /// visited.
     pub fn with_cache<Str, So, T>(inner: R, cache: M) -> Self
     where
         R: TermRecursor<Str, So, T>,
@@ -345,6 +384,10 @@ where
     }
 }
 
+/// Like [`expand_and_resolve`], but checks the cache before descending.
+///
+/// If `current` is already in the cache, the cached result is returned immediately
+/// without pushing any frames or invoking any callbacks.
 fn memo_expand_and_resolve<'a, R, M, Str: 'a, So: 'a, T>(
     recursor: &mut Memoize<R, M>,
     stack: &mut RStack<'a, Memoize<R, M>, Str, So, T>,
@@ -371,6 +414,8 @@ where
     }
 }
 
+/// Entry point for memoized traversal. Same structure as [`term_recursion`] but uses
+/// [`memo_expand_and_resolve`] to short-circuit cached sub-trees.
 fn memo_term_recursion<R, M, Str, So, T>(
     recursor: &mut Memoize<R, M>,
     term: &T,
