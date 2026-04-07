@@ -20,7 +20,19 @@ pub trait Mapping {
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value>;
 }
 
-impl<C> Mapping for Vec<C>
+impl<T> Mapping for Vec<T>
+where
+    [T]: Mapping,
+{
+    type Key = <[T] as Mapping>::Key;
+    type Value = <[T] as Mapping>::Value;
+
+    fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
+        self.as_slice().lookup(key)
+    }
+}
+
+impl<C> Mapping for [C]
 where
     C: Mapping,
 {
@@ -45,7 +57,7 @@ where
     }
 }
 
-impl<S, T> Mapping for Vec<VarBinding<S, T>>
+impl<S, T> Mapping for [VarBinding<S, T>]
 where
     S: Eq,
     T: Clone,
@@ -120,7 +132,7 @@ pub(crate) enum MemLinkedList<'a, T: ?Sized> {
     },
 }
 
-impl<C> Mapping for MemLinkedList<'_, C>
+impl<C: ?Sized> Mapping for MemLinkedList<'_, C>
 where
     C: Mapping,
 {
@@ -141,7 +153,7 @@ where
 /// a bounded number of [LocEnv::Cons]s as local variables, which only stores references. As a
 /// result, it forms a linked list in stack and automatically goes away as recursion finishes.
 /// The tricky part is lifetime, which luckily Rust is very good at sanitizing.
-pub(crate) type LocEnv<'b, S, T> = MemLinkedList<'b, Vec<VarBinding<S, T>>>;
+pub(crate) type LocEnv<'b, S, T> = MemLinkedList<'b, [VarBinding<S, T>]>;
 
 /// Valid character in a symbol.
 pub(crate) fn valid_symbol_char(c: char) -> bool {
