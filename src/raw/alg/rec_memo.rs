@@ -5,7 +5,7 @@ use super::rec::*;
 use crate::ast::alg::{
     Attribute, Constant, Local, PatternArm, QualifiedIdentifier, Term, VarBinding,
 };
-use crate::containers::{InsertableMapping, Mapping};
+use crate::containers::InsertableMapping;
 use crate::traits::{Contains, Repr};
 use either::Either;
 use yaspar::ast::Keyword;
@@ -30,7 +30,6 @@ where
 
     fn recurse_on_term(&mut self, t: &T) -> Result<Self::Out, Self::Err>
     where
-        Self: Sized,
         T: Contains<T: Repr<T = Term<Str, So, T>>>,
     {
         memo_term_recursion(self, t)
@@ -53,11 +52,15 @@ where
         id: &QualifiedIdentifier<Str, So>,
         sort: &Option<So>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_global(current, id, sort)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_local(&mut self, current: &T, id: &Local<Str, So>) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_local(current, id)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_app(
@@ -68,7 +71,9 @@ where
         s: &Option<So>,
         recs: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_app(current, id, ts, s, recs)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_let_binding(
@@ -79,7 +84,8 @@ where
         binding_idx: usize,
         binding_rec: Self::Out,
     ) -> Result<Self::Binding, Self::Err> {
-        todo!()
+        self.inner
+            .on_let_binding(current, vs, body, binding_idx, binding_rec)
     }
 
     fn setup_let_scope(
@@ -89,7 +95,7 @@ where
         body: &T,
         vs_rec: &[Self::Binding],
     ) -> Result<(), Self::Err> {
-        todo!()
+        self.inner.setup_let_scope(current, vs, body, vs_rec)
     }
 
     fn on_let(
@@ -100,7 +106,9 @@ where
         vs_rec: Vec<Self::Binding>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_let(current, vs, body, vs_rec, body_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn setup_quantifier_scope(
@@ -110,7 +118,7 @@ where
         t: &T,
         is_forall: bool,
     ) -> Result<(), Self::Err> {
-        todo!()
+        self.inner.setup_quantifier_scope(current, vs, t, is_forall)
     }
 
     fn on_exists(
@@ -120,7 +128,9 @@ where
         t: &T,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_exists(current, vs, t, t_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_forall(
@@ -130,7 +140,9 @@ where
         t: &T,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_forall(current, vs, t, t_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn setup_match_case_scope(
@@ -141,7 +153,8 @@ where
         scrutinee_rec: &Self::Out,
         case_idx: usize,
     ) -> Result<Self::Pattern, Self::Err> {
-        todo!()
+        self.inner
+            .setup_match_case_scope(current, scrutinee, cases, scrutinee_rec, case_idx)
     }
 
     fn on_match_arm(
@@ -153,7 +166,8 @@ where
         current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Result<Self::Arm, Self::Err> {
-        todo!()
+        self.inner
+            .on_match_arm(current, scrutinee, cases, case_idx, current_pattern, arm)
     }
 
     fn on_match(
@@ -164,7 +178,11 @@ where
         scrutinee_rec: Self::Out,
         cases_rec: Vec<Self::Arm>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self
+            .inner
+            .on_match(current, scrutinee, cases, scrutinee_rec, cases_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_annotated(
@@ -175,7 +193,9 @@ where
         t_rec: Self::Out,
         anns_rec: Vec<Self::Attr>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_annotated(current, t, anns, t_rec, anns_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_attribute_keyword(
@@ -183,7 +203,7 @@ where
         current: &T,
         keyword: &Keyword,
     ) -> Result<Self::Attr, Self::Err> {
-        todo!()
+        self.inner.on_attribute_keyword(current, keyword)
     }
 
     fn on_attribute_constant(
@@ -192,7 +212,7 @@ where
         keyword: &Keyword,
         constant: &Constant<Str>,
     ) -> Result<Self::Attr, Self::Err> {
-        todo!()
+        self.inner.on_attribute_constant(current, keyword, constant)
     }
 
     fn on_attribute_symbol(
@@ -201,11 +221,11 @@ where
         keyword: &Keyword,
         symbol: &Str,
     ) -> Result<Self::Attr, Self::Err> {
-        todo!()
+        self.inner.on_attribute_symbol(current, keyword, symbol)
     }
 
     fn on_attribute_named(&mut self, current: &T, name: &Str) -> Result<Self::Attr, Self::Err> {
-        todo!()
+        self.inner.on_attribute_named(current, name)
     }
 
     fn on_attribute_pattern(
@@ -214,7 +234,8 @@ where
         patterns: &[T],
         patterns_rec: Vec<Self::Out>,
     ) -> Result<Self::Attr, Self::Err> {
-        todo!()
+        self.inner
+            .on_attribute_pattern(current, patterns, patterns_rec)
     }
 
     fn on_eq(
@@ -225,7 +246,9 @@ where
         a_rec: Self::Out,
         b_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_eq(current, a, b, a_rec, b_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_distinct(
@@ -234,7 +257,9 @@ where
         ts: &[T],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_distinct(current, ts, ts_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_and(
@@ -243,7 +268,9 @@ where
         ts: &[T],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_and(current, ts, ts_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_or(
@@ -252,7 +279,9 @@ where
         ts: &[T],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_or(current, ts, ts_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_xor(
@@ -261,11 +290,15 @@ where
         ts: &[T],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_xor(current, ts, ts_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_not(&mut self, current: &T, t: &T, t_rec: Self::Out) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_not(current, t, t_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_implies(
@@ -276,7 +309,9 @@ where
         ts_rec: Vec<Self::Out>,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_implies(current, ts, t, ts_rec, t_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 
     fn on_ite(
@@ -289,7 +324,9 @@ where
         t_rec: Self::Out,
         e_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
-        todo!()
+        let r = self.inner.on_ite(current, b, t, e, b_rec, t_rec, e_rec)?;
+        self.cache.insert(current.clone(), r.clone());
+        Ok(r)
     }
 }
 
