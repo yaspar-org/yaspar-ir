@@ -32,6 +32,7 @@ use yaspar::{binary_to_string, hex_to_string};
 
 mod kind;
 pub(crate) mod rec;
+pub(crate) mod rec_memo;
 
 /// Represent a literal constant in SMTLib
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

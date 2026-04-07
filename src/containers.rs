@@ -4,14 +4,12 @@
 use crate::ast::SymbolQuote;
 use crate::raw::alg::VarBinding;
 use crate::traits::Contains;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 pub(crate) trait Mapping {
     type Key;
     type Value: Clone;
-
-    fn empty() -> Self;
 
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value>;
 }
@@ -23,12 +21,21 @@ where
     type Key = C::Key;
     type Value = C::Value;
 
-    fn empty() -> Self {
-        vec![]
-    }
-
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
         self.iter().rev().find_map(|l| l.lookup(key))
+    }
+}
+
+impl<K, V> Mapping for HashMap<K, V>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    type Key = K;
+    type Value = V;
+
+    fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
+        self.get(key).cloned()
     }
 }
 
@@ -40,10 +47,6 @@ where
     type Key = S;
     type Value = (usize, T);
 
-    fn empty() -> Self {
-        vec![]
-    }
-
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
         self.iter()
             .find(|v| v.0 == *key)
@@ -51,8 +54,57 @@ where
     }
 }
 
+impl<C> Mapping for &C
+where
+    C: Mapping,
+{
+    type Key = C::Key;
+    type Value = C::Value;
+
+    fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
+        (*self).lookup(key)
+    }
+}
+
+impl<C> Mapping for &mut C
+where
+    C: Mapping,
+{
+    type Key = C::Key;
+    type Value = C::Value;
+
+    fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
+        <C>::lookup(self, key)
+    }
+}
+
+pub(crate) trait InsertableMapping: Mapping {
+    fn insert(&mut self, key: Self::Key, value: Self::Value);
+}
+
+impl<C> InsertableMapping for &mut C
+where
+    C: InsertableMapping,
+{
+    fn insert(&mut self, key: Self::Key, value: Self::Value) {
+        <C>::insert(self, key, value);
+    }
+}
+
+impl<K, V> InsertableMapping for HashMap<K, V>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    fn insert(&mut self, key: Self::Key, value: Self::Value) {
+        self.insert(key, value);
+    }
+}
+
 /// An in-memory linked list
+#[derive(Default)]
 pub(crate) enum MemLinkedList<'a, T: ?Sized> {
+    #[default]
     Nil,
     Cons {
         car: &'a T,
@@ -66,10 +118,6 @@ where
 {
     type Key = C::Key;
     type Value = C::Value;
-
-    fn empty() -> Self {
-        MemLinkedList::Nil
-    }
 
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
         match self {

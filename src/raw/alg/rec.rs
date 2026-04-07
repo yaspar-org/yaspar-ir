@@ -305,7 +305,7 @@ pub trait TermRecursor<Str, So, T> {
 /// `LetBindings` (processing binding RHS values left-to-right) then `LetBody` (processing
 /// the body after the scope callback). Similarly, `Ite` uses three frames (`IteB` → `IteT`
 /// → `IteE`) and `Implies` uses two (`ImpliesPremises` → `ImpliesConclusion`).
-enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
+pub(crate) enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
     /// Function application: collecting argument results left-to-right.
     App {
         current: &'a T,
@@ -425,7 +425,7 @@ enum Frame<'a, Str, So, T, R: TermRecursor<Str, So, T>> {
 
 /// Discriminant for the [`Nary`](Frame::Nary) variant.
 #[derive(Clone, Copy)]
-enum NaryKind {
+pub(crate) enum NaryKind {
     Distinct,
     And,
     Or,
@@ -433,7 +433,7 @@ enum NaryKind {
 }
 
 /// The traversal stack: a `Vec` of frames.
-type RStack<'a, R, Str, So, T> = Vec<Frame<'a, Str, So, T, R>>;
+pub(crate) type RStack<'a, R, Str, So, T> = Vec<Frame<'a, Str, So, T, R>>;
 
 /// Advance `anns_rec` past consecutive non-`Pattern` attributes starting at
 /// `anns[anns_rec.len()]`. Stops when a `Pattern` is encountered or all attributes
@@ -478,7 +478,7 @@ type PushResult<'a, R, Str, So, T> = Result<
 /// unprocessed children, it returns `Either::Right(frame)`, where `frame` is the top of the stack,
 /// so the main loop can push the frame back and expand the next child. Returns `Either::Left(result)`
 /// when the stack is empty (traversal complete).
-fn push_result<'a, R, Str, So, T>(
+pub(crate) fn push_result<'a, R, Str, So, T>(
     recursor: &mut R,
     stack: &mut RStack<'a, R, Str, So, T>,
     mut result: R::Out,
@@ -778,7 +778,7 @@ where
     }
 }
 
-fn next_child<'a, R, Str, So, T>(
+pub(crate) fn next_child<'a, R, Str, So, T>(
     recursor: &mut R,
     frame: &mut Frame<'a, Str, So, T, R>,
 ) -> Result<&'a T, R::Err>
@@ -853,7 +853,7 @@ where
 /// intermediate nodes, then resolve the leaf via the appropriate callback.
 ///
 /// Loops over [`expand_and_resolve_once`] until a leaf is reached.
-fn expand_and_resolve<'a, R, Str: 'a, So: 'a, T>(
+pub(crate) fn expand_and_resolve<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
     stack: &mut RStack<'a, R, Str, So, T>,
     mut current: &'a T,
@@ -877,7 +877,7 @@ where
 /// Process a single term node: either push a [`Frame`] and return the next
 /// child to descend into (`Either::Left`), or resolve a leaf directly via
 /// its callback (`Either::Right`).
-fn expand_and_resolve_once<'a, R, Str: 'a, So: 'a, T>(
+pub(crate) fn expand_and_resolve_once<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
     stack: &mut RStack<'a, R, Str, So, T>,
     current: &'a T,
@@ -1056,7 +1056,7 @@ where
     }
 }
 
-fn term_recursion<R, Str, So, T>(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
+pub(crate) fn term_recursion<R, Str, So, T>(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,

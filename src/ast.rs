@@ -52,6 +52,7 @@ pub use crate::ast::implicant::ImplicantIterator;
 pub use crate::ast::implicant::{FindImplicant, Model};
 pub use crate::raw::alg;
 pub use crate::raw::alg::rec::TermRecursor;
+pub use crate::raw::alg::rec_memo::Memoize;
 pub use crate::raw::letelim::*;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck, unif::SortSubst};
 pub use crate::untyped as u;

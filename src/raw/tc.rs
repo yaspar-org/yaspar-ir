@@ -138,21 +138,21 @@ impl<'a, Local> TCEnvGen<'a, Local>
 where
     Local: Mapping,
 {
-    pub(crate) fn with_empty_local<L: Mapping>(&mut self) -> TCEnvGen<'_, L> {
+    pub(crate) fn with_empty_local<L: Default>(&mut self) -> TCEnvGen<'_, L> {
         TCEnvGen {
             arena: self.arena,
             meta: self.meta,
             frame: self.frame,
-            local: L::empty(),
+            local: L::default(),
         }
     }
 
-    pub(crate) fn convert_to_empty_local<L: Mapping>(self) -> TCEnvGen<'a, L> {
+    pub(crate) fn convert_to_empty_local<L: Default>(self) -> TCEnvGen<'a, L> {
         TCEnvGen {
             arena: self.arena,
             meta: self.meta,
             frame: self.frame,
-            local: L::empty(),
+            local: L::default(),
         }
     }
 }
@@ -537,10 +537,6 @@ where
 {
     type Key = Str;
     type Value = (usize, T);
-
-    fn empty() -> Self {
-        Default::default()
-    }
 
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
         self.loc_inc.lookup(key).or_else(|| self.loc.lookup(key))
