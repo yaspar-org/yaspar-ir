@@ -12,18 +12,19 @@
 //!
 //! The traversal is a standard left-to-right, depth-first walk:
 //!
-//! 1. **Expand** – [`expand`] descends from a term into its leftmost leaf, pushing a
-//!    [`Frame`] for every intermediate node onto the stack `Vec`.
+//! 1. **Expand & Resolve** – [`expand_and_resolve`] descends from a term into its
+//!    leftmost leaf, pushing a [`Frame`] for every intermediate node onto the stack
+//!    `Vec`. It loops over [`expand_and_resolve_once`], which either pushes a frame
+//!    and returns the next child to descend into, or directly resolves a leaf by
+//!    calling the appropriate leaf callback (`on_constant`, `on_global`, or
+//!    `on_local`) to produce a result.
 //!
-//! 2. **Resolve** – [`resolve_leaf`] calls the appropriate leaf callback (`on_constant`,
-//!    `on_global`, or `on_local`) to produce a result.
-//!
-//! 3. **Push** – [`push_result`] propagates a result upward through the stack. At each
+//! 2. **Push** – [`push_result`] propagates a result upward through the stack. At each
 //!    frame it either:
 //!    - accumulates the result and returns so the next child can be expanded, or
 //!    - invokes the `on_*` callback when all children are ready and continues upward.
 //!
-//! 4. **Next** – [`next_child`] peeks at the top frame to determine the next child term
+//! 3. **Next** – [`next_child`] peeks at the top frame to determine the next child term
 //!    to expand. For scoped constructs (`Let`, `Quantifier`, `Match`) it also invokes
 //!    the appropriate `setup_*` callback.
 //!
@@ -436,24 +437,6 @@ enum NaryKind {
     And,
     Or,
     Xor,
-}
-
-/// The leaf information returned by [`expand`] when a leaf node is reached.
-enum Leaf<'a, Str, So, T> {
-    Constant {
-        current: &'a T,
-        constant: &'a Constant<Str>,
-        sort: &'a Option<So>,
-    },
-    Global {
-        current: &'a T,
-        id: &'a QualifiedIdentifier<Str, So>,
-        sort: &'a Option<So>,
-    },
-    Local {
-        current: &'a T,
-        id: &'a Local<Str, So>,
-    },
 }
 
 /// The traversal stack: a `Vec` of frames.
@@ -869,164 +852,166 @@ where
     }
 }
 
-fn expand<'a, R, Str: 'a, So: 'a, T>(
+/// Descend from `current` into its leftmost leaf, pushing [`Frame`]s for
+/// intermediate nodes, then resolve the leaf via the appropriate callback.
+///
+/// Loops over [`expand_and_resolve_once`] until a leaf is reached.
+fn expand_and_resolve<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
     stack: &mut RStack<'a, R, Str, So, T>,
     mut current: &'a T,
-) -> Result<Leaf<'a, Str, So, T>, R::Err>
+) -> Result<R::Out, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     loop {
-        match current.inner().repr() {
-            Term::Constant(constant, sort) => {
-                return Ok(Leaf::Constant {
-                    current,
-                    constant,
-                    sort,
-                });
+        match expand_and_resolve_once(recursor, stack, current)? {
+            Either::Left(r) => {
+                current = r;
             }
-            Term::Global(id, sort) => {
-                return Ok(Leaf::Global { current, id, sort });
-            }
-            Term::Local(id) => return Ok(Leaf::Local { current, id }),
-            Term::App(id, args, sort) => {
-                stack.push(Frame::App {
-                    current,
-                    id,
-                    args,
-                    sort,
-                    rec: vec![],
-                });
-                current = &args[0];
-            }
-            Term::Let(vs, body) => {
-                stack.push(Frame::LetBindings {
-                    current,
-                    vs,
-                    body,
-                    vs_rec: vec![],
-                });
-                current = &vs[0].2;
-            }
-            Term::Exists(vs, body) => {
-                recursor.setup_quantifier_scope(current, vs, body, false)?;
-                stack.push(Frame::Quantifier {
-                    current,
-                    vs,
-                    body,
-                    is_forall: false,
-                });
-                current = body;
-            }
-            Term::Forall(vs, body) => {
-                recursor.setup_quantifier_scope(current, vs, body, true)?;
-                stack.push(Frame::Quantifier {
-                    current,
-                    vs,
-                    body,
-                    is_forall: true,
-                });
-                current = body;
-            }
-            Term::Matching(scrutinee, cases) => {
-                stack.push(Frame::MatchScrutinee {
-                    current,
-                    scrutinee,
-                    cases,
-                });
-                current = scrutinee;
-            }
-            Term::Annotated(body, anns) => {
-                stack.push(Frame::AnnotatedBody {
-                    current,
-                    body,
-                    anns,
-                });
-                current = body;
-            }
-            Term::Eq(l, r) => {
-                stack.push(Frame::EqL { current, l, r });
-                current = l;
-            }
-            Term::Distinct(ts) => {
-                stack.push(Frame::Nary {
-                    current,
-                    kind: NaryKind::Distinct,
-                    ts,
-                    rec: vec![],
-                });
-                current = &ts[0];
-            }
-            Term::And(ts) => {
-                stack.push(Frame::Nary {
-                    current,
-                    kind: NaryKind::And,
-                    ts,
-                    rec: vec![],
-                });
-                current = &ts[0];
-            }
-            Term::Or(ts) => {
-                stack.push(Frame::Nary {
-                    current,
-                    kind: NaryKind::Or,
-                    ts,
-                    rec: vec![],
-                });
-                current = &ts[0];
-            }
-            Term::Xor(ts) => {
-                stack.push(Frame::Nary {
-                    current,
-                    kind: NaryKind::Xor,
-                    ts,
-                    rec: vec![],
-                });
-                current = &ts[0];
-            }
-            Term::Implies(ts, concl) => {
-                stack.push(Frame::ImpliesPremises {
-                    current,
-                    ts,
-                    t: concl,
-                    rec: vec![],
-                });
-                current = &ts[0];
-            }
-            Term::Not(inner) => {
-                stack.push(Frame::Not { current, t: inner });
-                current = inner;
-            }
-            Term::Ite(b, th, e) => {
-                stack.push(Frame::IteB {
-                    current,
-                    b,
-                    t: th,
-                    e,
-                });
-                current = b;
+            Either::Right(result) => {
+                return Ok(result);
             }
         }
     }
 }
 
-fn resolve_leaf<R, Str, So, T>(
+/// Process a single term node: either push a [`Frame`] and return the next
+/// child to descend into (`Either::Left`), or resolve a leaf directly via
+/// its callback (`Either::Right`).
+fn expand_and_resolve_once<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
-    leaf: Leaf<'_, Str, So, T>,
-) -> Result<R::Out, R::Err>
+    stack: &mut RStack<'a, R, Str, So, T>,
+    current: &'a T,
+) -> Result<Either<&'a T, R::Out>, R::Err>
 where
     R: TermRecursor<Str, So, T>,
+    T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
-    match leaf {
-        Leaf::Constant {
-            current,
-            constant,
-            sort,
-        } => recursor.on_constant(current, constant, sort),
-        Leaf::Global { current, id, sort } => recursor.on_global(current, id, sort),
-        Leaf::Local { current, id } => recursor.on_local(current, id),
+    match current.inner().repr() {
+        Term::Constant(constant, sort) => recursor
+            .on_constant(current, constant, sort)
+            .map(Either::Right),
+        Term::Global(id, sort) => recursor.on_global(current, id, sort).map(Either::Right),
+        Term::Local(id) => recursor.on_local(current, id).map(Either::Right),
+        Term::App(id, args, sort) => {
+            stack.push(Frame::App {
+                current,
+                id,
+                args,
+                sort,
+                rec: vec![],
+            });
+            Ok(Either::Left(&args[0]))
+        }
+        Term::Let(vs, body) => {
+            stack.push(Frame::LetBindings {
+                current,
+                vs,
+                body,
+                vs_rec: vec![],
+            });
+            Ok(Either::Left(&vs[0].2))
+        }
+        Term::Exists(vs, body) => {
+            recursor.setup_quantifier_scope(current, vs, body, false)?;
+            stack.push(Frame::Quantifier {
+                current,
+                vs,
+                body,
+                is_forall: false,
+            });
+            Ok(Either::Left(body))
+        }
+        Term::Forall(vs, body) => {
+            recursor.setup_quantifier_scope(current, vs, body, true)?;
+            stack.push(Frame::Quantifier {
+                current,
+                vs,
+                body,
+                is_forall: true,
+            });
+            Ok(Either::Left(body))
+        }
+        Term::Matching(scrutinee, cases) => {
+            stack.push(Frame::MatchScrutinee {
+                current,
+                scrutinee,
+                cases,
+            });
+            Ok(Either::Left(scrutinee))
+        }
+        Term::Annotated(body, anns) => {
+            stack.push(Frame::AnnotatedBody {
+                current,
+                body,
+                anns,
+            });
+            Ok(Either::Left(body))
+        }
+        Term::Eq(l, r) => {
+            stack.push(Frame::EqL { current, l, r });
+            Ok(Either::Left(l))
+        }
+        Term::Distinct(ts) => {
+            stack.push(Frame::Nary {
+                current,
+                kind: NaryKind::Distinct,
+                ts,
+                rec: vec![],
+            });
+            Ok(Either::Left(&ts[0]))
+        }
+        Term::And(ts) => {
+            stack.push(Frame::Nary {
+                current,
+                kind: NaryKind::And,
+                ts,
+                rec: vec![],
+            });
+            Ok(Either::Left(&ts[0]))
+        }
+        Term::Or(ts) => {
+            stack.push(Frame::Nary {
+                current,
+                kind: NaryKind::Or,
+                ts,
+                rec: vec![],
+            });
+            Ok(Either::Left(&ts[0]))
+        }
+        Term::Xor(ts) => {
+            stack.push(Frame::Nary {
+                current,
+                kind: NaryKind::Xor,
+                ts,
+                rec: vec![],
+            });
+            Ok(Either::Left(&ts[0]))
+        }
+        Term::Implies(ts, concl) => {
+            stack.push(Frame::ImpliesPremises {
+                current,
+                ts,
+                t: concl,
+                rec: vec![],
+            });
+            Ok(Either::Left(&ts[0]))
+        }
+        Term::Not(inner) => {
+            stack.push(Frame::Not { current, t: inner });
+            Ok(Either::Left(inner))
+        }
+        Term::Ite(b, th, e) => {
+            stack.push(Frame::IteB {
+                current,
+                b,
+                t: th,
+                e,
+            });
+            Ok(Either::Left(b))
+        }
     }
 }
 
@@ -1036,16 +1021,14 @@ where
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     let mut stack: RStack<'_, R, Str, So, T> = Vec::new();
-    let leaf = expand(recursor, &mut stack, term)?;
-    let mut result = resolve_leaf(recursor, leaf)?;
+    let mut result = expand_and_resolve(recursor, &mut stack, term)?;
     loop {
         match push_result(recursor, &mut stack, result)? {
             Either::Left(final_result) => return Ok(final_result),
             Either::Right(mut frame) => {
                 let child = next_child(recursor, &mut frame)?;
                 stack.push(frame);
-                let leaf = expand(recursor, &mut stack, child)?;
-                result = resolve_leaf(recursor, leaf)?;
+                result = expand_and_resolve(recursor, &mut stack, child)?;
             }
         }
     }
