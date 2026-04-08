@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use yaspar::ast::Keyword;
 use yaspar_ir::ast::Typecheck;
 use yaspar_ir::ast::alg::{
