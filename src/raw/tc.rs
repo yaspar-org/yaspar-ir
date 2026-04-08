@@ -522,6 +522,15 @@ impl<T> Default for TCLocal<'_, T> {
     }
 }
 
+impl<T> TCLocal<'_, T> {
+    /// Pop off the top of the scope stack; return an error if the stack is empty.
+    fn scope_pop(&mut self, visiting: impl Display) -> TC<Vec<VarBinding<Str, T>>> {
+        self.loc_inc
+            .pop()
+            .ok_or_else(|| format!("TC: scoping error, failed to manage scope for {visiting}"))
+    }
+}
+
 impl<T> Mapping for TCLocal<'_, T>
 where
     T: Clone,
@@ -697,13 +706,13 @@ where
 
     fn on_let(
         &mut self,
-        _current: &T,
+        current: &T,
         _vs: &[VarBinding<St, T>],
         _body: &T,
         vs_rec: Vec<Self::Binding>,
         body_rec: Self::Out,
     ) -> TC<Term> {
-        self.local.loc_inc.pop();
+        self.local.scope_pop(current)?;
         Ok(self.arena.let_term(vs_rec, body_rec))
     }
 
@@ -714,6 +723,9 @@ where
         _t: &T,
         _is_forall: bool,
     ) -> Result<(), Self::Err> {
+        if !self.meta.theories.contains(&Theory::Quantifiers) {
+            return Err("TC: the current logic does not support quantifiers!".to_string());
+        }
         let sorts = vs
             .iter()
             .map(|v| {
@@ -734,10 +746,7 @@ where
         t: &T,
         t_rec: Self::Out,
     ) -> TC<Term> {
-        let sorts =
-            self.local.loc_inc.pop().ok_or_else(|| {
-                format!("TC: scoping error, failed to manage scope for {current}")
-            })?;
+        let sorts = self.local.scope_pop(current)?;
         is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
         Ok(self.arena.exists(sorts, t_rec))
     }
@@ -789,14 +798,14 @@ where
                 match constructors.get(&ctr) {
                     None => {
                         return Err(format!(
-                            "case {ctr}{} is not a constructor!",
+                            "TC: case {ctr}{} is not a constructor!",
                             ctor.display_meta_data()
                         ));
                     }
                     Some(args) => {
                         if !args.is_empty() {
                             return Err(format!(
-                                "case {ctr}{} is not a constructor with a non-empty argument list!",
+                                "TC: constructor {ctr}{} requires a non-empty list of arguments",
                                 ctor.display_meta_data()
                             ));
                         }
@@ -826,7 +835,7 @@ where
                                     (vec![], Pattern::Ctor(ctr.clone()))
                                 } else {
                                     return Err(format!(
-                                        "case {ctr}{} is not a constructor with a non-empty argument list!",
+                                        "TC: constructor {ctr}{} requires a non-empty list of arguments!",
                                         ctr.display_meta_data()
                                     ));
                                 }
@@ -897,14 +906,14 @@ where
 
     fn on_match_arm(
         &mut self,
-        _current: &T,
+        current: &T,
         _scrutinee: &T,
         _cases: &[alg::PatternArm<St, T>],
         _case_idx: usize,
         current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Result<Self::Arm, Self::Err> {
-        self.local.loc_inc.pop();
+        self.local.scope_pop(current)?;
         Ok(PatternArm {
             pattern: current_pattern,
             body: arm,
@@ -1044,7 +1053,7 @@ where
     fn on_or(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
         if ts_rec.is_empty() {
             return Err(format!(
-                "TC: 'and'{} requires at least one argument!",
+                "TC: 'or'{} requires at least one argument!",
                 current.display_meta_data()
             ));
         }
@@ -1059,9 +1068,9 @@ where
     }
 
     fn on_xor(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
-        if ts_rec.is_empty() {
+        if ts.len() < 2 {
             return Err(format!(
-                "TC: 'and'{} requires at least one argument!",
+                "TC: 'xor'{} requires at least two arguments!",
                 current.display_meta_data()
             ));
         }
