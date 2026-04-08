@@ -211,22 +211,16 @@ pub trait TermRecursor<Str, So, T> {
     // --- Attribute callbacks ---
 
     /// Called for a keyword-only attribute (e.g. `:keyword`).
-    fn on_attribute_keyword(
-        &mut self,
-        current: &T,
-        keyword: &Keyword,
-    ) -> Result<Self::Attr, Self::Err>;
+    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err>;
     /// Called for a keyword attribute with a constant value (e.g. `:keyword 42`).
     fn on_attribute_constant(
         &mut self,
-        current: &T,
         keyword: &Keyword,
         constant: &Constant<Str>,
     ) -> Result<Self::Attr, Self::Err>;
     /// Called for a keyword attribute with a symbol value (e.g. `:keyword sym`).
     fn on_attribute_symbol(
         &mut self,
-        current: &T,
         keyword: &Keyword,
         symbol: &Str,
     ) -> Result<Self::Attr, Self::Err>;
@@ -235,7 +229,6 @@ pub trait TermRecursor<Str, So, T> {
     /// Called for a `:pattern` attribute after all pattern sub-terms have been recursed.
     fn on_attribute_pattern(
         &mut self,
-        current: &T,
         patterns: &[T],
         patterns_rec: Vec<Self::Out>,
     ) -> Result<Self::Attr, Self::Err>;
@@ -457,12 +450,16 @@ where
 {
     while anns_rec.len() < anns.len() {
         match &anns[anns_rec.len()] {
-            Attribute::Pattern(_) => break,
-            Attribute::Keyword(k) => anns_rec.push(recursor.on_attribute_keyword(current, k)?),
-            Attribute::Constant(k, c) => {
-                anns_rec.push(recursor.on_attribute_constant(current, k, c)?)
+            Attribute::Pattern(ts) => {
+                if ts.is_empty() {
+                    anns_rec.push(recursor.on_attribute_pattern(ts, vec![])?);
+                } else {
+                    break;
+                }
             }
-            Attribute::Symbol(k, s) => anns_rec.push(recursor.on_attribute_symbol(current, k, s)?),
+            Attribute::Keyword(k) => anns_rec.push(recursor.on_attribute_keyword(k)?),
+            Attribute::Constant(k, c) => anns_rec.push(recursor.on_attribute_constant(k, c)?),
+            Attribute::Symbol(k, s) => anns_rec.push(recursor.on_attribute_symbol(k, s)?),
             Attribute::Named(s) => anns_rec.push(recursor.on_attribute_named(current, s)?),
         }
     }
@@ -564,14 +561,18 @@ where
                 scrutinee,
                 cases,
             } => {
-                return Ok(Either::Right(Frame::MatchCases {
-                    current,
-                    scrutinee,
-                    cases,
-                    scrutinee_rec: result,
-                    case_rec: vec![],
-                    current_pattern: None,
-                }));
+                if cases.is_empty() {
+                    result = recursor.on_match(current, scrutinee, cases, result, vec![])?;
+                } else {
+                    return Ok(Either::Right(Frame::MatchCases {
+                        current,
+                        scrutinee,
+                        cases,
+                        scrutinee_rec: result,
+                        case_rec: vec![],
+                        current_pattern: None,
+                    }));
+                }
             }
             Frame::MatchCases {
                 current,
@@ -654,11 +655,7 @@ where
                     _ => unreachable!(),
                 };
                 if cur_pattern_rec.len() >= pat_ts.len() {
-                    anns_rec.push(recursor.on_attribute_pattern(
-                        current,
-                        pat_ts,
-                        cur_pattern_rec,
-                    )?);
+                    anns_rec.push(recursor.on_attribute_pattern(pat_ts, cur_pattern_rec)?);
                     cur_pattern_rec = vec![];
                     advance_attributes_until_pattern(recursor, current, anns, &mut anns_rec)?;
                     if anns_rec.len() >= anns.len() {
@@ -896,23 +893,41 @@ where
         Term::Global(id, sort) => recursor.on_global(current, id, sort).map(Either::Right),
         Term::Local(id) => recursor.on_local(current, id).map(Either::Right),
         Term::App(id, args, sort) => {
-            stack.push(Frame::App {
-                current,
-                id,
-                args,
-                sort,
-                rec: vec![],
-            });
-            Ok(Either::Left(&args[0]))
+            if args.is_empty() {
+                recursor
+                    .on_app(current, id, args, sort, vec![])
+                    .map(Either::Right)
+            } else {
+                stack.push(Frame::App {
+                    current,
+                    id,
+                    args,
+                    sort,
+                    rec: vec![],
+                });
+                Ok(Either::Left(&args[0]))
+            }
         }
         Term::Let(vs, body) => {
-            stack.push(Frame::LetBindings {
-                current,
-                vs,
-                body,
-                vs_rec: vec![],
-            });
-            Ok(Either::Left(&vs[0].2))
+            if vs.is_empty() {
+                let vc = vec![];
+                recursor.setup_let_scope(current, vs, body, &vc)?;
+                stack.push(Frame::LetBody {
+                    current,
+                    vs,
+                    body,
+                    vs_rec: vc,
+                });
+                Ok(Either::Left(body))
+            } else {
+                stack.push(Frame::LetBindings {
+                    current,
+                    vs,
+                    body,
+                    vs_rec: vec![],
+                });
+                Ok(Either::Left(&vs[0].2))
+            }
         }
         Term::Exists(vs, body) => {
             recursor.setup_quantifier_scope(current, vs, body, false)?;
@@ -955,49 +970,75 @@ where
             Ok(Either::Left(l))
         }
         Term::Distinct(ts) => {
-            stack.push(Frame::Nary {
-                current,
-                kind: NaryKind::Distinct,
-                ts,
-                rec: vec![],
-            });
-            Ok(Either::Left(&ts[0]))
+            if ts.is_empty() {
+                recursor.on_distinct(current, ts, vec![]).map(Either::Right)
+            } else {
+                stack.push(Frame::Nary {
+                    current,
+                    kind: NaryKind::Distinct,
+                    ts,
+                    rec: vec![],
+                });
+                Ok(Either::Left(&ts[0]))
+            }
         }
         Term::And(ts) => {
-            stack.push(Frame::Nary {
-                current,
-                kind: NaryKind::And,
-                ts,
-                rec: vec![],
-            });
-            Ok(Either::Left(&ts[0]))
+            if ts.is_empty() {
+                recursor.on_and(current, ts, vec![]).map(Either::Right)
+            } else {
+                stack.push(Frame::Nary {
+                    current,
+                    kind: NaryKind::And,
+                    ts,
+                    rec: vec![],
+                });
+                Ok(Either::Left(&ts[0]))
+            }
         }
         Term::Or(ts) => {
-            stack.push(Frame::Nary {
-                current,
-                kind: NaryKind::Or,
-                ts,
-                rec: vec![],
-            });
-            Ok(Either::Left(&ts[0]))
+            if ts.is_empty() {
+                recursor.on_or(current, ts, vec![]).map(Either::Right)
+            } else {
+                stack.push(Frame::Nary {
+                    current,
+                    kind: NaryKind::Or,
+                    ts,
+                    rec: vec![],
+                });
+                Ok(Either::Left(&ts[0]))
+            }
         }
         Term::Xor(ts) => {
-            stack.push(Frame::Nary {
-                current,
-                kind: NaryKind::Xor,
-                ts,
-                rec: vec![],
-            });
-            Ok(Either::Left(&ts[0]))
+            if ts.is_empty() {
+                recursor.on_xor(current, ts, vec![]).map(Either::Right)
+            } else {
+                stack.push(Frame::Nary {
+                    current,
+                    kind: NaryKind::Xor,
+                    ts,
+                    rec: vec![],
+                });
+                Ok(Either::Left(&ts[0]))
+            }
         }
         Term::Implies(ts, concl) => {
-            stack.push(Frame::ImpliesPremises {
-                current,
-                ts,
-                t: concl,
-                rec: vec![],
-            });
-            Ok(Either::Left(&ts[0]))
+            if ts.is_empty() {
+                stack.push(Frame::ImpliesConclusion {
+                    current,
+                    ts,
+                    t: concl,
+                    ts_rec: vec![],
+                });
+                Ok(Either::Left(concl))
+            } else {
+                stack.push(Frame::ImpliesPremises {
+                    current,
+                    ts,
+                    t: concl,
+                    rec: vec![],
+                });
+                Ok(Either::Left(&ts[0]))
+            }
         }
         Term::Not(inner) => {
             stack.push(Frame::Not { current, t: inner });

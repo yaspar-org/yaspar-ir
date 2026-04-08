@@ -5,8 +5,11 @@ use yaspar::ast::Keyword;
 use yaspar_ir::ast::alg::{
     Attribute, Constant, Local, PatternArm, QualifiedIdentifier, VarBinding,
 };
-use yaspar_ir::ast::{Context, Typecheck};
-use yaspar_ir::ast::{Sort, Str, Term, TermRecursor, TypedTermRecursor};
+use yaspar_ir::ast::{CheckedApi, Context, Typecheck};
+use yaspar_ir::ast::{
+    ObjectAllocatorExt, Sort, Str, StrAllocator, Term, TermAllocator, TermRecursor,
+    TypedTermRecursor,
+};
 use yaspar_ir::untyped::UntypedAst;
 
 enum Bottom {}
@@ -165,17 +168,12 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         Ok(1 + t_rec + anns_rec.into_iter().sum::<usize>())
     }
 
-    fn on_attribute_keyword(
-        &mut self,
-        _current: &Term,
-        _keyword: &Keyword,
-    ) -> Result<Self::Attr, Self::Err> {
+    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Result<Self::Attr, Self::Err> {
         Ok(1)
     }
 
     fn on_attribute_constant(
         &mut self,
-        _current: &Term,
         _keyword: &Keyword,
         _constant: &Constant<Str>,
     ) -> Result<Self::Attr, Self::Err> {
@@ -184,7 +182,6 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_attribute_symbol(
         &mut self,
-        _current: &Term,
         _keyword: &Keyword,
         _symbol: &Str,
     ) -> Result<Self::Attr, Self::Err> {
@@ -201,7 +198,6 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
 
     fn on_attribute_pattern(
         &mut self,
-        _current: &Term,
         _patterns: &[Term],
         patterns_rec: Vec<Self::Out>,
     ) -> Result<Self::Attr, Self::Err> {
@@ -430,4 +426,84 @@ fn test_annotated() {
     let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
     // (! x :named foo) = 1 (annotated) + 1 (x) + 1 (:named) = 3
     assert_eq!(size(&mut ctx, "(! x :named foo)"), 3);
+}
+
+fn term_size(t: &Term) -> usize {
+    match TermSize.recurse_on_term(t) {
+        Ok(n) => n,
+        Err(b) => match b {},
+    }
+}
+
+#[test]
+fn test_empty_and() {
+    let mut ctx = setup("(set-logic ALL)");
+    let t = ctx.and(vec![]);
+    assert_eq!(term_size(&t), 1);
+}
+
+#[test]
+fn test_empty_or() {
+    let mut ctx = setup("(set-logic ALL)");
+    let t = ctx.or(vec![]);
+    assert_eq!(term_size(&t), 1);
+}
+
+#[test]
+fn test_empty_distinct() {
+    let mut ctx = setup("(set-logic ALL)");
+    let t = ctx.distinct(vec![]);
+    assert_eq!(term_size(&t), 1);
+}
+
+#[test]
+fn test_empty_xor() {
+    let mut ctx = setup("(set-logic ALL)");
+    let t = ctx.xor(vec![]);
+    assert_eq!(term_size(&t), 1);
+}
+
+#[test]
+fn test_empty_implies() {
+    let mut ctx = setup("(set-logic ALL)(declare-const p Bool)");
+    let p = UntypedAst
+        .parse_term_str("p")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let t = ctx.implies(vec![], p);
+    assert_eq!(term_size(&t), 2);
+}
+
+#[test]
+fn test_empty_app() {
+    let mut ctx = setup("(set-logic ALL)");
+    let bool_sort = ctx.bool_sort();
+    let f = ctx.allocate_symbol("f");
+    let t = ctx.app(QualifiedIdentifier::simple(f), vec![], Some(bool_sort));
+    assert_eq!(term_size(&t), 1);
+}
+
+#[test]
+fn test_empty_let() {
+    let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
+    let x = UntypedAst
+        .parse_term_str("x")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let t = ctx.let_term(vec![], x);
+    assert_eq!(term_size(&t), 2);
+}
+
+#[test]
+fn test_empty_match() {
+    let mut ctx = setup(
+        "(set-logic ALL)
+         (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))
+         (declare-const l (List Int))",
+    );
+    let l = ctx.typed_symbol("l").unwrap();
+    let t = ctx.matching(l, vec![]);
+    assert_eq!(term_size(&t), 2);
 }

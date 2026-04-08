@@ -971,16 +971,15 @@ where
         Ok(self.arena.annotated(t_rec, anns_rec))
     }
 
-    fn on_attribute_keyword(&mut self, _current: &T, keyword: &Keyword) -> TC<Self::Attr> {
+    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err> {
         Ok(Attribute::Keyword(keyword.clone()))
     }
 
     fn on_attribute_constant(
         &mut self,
-        _current: &T,
         keyword: &Keyword,
         constant: &alg::Constant<St>,
-    ) -> TC<Self::Attr> {
+    ) -> Result<Self::Attr, Self::Err> {
         Ok(Attribute::Constant(
             keyword.clone(),
             constant_conv(constant, self),
@@ -989,10 +988,9 @@ where
 
     fn on_attribute_symbol(
         &mut self,
-        _current: &T,
         keyword: &Keyword,
         symbol: &St,
-    ) -> TC<Self::Attr> {
+    ) -> Result<Self::Attr, Self::Err> {
         Ok(Attribute::Symbol(
             keyword.clone(),
             symbol.allocate(self.arena),
@@ -1005,10 +1003,9 @@ where
 
     fn on_attribute_pattern(
         &mut self,
-        _current: &T,
         _patterns: &[T],
         patterns_rec: Vec<Self::Out>,
-    ) -> TC<Self::Attr> {
+    ) -> Result<Self::Attr, Self::Err> {
         Ok(Attribute::Pattern(patterns_rec))
     }
 
