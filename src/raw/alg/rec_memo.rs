@@ -41,6 +41,8 @@ use yaspar::ast::Keyword;
 ///
 /// The `inner` recursor and `cache` are public fields, so callers can inspect or reuse
 /// the cache after traversal.
+///
+/// Be aware of recursors with side effects! A cache hit will not perform the side effect of that term!
 pub struct Memoize<R, M> {
     /// The wrapped recursor whose callbacks are delegated to.
     pub inner: R,

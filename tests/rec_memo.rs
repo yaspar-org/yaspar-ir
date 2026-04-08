@@ -10,7 +10,7 @@ use yaspar_ir::ast::{Bottom, Context, Memoize, Sort, Str, Term, TermRecursor, Ty
 use yaspar_ir::untyped::UntypedAst;
 
 struct TouchedTermSize {
-    /// count the touched subterms; side effect to poke wheather cache is hit
+    /// count the touched subterms; side effect to poke whether cache is hit
     counter: u128,
 }
 
