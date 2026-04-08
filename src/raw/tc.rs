@@ -993,7 +993,7 @@ where
         ))
     }
 
-    fn on_attribute_named(&mut self, _current: &T, name: &St) -> TC<Self::Attr> {
+    fn on_attribute_named(&mut self, name: &St) -> TC<Self::Attr> {
         Ok(Attribute::Named(name.allocate(self.arena)))
     }
 

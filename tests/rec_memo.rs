@@ -1,20 +1,17 @@
-// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 use yaspar::ast::Keyword;
+use yaspar_ir::ast::Typecheck;
 use yaspar_ir::ast::alg::{
     Attribute, Constant, Local, PatternArm, QualifiedIdentifier, VarBinding,
 };
-use yaspar_ir::ast::{Bottom, CheckedApi, Context, Typecheck};
-use yaspar_ir::ast::{
-    ObjectAllocatorExt, Sort, Str, StrAllocator, Term, TermAllocator, TermRecursor,
-    TypedTermRecursor,
-};
+use yaspar_ir::ast::{Bottom, Context, Memoize, Sort, Str, Term, TermRecursor, TypedTermRecursor};
 use yaspar_ir::untyped::UntypedAst;
 
-struct TermSize;
+struct TouchedTermSize {
+    /// count the touched subterms; side effect to poke wheather cache is hit
+    counter: u128,
+}
 
-impl TermRecursor<Str, Sort, Term> for TermSize {
+impl TermRecursor<Str, Sort, Term> for TouchedTermSize {
     type Out = usize;
     type Attr = usize;
     type Binding = usize;
@@ -28,6 +25,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _constant: &Constant<Str>,
         _sort: &Option<Sort>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1)
     }
 
@@ -37,6 +35,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _id: &QualifiedIdentifier<Str, Sort>,
         _sort: &Option<Sort>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1)
     }
 
@@ -45,6 +44,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _current: &Term,
         _id: &Local<Str, Sort>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1)
     }
 
@@ -56,6 +56,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _s: &Option<Sort>,
         recs: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + recs.into_iter().sum::<usize>())
     }
 
@@ -88,6 +89,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         vs_rec: Vec<Self::Out>,
         body_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + vs_rec.into_iter().sum::<usize>() + body_rec)
     }
 
@@ -108,6 +110,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _t: &Term,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + t_rec)
     }
 
@@ -118,6 +121,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _t: &Term,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + t_rec)
     }
 
@@ -152,6 +156,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         scrutinee_rec: Self::Out,
         cases_rec: Vec<Self::Arm>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + scrutinee_rec + cases_rec.into_iter().sum::<usize>())
     }
 
@@ -163,6 +168,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         t_rec: Self::Out,
         anns_rec: Vec<Self::Attr>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + t_rec + anns_rec.into_iter().sum::<usize>())
     }
 
@@ -206,6 +212,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         a_rec: Self::Out,
         b_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + a_rec + b_rec)
     }
 
@@ -215,6 +222,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _ts: &[Term],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
@@ -224,6 +232,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _ts: &[Term],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
@@ -233,6 +242,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _ts: &[Term],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
@@ -242,6 +252,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _ts: &[Term],
         ts_rec: Vec<Self::Out>,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + ts_rec.into_iter().sum::<usize>())
     }
 
@@ -251,6 +262,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         _t: &Term,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + t_rec)
     }
 
@@ -262,6 +274,7 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         ts_rec: Vec<Self::Out>,
         t_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + ts_rec.into_iter().sum::<usize>() + t_rec)
     }
 
@@ -275,22 +288,27 @@ impl TermRecursor<Str, Sort, Term> for TermSize {
         t_rec: Self::Out,
         e_rec: Self::Out,
     ) -> Result<Self::Out, Self::Err> {
+        self.counter += 1;
         Ok(1 + b_rec + t_rec + e_rec)
     }
 }
 
-impl TypedTermRecursor for TermSize {}
+impl TypedTermRecursor for TouchedTermSize {}
 
-fn size(ctx: &mut Context, s: &str) -> usize {
-    let t = UntypedAst
-        .parse_term_str(s)
-        .unwrap()
-        .type_check(ctx)
-        .unwrap();
-    match TermSize.recurse_on_term(&t) {
-        Ok(n) => n,
-        Err(b) => match b {},
-    }
+fn test_term_size(t: &Term, expected: usize) {
+    let other_recursor = TouchedTermSize { counter: 0 };
+    // memoization happens just by wrapping on top of another recursor!
+    let mut recursor = Memoize::new(other_recursor);
+    // memoization is automagic during recursion
+    let sz = recursor.recurse_on_term(t).unwrap();
+    assert_eq!(sz, expected);
+    // cache can be inherited
+    // see how we can just pass in a reference to the previous cache, instead of a new cache
+    let mut recursor = Memoize::with_cache(TouchedTermSize { counter: 0 }, &mut recursor.cache);
+    let sz = recursor.recurse_on_term(t).unwrap();
+    assert_eq!(sz, expected);
+    // cache should hit, so no subterm is touched
+    assert_eq!(recursor.inner.counter, 0);
 }
 
 fn setup(script: &str) -> Context {
@@ -303,201 +321,156 @@ fn setup(script: &str) -> Context {
     ctx
 }
 
+fn parse_term(ctx: &mut Context, s: &str) -> Term {
+    UntypedAst
+        .parse_term_str(s)
+        .unwrap()
+        .type_check(ctx)
+        .unwrap()
+}
+
 #[test]
-fn test_constant() {
+fn test_memo_constant() {
     let mut ctx = setup("(set-logic ALL)");
-    assert_eq!(size(&mut ctx, "42"), 1);
-    assert_eq!(size(&mut ctx, "true"), 1);
+    test_term_size(&parse_term(&mut ctx, "42"), 1);
+    test_term_size(&parse_term(&mut ctx, "true"), 1);
 }
 
 #[test]
-fn test_global() {
+fn test_memo_global() {
     let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
-    assert_eq!(size(&mut ctx, "x"), 1);
+    test_term_size(&parse_term(&mut ctx, "x"), 1);
 }
 
 #[test]
-fn test_app() {
+fn test_memo_app() {
     let mut ctx = setup("(set-logic ALL)(declare-const x Int)(declare-const y Int)");
-    // (+ x y) = 1 (app) + 1 (x) + 1 (y) = 3
-    assert_eq!(size(&mut ctx, "(+ x y)"), 3);
-    // (+ x y 1) = 1 + 1 + 1 + 1 = 4
-    assert_eq!(size(&mut ctx, "(+ x y 1)"), 4);
+    test_term_size(&parse_term(&mut ctx, "(+ x y)"), 3);
+    test_term_size(&parse_term(&mut ctx, "(+ x y 1)"), 4);
 }
 
 #[test]
-fn test_not() {
+fn test_memo_not() {
     let mut ctx = setup("(set-logic ALL)(declare-const p Bool)");
-    // (not p) = 1 (not) + 1 (p) = 2
-    assert_eq!(size(&mut ctx, "(not p)"), 2);
+    test_term_size(&parse_term(&mut ctx, "(not p)"), 2);
 }
 
 #[test]
-fn test_and_or() {
+fn test_memo_and_or() {
     let mut ctx = setup("(set-logic ALL)(declare-const p Bool)(declare-const q Bool)");
-    // (and p q) = 1 + 1 + 1 = 3
-    assert_eq!(size(&mut ctx, "(and p q)"), 3);
-    assert_eq!(size(&mut ctx, "(or p q)"), 3);
+    test_term_size(&parse_term(&mut ctx, "(and p q)"), 3);
+    test_term_size(&parse_term(&mut ctx, "(or p q)"), 3);
 }
 
 #[test]
-fn test_xor() {
-    let mut ctx = setup("(set-logic ALL)(declare-const p Bool)(declare-const q Bool)");
-    assert_eq!(size(&mut ctx, "(xor p q)"), 3);
-}
-
-#[test]
-fn test_implies() {
-    let mut ctx = setup("(set-logic ALL)(declare-const p Bool)(declare-const q Bool)");
-    // (=> p q) = 1 + 1 + 1 = 3
-    assert_eq!(size(&mut ctx, "(=> p q)"), 3);
-}
-
-#[test]
-fn test_eq() {
+fn test_memo_eq() {
     let mut ctx = setup("(set-logic ALL)(declare-const x Int)(declare-const y Int)");
-    // (= x y) = 1 + 1 + 1 = 3
-    assert_eq!(size(&mut ctx, "(= x y)"), 3);
+    test_term_size(&parse_term(&mut ctx, "(= x y)"), 3);
 }
 
 #[test]
-fn test_distinct() {
-    let mut ctx = setup("(set-logic ALL)(declare-const x Int)(declare-const y Int)");
-    assert_eq!(size(&mut ctx, "(distinct x y)"), 3);
-}
-
-#[test]
-fn test_ite() {
+fn test_memo_ite() {
     let mut ctx =
         setup("(set-logic ALL)(declare-const p Bool)(declare-const x Int)(declare-const y Int)");
-    // (ite p x y) = 1 + 1 + 1 + 1 = 4
-    assert_eq!(size(&mut ctx, "(ite p x y)"), 4);
+    test_term_size(&parse_term(&mut ctx, "(ite p x y)"), 4);
 }
 
 #[test]
-fn test_let() {
+fn test_memo_let() {
     let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
-    // (let ((y (+ x 1))) (+ y y)) = 1 (let) + 3 (+ x 1) + 3 (+ y y) = 7
-    assert_eq!(size(&mut ctx, "(let ((y (+ x 1))) (+ y y))"), 7);
+    test_term_size(&parse_term(&mut ctx, "(let ((y (+ x 1))) (+ y y))"), 7);
 }
 
 #[test]
-fn test_forall() {
+fn test_memo_forall() {
     let mut ctx = setup("(set-logic ALL)");
-    // (forall ((x Int)) (= x 0)) = 1 (forall) + 3 (= x 0) = 4
-    assert_eq!(size(&mut ctx, "(forall ((x Int)) (= x 0))"), 4);
+    test_term_size(&parse_term(&mut ctx, "(forall ((x Int)) (= x 0))"), 4);
 }
 
 #[test]
-fn test_exists() {
+fn test_memo_exists() {
     let mut ctx = setup("(set-logic ALL)");
-    assert_eq!(size(&mut ctx, "(exists ((x Int)) (= x 0))"), 4);
+    test_term_size(&parse_term(&mut ctx, "(exists ((x Int)) (= x 0))"), 4);
 }
 
 #[test]
-fn test_nested() {
+fn test_memo_nested() {
     let mut ctx = setup("(set-logic ALL)(declare-const x Int)(declare-const y Int)");
-    // (+ (+ x y) 1) = 1 + (1 + 1 + 1) + 1 = 5
-    assert_eq!(size(&mut ctx, "(+ (+ x y) 1)"), 5);
-    // (not (= (+ x 1) y)) = 1 + (1 + (1 + 1 + 1) + 1) = 6
-    assert_eq!(size(&mut ctx, "(not (= (+ x 1) y))"), 6);
+    test_term_size(&parse_term(&mut ctx, "(+ (+ x y) 1)"), 5);
+    test_term_size(&parse_term(&mut ctx, "(not (= (+ x 1) y))"), 6);
 }
 
 #[test]
-fn test_match() {
+fn test_memo_match() {
     let mut ctx = setup(
         "(set-logic ALL)
              (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))
              (declare-const l (List Int))",
     );
-    // (match l ((nil 0) ((cons h t) h)))
-    // = 1 (match) + 1 (scrutinee l) + 1 (nil arm: 0) + 1 (cons arm: h) = 4
-    assert_eq!(size(&mut ctx, "(match l ((nil 0) ((cons h t) h)))"), 4,);
-}
-
-#[test]
-fn test_annotated() {
-    let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
-    // (! x :named foo) = 1 (annotated) + 1 (x) + 1 (:named) = 3
-    assert_eq!(size(&mut ctx, "(! x :named foo)"), 3);
-}
-
-fn term_size(t: &Term) -> usize {
-    match TermSize.recurse_on_term(t) {
-        Ok(n) => n,
-        Err(b) => match b {},
-    }
-}
-
-#[test]
-fn test_empty_and() {
-    let mut ctx = setup("(set-logic ALL)");
-    let t = ctx.and(vec![]);
-    assert_eq!(term_size(&t), 1);
-}
-
-#[test]
-fn test_empty_or() {
-    let mut ctx = setup("(set-logic ALL)");
-    let t = ctx.or(vec![]);
-    assert_eq!(term_size(&t), 1);
-}
-
-#[test]
-fn test_empty_distinct() {
-    let mut ctx = setup("(set-logic ALL)");
-    let t = ctx.distinct(vec![]);
-    assert_eq!(term_size(&t), 1);
-}
-
-#[test]
-fn test_empty_xor() {
-    let mut ctx = setup("(set-logic ALL)");
-    let t = ctx.xor(vec![]);
-    assert_eq!(term_size(&t), 1);
-}
-
-#[test]
-fn test_empty_implies() {
-    let mut ctx = setup("(set-logic ALL)(declare-const p Bool)");
-    let p = UntypedAst
-        .parse_term_str("p")
-        .unwrap()
-        .type_check(&mut ctx)
-        .unwrap();
-    let t = ctx.implies(vec![], p);
-    assert_eq!(term_size(&t), 2);
-}
-
-#[test]
-fn test_empty_app() {
-    let mut ctx = setup("(set-logic ALL)");
-    let bool_sort = ctx.bool_sort();
-    let f = ctx.allocate_symbol("f");
-    let t = ctx.app(QualifiedIdentifier::simple(f), vec![], Some(bool_sort));
-    assert_eq!(term_size(&t), 1);
-}
-
-#[test]
-fn test_empty_let() {
-    let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
-    let x = UntypedAst
-        .parse_term_str("x")
-        .unwrap()
-        .type_check(&mut ctx)
-        .unwrap();
-    let t = ctx.let_term(vec![], x);
-    assert_eq!(term_size(&t), 2);
-}
-
-#[test]
-fn test_empty_match() {
-    let mut ctx = setup(
-        "(set-logic ALL)
-         (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))
-         (declare-const l (List Int))",
+    test_term_size(
+        &parse_term(&mut ctx, "(match l ((nil 0) ((cons h t) h)))"),
+        4,
     );
-    let l = ctx.typed_symbol("l").unwrap();
-    let t = ctx.matching(l, vec![]);
-    assert_eq!(term_size(&t), 2);
+}
+
+#[test]
+fn test_memo_annotated() {
+    let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
+    test_term_size(&parse_term(&mut ctx, "(! x :named foo)"), 3);
+}
+
+#[test]
+fn test_memo_deep_not() {
+    let mut ctx = setup("(set-logic ALL)(declare-const p Bool)");
+    // (not (not (not ... (not p) ...))) — 10 layers of not + 1 leaf = 11
+    let term = "(not (not (not (not (not (not (not (not (not (not p))))))))))";
+    test_term_size(&parse_term(&mut ctx, term), 11);
+}
+
+#[test]
+fn test_memo_deep_add() {
+    let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
+    // (+ (+ (+ ... (+ x 1) ... 1) 1) 1) — 10 apps, each with a numeral + nested child = 10*2 + 1 = 21
+    let term = "(+ (+ (+ (+ (+ (+ (+ (+ (+ (+ x 1) 1) 1) 1) 1) 1) 1) 1) 1) 1)";
+    test_term_size(&parse_term(&mut ctx, term), 21);
+}
+
+#[test]
+fn test_memo_deep_ite() {
+    let mut ctx =
+        setup("(set-logic ALL)(declare-const p Bool)(declare-const x Int)(declare-const y Int)");
+    // 10 nested ites: each ite node + condition p + else y = 3 overhead, plus the nested then-branch
+    // size = 10 * 3 + 1 (innermost x) = 31
+    let term = "(ite p (ite p (ite p (ite p (ite p (ite p (ite p (ite p (ite p (ite p x y) y) y) y) y) y) y) y) y) y)";
+    test_term_size(&parse_term(&mut ctx, term), 31);
+}
+
+#[test]
+fn test_memo_deep_and() {
+    let mut ctx = setup("(set-logic ALL)(declare-const p Bool)(declare-const q Bool)");
+    // (and (and (and ... (and p q) ... q) q) q) — 10 ands, each with q + nested child = 10*2 + 1 = 21
+    let term = "(and (and (and (and (and (and (and (and (and (and p q) q) q) q) q) q) q) q) q) q)";
+    test_term_size(&parse_term(&mut ctx, term), 21);
+}
+
+#[test]
+fn test_memo_deep_let() {
+    let mut ctx = setup("(set-logic ALL)(declare-const x Int)");
+    // 10 nested lets, each binding a fresh variable to 0, innermost body is (+ x 0)
+    // each let = 1 (let) + 1 (binding rhs 0) = 2 overhead, plus nested body
+    // size = 10 * 2 + 3 (+ x 0) = 23
+    let term = "\
+        (let ((a 0)) \
+        (let ((b 0)) \
+        (let ((c 0)) \
+        (let ((d 0)) \
+        (let ((e 0)) \
+        (let ((f 0)) \
+        (let ((g 0)) \
+        (let ((h 0)) \
+        (let ((i 0)) \
+        (let ((j 0)) \
+        (+ x 0)\
+        ))))))))))";
+    test_term_size(&parse_term(&mut ctx, term), 23);
 }

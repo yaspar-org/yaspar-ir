@@ -35,6 +35,10 @@ use crate::ast::Repr;
 use crate::raw::alg::*;
 use either::Either;
 
+/// Use this type as the `Err` type in [TermRecursor] if no error is expected.
+#[derive(Clone, Debug, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub enum Bottom {}
+
 /// A visitor trait for performing stack-safe, bottom-up recursion over [`Term`] trees.
 ///
 /// Implementors define one callback per `Term` variant. Leaf callbacks (`on_constant`,
@@ -225,7 +229,7 @@ pub trait TermRecursor<Str, So, T> {
         symbol: &Str,
     ) -> Result<Self::Attr, Self::Err>;
     /// Called for a `:named` attribute.
-    fn on_attribute_named(&mut self, current: &T, name: &Str) -> Result<Self::Attr, Self::Err>;
+    fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err>;
     /// Called for a `:pattern` attribute after all pattern sub-terms have been recursed.
     fn on_attribute_pattern(
         &mut self,
@@ -441,7 +445,6 @@ pub(crate) type RStack<'a, R, Str, So, T> = Vec<Frame<'a, Str, So, T, R>>;
 /// `on_attribute_*` callbacks.
 fn advance_attributes_until_pattern<R, Str, So, T>(
     recursor: &mut R,
-    current: &T,
     anns: &[Attribute<Str, T>],
     anns_rec: &mut Vec<R::Attr>,
 ) -> Result<(), R::Err>
@@ -460,7 +463,7 @@ where
             Attribute::Keyword(k) => anns_rec.push(recursor.on_attribute_keyword(k)?),
             Attribute::Constant(k, c) => anns_rec.push(recursor.on_attribute_constant(k, c)?),
             Attribute::Symbol(k, s) => anns_rec.push(recursor.on_attribute_symbol(k, s)?),
-            Attribute::Named(s) => anns_rec.push(recursor.on_attribute_named(current, s)?),
+            Attribute::Named(s) => anns_rec.push(recursor.on_attribute_named(s)?),
         }
     }
     Ok(())
@@ -627,7 +630,7 @@ where
                 anns,
             } => {
                 let mut anns_rec: Vec<R::Attr> = vec![];
-                advance_attributes_until_pattern(recursor, current, anns, &mut anns_rec)?;
+                advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
                 if anns_rec.len() >= anns.len() {
                     result = recursor.on_annotated(current, body, anns, result, anns_rec)?;
                 } else {
@@ -657,7 +660,7 @@ where
                 if cur_pattern_rec.len() >= pat_ts.len() {
                     anns_rec.push(recursor.on_attribute_pattern(pat_ts, cur_pattern_rec)?);
                     cur_pattern_rec = vec![];
-                    advance_attributes_until_pattern(recursor, current, anns, &mut anns_rec)?;
+                    advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
                     if anns_rec.len() >= anns.len() {
                         result = recursor.on_annotated(current, body, anns, t_rec, anns_rec)?;
                     } else {
@@ -877,6 +880,7 @@ where
 /// Process a single term node: either push a [`Frame`] and return the next
 /// child to descend into (`Either::Left`), or resolve a leaf directly via
 /// its callback (`Either::Right`).
+#[inline]
 pub(crate) fn expand_and_resolve_once<'a, R, Str: 'a, So: 'a, T>(
     recursor: &mut R,
     stack: &mut RStack<'a, R, Str, So, T>,

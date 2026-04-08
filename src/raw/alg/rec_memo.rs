@@ -8,11 +8,34 @@ use crate::ast::alg::{
 use crate::containers::InsertableMapping;
 use crate::traits::{Contains, Repr};
 use either::Either;
+use std::collections::HashMap;
 use yaspar::ast::Keyword;
 
 pub struct Memoize<R, M> {
-    inner: R,
-    cache: M,
+    pub inner: R,
+    pub cache: M,
+}
+
+impl<R, T, Out> Memoize<R, HashMap<T, Out>> {
+    pub fn new<Str, So>(inner: R) -> Self
+    where
+        R: TermRecursor<Str, So, T, Out = Out>,
+    {
+        Self {
+            inner,
+            cache: HashMap::new(),
+        }
+    }
+}
+
+impl<R, M> Memoize<R, M> {
+    pub fn with_cache<Str, So, T>(inner: R, cache: M) -> Self
+    where
+        R: TermRecursor<Str, So, T>,
+        M: InsertableMapping<Key = T, Value = R::Out>,
+    {
+        Self { inner, cache }
+    }
 }
 
 impl<Str, So, T, R, M> TermRecursor<Str, So, T> for Memoize<R, M>
@@ -198,44 +221,36 @@ where
         Ok(r)
     }
 
-    fn on_attribute_keyword(
-        &mut self,
-        current: &T,
-        keyword: &Keyword,
-    ) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_keyword(current, keyword)
+    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err> {
+        self.inner.on_attribute_keyword(keyword)
     }
 
     fn on_attribute_constant(
         &mut self,
-        current: &T,
         keyword: &Keyword,
         constant: &Constant<Str>,
     ) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_constant(current, keyword, constant)
+        self.inner.on_attribute_constant(keyword, constant)
     }
 
     fn on_attribute_symbol(
         &mut self,
-        current: &T,
         keyword: &Keyword,
         symbol: &Str,
     ) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_symbol(current, keyword, symbol)
+        self.inner.on_attribute_symbol(keyword, symbol)
     }
 
-    fn on_attribute_named(&mut self, current: &T, name: &Str) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_named(current, name)
+    fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err> {
+        self.inner.on_attribute_named(name)
     }
 
     fn on_attribute_pattern(
         &mut self,
-        current: &T,
         patterns: &[T],
         patterns_rec: Vec<Self::Out>,
     ) -> Result<Self::Attr, Self::Err> {
-        self.inner
-            .on_attribute_pattern(current, patterns, patterns_rec)
+        self.inner.on_attribute_pattern(patterns, patterns_rec)
     }
 
     fn on_eq(

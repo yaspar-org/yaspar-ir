@@ -7,7 +7,7 @@ use crate::traits::Contains;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-pub(crate) trait Mapping {
+pub trait Mapping {
     type Key;
     type Value: Clone;
 
@@ -78,7 +78,7 @@ where
     }
 }
 
-pub(crate) trait InsertableMapping: Mapping {
+pub trait InsertableMapping: Mapping {
     fn insert(&mut self, key: Self::Key, value: Self::Value);
 }
 
