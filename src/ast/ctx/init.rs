@@ -256,7 +256,7 @@ impl Context {
         let str_to_code = self.allocate_symbol("str.to_code");
         let str_from_code = self.allocate_symbol("str.from_code");
         let str_to_int = self.allocate_symbol("str.to_int");
-        let str_from_int = self.allocate_symbol("str_from_int");
+        let str_from_int = self.allocate_symbol("str.from_int");
 
         let default_symbol_table = HashMap::from([
             builtin(
