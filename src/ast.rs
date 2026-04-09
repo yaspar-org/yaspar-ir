@@ -37,6 +37,7 @@ pub mod fv;
 pub mod gsubst;
 #[cfg(feature = "implicant-generation")]
 pub(crate) mod implicant;
+pub(crate) mod letelim;
 pub mod letintro;
 pub mod mono;
 pub mod subst;
@@ -53,13 +54,13 @@ pub use crate::ast::implicant::{FindImplicant, Model};
 pub use crate::raw::alg;
 pub use crate::raw::alg::rec::{Bottom, TermRecursor};
 pub use crate::raw::alg::rec_memo::Memoize;
-pub use crate::raw::letelim::*;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck, unif::SortSubst};
 pub use crate::untyped as u;
 pub use gsubst::GlobalSubst;
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
 pub use subst::{Substitute, Substitution};
 
+pub use crate::ast::letelim::{LetElim, LetEliminator, LetEliminatorInner};
 use crate::traits::MetaData;
 #[cfg(feature = "implicant-generation")]
 use sat_interface::SatSolver;
@@ -338,7 +339,10 @@ impl Typecheck<Context> for u::Command {
 
 impl LetElim<Context> for Term {
     fn let_elim(&self, env: &mut Context) -> Self {
-        self.let_elim(&mut env.arena)
+        match LetEliminator::create(env).recurse_on_term(self) {
+            Ok(r) => r,
+            Err(b) => match b {},
+        }
     }
 }
 
