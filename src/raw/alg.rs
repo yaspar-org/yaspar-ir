@@ -304,6 +304,16 @@ impl<Str, So> Local<Str, So> {
     }
 }
 
+impl<Str, So> From<VarBinding<Str, So>> for Local<Str, So> {
+    fn from(value: VarBinding<Str, So>) -> Self {
+        Self {
+            id: value.1,
+            symbol: value.0,
+            sort: Some(value.2),
+        }
+    }
+}
+
 /// Represent attributes in SMTLib
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Attribute<Str, T> {
@@ -775,6 +785,31 @@ impl<Str> Pattern<Str> {
                 .filter_map(|o| {
                     if let Some((name, _)) = o {
                         Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Return variables and their ids of the given [Pattern]
+    pub fn variables_and_ids(&self) -> Vec<(Str, usize)>
+    where
+        Str: Clone,
+    {
+        match self {
+            Pattern::Wildcard(None) | Pattern::Ctor(_) => {
+                vec![]
+            }
+            Pattern::Wildcard(Some((name, id))) => {
+                vec![(name.clone(), *id)]
+            }
+            Pattern::Applied { arguments, .. } => arguments
+                .iter()
+                .filter_map(|o| {
+                    if let Some((name, id)) = o {
+                        Some((name.clone(), *id))
                     } else {
                         None
                     }

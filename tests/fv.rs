@@ -5,10 +5,18 @@ use dashu::integer::UBig;
 use std::collections::HashSet;
 use yaspar_ir::ast::fv::FreeLocalVars;
 use yaspar_ir::ast::{
-    CheckedApi, Context, ObjectAllocatorExt, ScopedSortApi, StrAllocator, Typecheck,
+    ATerm, CheckedApi, Context, ObjectAllocatorExt, ScopedSortApi, Str, Typecheck,
 };
 use yaspar_ir::traits::Repr;
 use yaspar_ir::untyped::UntypedAst;
+
+/// Extract the `(Str, usize)` key from a `Term::Local` node.
+fn local_key(t: &yaspar_ir::ast::Term) -> (Str, usize) {
+    match t.repr() {
+        ATerm::Local(id) => (id.symbol.clone(), id.id),
+        _ => panic!("expected a local variable term"),
+    }
+}
 
 #[test]
 fn test_quantifiers() {
@@ -132,8 +140,9 @@ fn test_free_vars_in_let() {
     let let_term = l_ctx.typed_let(t);
 
     let fv = let_term.free_loc_vars();
-    let y_sym = ctx.allocate_symbol("y");
-    assert_eq!(fv, HashSet::from([y_sym]));
+    let x_key = local_key(&q_ctx.typed_symbol("x").unwrap());
+    let y_key = local_key(&q_ctx.typed_symbol("y").unwrap());
+    assert_eq!(fv, HashSet::from([x_key, y_key]));
 }
 
 #[test]
@@ -144,6 +153,8 @@ fn test_two_free_vars() {
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", int.clone()), ("b", int.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
+    let b_key = local_key(&outer_ctx.typed_symbol("b").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("x", int)])
         .unwrap();
@@ -155,9 +166,7 @@ fn test_two_free_vars() {
     let forall_t = inner_ctx.typed_forall(t).unwrap();
 
     let fv = forall_t.free_loc_vars();
-    let a_sym = ctx.allocate_symbol("a");
-    let b_sym = ctx.allocate_symbol("b");
-    assert_eq!(fv, HashSet::from([a_sym, b_sym]));
+    assert_eq!(fv, HashSet::from([a_key, b_key]));
 }
 
 #[test]
@@ -168,6 +177,9 @@ fn test_three_free_vars() {
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", int.clone()), ("b", int.clone()), ("c", int.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
+    let b_key = local_key(&outer_ctx.typed_symbol("b").unwrap());
+    let c_key = local_key(&outer_ctx.typed_symbol("c").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("x", int)])
         .unwrap();
@@ -179,10 +191,7 @@ fn test_three_free_vars() {
     let forall_t = inner_ctx.typed_forall(t).unwrap();
 
     let fv = forall_t.free_loc_vars();
-    let a_sym = ctx.allocate_symbol("a");
-    let b_sym = ctx.allocate_symbol("b");
-    let c_sym = ctx.allocate_symbol("c");
-    assert_eq!(fv, HashSet::from([a_sym, b_sym, c_sym]));
+    assert_eq!(fv, HashSet::from([a_key, b_key, c_key]));
 }
 
 #[test]
@@ -193,6 +202,8 @@ fn test_free_vars_distinct() {
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", int.clone()), ("b", int.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
+    let b_key = local_key(&outer_ctx.typed_symbol("b").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("x", int.clone()), ("y", int)])
         .unwrap();
@@ -204,9 +215,7 @@ fn test_free_vars_distinct() {
     let forall = inner_ctx.typed_forall(t).unwrap();
 
     let fv = forall.free_loc_vars();
-    let a_sym = ctx.allocate_symbol("a");
-    let b_sym = ctx.allocate_symbol("b");
-    assert_eq!(fv, HashSet::from([a_sym, b_sym]));
+    assert_eq!(fv, HashSet::from([a_key, b_key]));
 }
 
 #[test]
@@ -214,11 +223,11 @@ fn test_free_vars_and_or_xor() {
     let mut ctx = Context::new();
     ctx.ensure_logic();
     let bool = ctx.bool_sort();
-    let a_sym = ctx.allocate_symbol("a");
-    let b_sym = ctx.allocate_symbol("b");
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", bool.clone()), ("b", bool.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
+    let b_key = local_key(&outer_ctx.typed_symbol("b").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("p", bool.clone())])
         .unwrap();
@@ -230,7 +239,7 @@ fn test_free_vars_and_or_xor() {
         .unwrap();
     let forall_and = inner_ctx.typed_forall(t_and).unwrap();
     let fv = forall_and.free_loc_vars();
-    assert_eq!(fv, HashSet::from([a_sym.clone(), b_sym.clone()]));
+    assert_eq!(fv, HashSet::from([a_key.clone(), b_key.clone()]));
 
     let mut inner_ctx2 = outer_ctx
         .build_quantifier_with_domain([("p", bool.clone())])
@@ -242,7 +251,7 @@ fn test_free_vars_and_or_xor() {
         .unwrap();
     let forall_or = inner_ctx2.typed_forall(t_or).unwrap();
     let fv = forall_or.free_loc_vars();
-    assert_eq!(fv, HashSet::from([a_sym.clone()]));
+    assert_eq!(fv, HashSet::from([a_key.clone()]));
 
     let mut inner_ctx3 = outer_ctx
         .build_quantifier_with_domain([("p", bool)])
@@ -254,7 +263,7 @@ fn test_free_vars_and_or_xor() {
         .unwrap();
     let forall_xor = inner_ctx3.typed_forall(t_xor).unwrap();
     let fv = forall_xor.free_loc_vars();
-    assert_eq!(fv, HashSet::from([b_sym]));
+    assert_eq!(fv, HashSet::from([b_key]));
 }
 
 #[test]
@@ -262,10 +271,10 @@ fn test_free_vars_not() {
     let mut ctx = Context::new();
     ctx.ensure_logic();
     let bool = ctx.bool_sort();
-    let a_sym = ctx.allocate_symbol("a");
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", bool.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("p", bool)])
         .unwrap();
@@ -277,7 +286,7 @@ fn test_free_vars_not() {
     let forall = inner_ctx.typed_forall(t).unwrap();
 
     let fv = forall.free_loc_vars();
-    assert_eq!(fv, HashSet::from([a_sym]));
+    assert_eq!(fv, HashSet::from([a_key]));
 }
 
 #[test]
@@ -285,11 +294,11 @@ fn test_free_vars_implies() {
     let mut ctx = Context::new();
     ctx.ensure_logic();
     let bool = ctx.bool_sort();
-    let a_sym = ctx.allocate_symbol("a");
-    let b_sym = ctx.allocate_symbol("b");
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", bool.clone()), ("b", bool.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
+    let b_key = local_key(&outer_ctx.typed_symbol("b").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("p", bool)])
         .unwrap();
@@ -301,7 +310,7 @@ fn test_free_vars_implies() {
     let forall = inner_ctx.typed_forall(t).unwrap();
 
     let fv = forall.free_loc_vars();
-    assert_eq!(fv, HashSet::from([a_sym, b_sym]));
+    assert_eq!(fv, HashSet::from([a_key, b_key]));
 }
 
 #[test]
@@ -310,11 +319,11 @@ fn test_free_vars_ite() {
     ctx.ensure_logic();
     let int = ctx.int_sort();
     let bool = ctx.bool_sort();
-    let a_sym = ctx.allocate_symbol("a");
-    let b_sym = ctx.allocate_symbol("b");
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", bool), ("b", int.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
+    let b_key = local_key(&outer_ctx.typed_symbol("b").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("x", int)])
         .unwrap();
@@ -326,7 +335,7 @@ fn test_free_vars_ite() {
     let forall = inner_ctx.typed_forall(t).unwrap();
 
     let fv = forall.free_loc_vars();
-    assert_eq!(fv, HashSet::from([a_sym, b_sym]));
+    assert_eq!(fv, HashSet::from([a_key, b_key]));
 }
 
 #[test]
@@ -345,11 +354,11 @@ fn test_free_vars_match() {
 
     let int = ctx.int_sort();
     let list_int = ctx.wf_sort_n("List", [int]).unwrap();
-    let a_sym = ctx.allocate_symbol("a");
-    let b_sym = ctx.allocate_symbol("b");
     let mut outer_ctx = ctx
         .build_quantifier_with_domain([("a", list_int.clone()), ("b", list_int.clone())])
         .unwrap();
+    let a_key = local_key(&outer_ctx.typed_symbol("a").unwrap());
+    let b_key = local_key(&outer_ctx.typed_symbol("b").unwrap());
     let mut inner_ctx = outer_ctx
         .build_quantifier_with_domain([("l", list_int)])
         .unwrap();
@@ -361,7 +370,7 @@ fn test_free_vars_match() {
     let forall = inner_ctx.typed_forall(t).unwrap();
 
     let fv = forall.free_loc_vars();
-    assert_eq!(fv, HashSet::from([a_sym, b_sym]));
+    assert_eq!(fv, HashSet::from([a_key, b_key]));
 }
 
 #[test]
