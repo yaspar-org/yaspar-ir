@@ -493,11 +493,11 @@ impl TermRecursor<Str, Sort, Term> for TermDepth {
     fn on_annotated(&mut self, _: &Term, _: &Term, _: &[Attribute<Str, Term>], r: usize, _: Vec<()>) -> Result<usize, Bottom> { Ok(1 + r) }
 
     // Attributes
-    fn on_attribute_keyword(&mut self, _: &Term, _: &yaspar::ast::Keyword) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_constant(&mut self, _: &Term, _: &yaspar::ast::Keyword, _: &Constant<Str>) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_symbol(&mut self, _: &Term, _: &yaspar::ast::Keyword, _: &Str) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_named(&mut self, _: &Term, _: &Str) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_pattern(&mut self, _: &Term, _: &[Term], r: Vec<usize>) -> Result<(), Bottom> {
+    fn on_attribute_keyword(&mut self,  _: &yaspar::ast::Keyword) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_constant(&mut self, _: &yaspar::ast::Keyword, _: &Constant<Str>) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_symbol(&mut self, _: &yaspar::ast::Keyword, _: &Str) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_named(&mut self, _: &Str) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_pattern(&mut self, _: &[Term], r: Vec<usize>) -> Result<(), Bottom> {
         Ok(())
     }
 }
