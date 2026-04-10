@@ -6,6 +6,7 @@
 //! This module provides functionality to instantiate parametric datatypes with concrete sorts,
 //! eliminating sort variables by substituting them with ground types.
 
+use super::boilerplates::TypedBuilder;
 use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::{
@@ -18,6 +19,7 @@ use crate::raw::alg::Constant;
 use crate::raw::alg::rec::Bottom;
 use crate::raw::instance::PatternArm;
 use crate::raw::tc::unif::{SortSubst, apply_subst};
+use delegate::delegate;
 use std::collections::HashMap;
 use yaspar::ast::Keyword;
 
@@ -38,7 +40,7 @@ pub trait Monomorphization<E, I> {
 ///
 /// The environment stack maps `(name, old_id)` to `new_id` for scoped constructs.
 pub struct MonomorphizerInner<'a, E> {
-    arena: &'a mut E,
+    inner: TypedBuilder<'a, E>,
     subst: &'a SortSubst,
     /// Scoped old-id → new-id mappings. Each frame corresponds to a let, quantifier, or match arm.
     env: Vec<HashMap<(Str, usize), usize>>,
@@ -147,11 +149,7 @@ where
     type Output = Self;
 
     fn monomorphize(&self, subst: &SortSubst, env: &mut E) -> Self {
-        let mut mono = MonomorphizerInner {
-            arena: env,
-            subst,
-            env: vec![],
-        };
+        let mut mono = MonomorphizerInner::new(env, subst);
         mono.recurse_on_term_no_err(self)
     }
 }
@@ -159,14 +157,14 @@ where
 impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     pub fn new(arena: &'a mut E, subst: &'a SortSubst) -> Self {
         Self {
-            arena,
+            inner: TypedBuilder::new(arena),
             subst,
             env: Vec::new(),
         }
     }
 
     fn mono_sort(&mut self, s: &Sort) -> Sort {
-        apply_subst(self.arena.arena(), self.subst, s)
+        apply_subst(self.inner.arena(), self.subst, s)
     }
 
     fn mono_opt_sort(&mut self, s: &Option<Sort>) -> Option<Sort> {
@@ -188,7 +186,7 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
         let frame = vs
             .iter()
             .map(|v| {
-                let new_id = self.arena.arena().new_local();
+                let new_id = self.inner.arena().new_local();
                 ((v.0.clone(), v.1), new_id)
             })
             .collect();
@@ -226,7 +224,27 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
     type Arm = PatternArm;
     type Err = Bottom;
 
-    // --- Leaves ---
+    delegate! {
+        to self.inner {
+            fn on_match(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: Self::Out, cases_rec: Vec<Self::Arm>) -> Result<Term, Bottom>;
+            fn on_annotated(&mut self, current: &Term, t: &Term, anns: &[Attribute], t_rec: Term, anns_rec: Vec<Attribute>) -> Result<Term, Bottom>;
+            fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Attribute, Bottom>;
+            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &crate::ast::alg::Constant<Str>) -> Result<Attribute, Bottom>;
+            fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
+            fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
+            fn on_distinct(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_and(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_or(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_xor(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_not(&mut self, current: &Term, t: &Term, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_implies(&mut self, current: &Term, ts: &[Term], t: &Term, ts_rec: Vec<Term>, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_ite(&mut self, current: &Term, b: &Term, t: &Term, e: &Term, b_rec: Term, t_rec: Term, e_rec: Term) -> Result<Term, Bottom>;
+        }
+    }
+
+    // --- Leaves (custom: apply sort substitution) ---
 
     fn on_constant(
         &mut self,
@@ -235,7 +253,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         sort: &Option<Sort>,
     ) -> Result<Term, Bottom> {
         let s = self.mono_opt_sort(sort);
-        Ok(self.arena.arena().constant(c.clone(), s))
+        Ok(self.inner.arena().constant(c.clone(), s))
     }
 
     fn on_global(
@@ -246,13 +264,13 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
     ) -> Result<Term, Bottom> {
         let nid = self.mono_qid(id);
         let s = self.mono_opt_sort(sort);
-        Ok(self.arena.arena().global(nid, s))
+        Ok(self.inner.arena().global(nid, s))
     }
 
     fn on_local(&mut self, current: &Term, l: &Local) -> Result<Term, Bottom> {
         Ok(if let Some(new_id) = self.lookup_new_id(&l.symbol, l.id) {
             let new_sort = l.sort.as_ref().map(|s| self.mono_sort(s));
-            self.arena.arena().local(Local {
+            self.inner.arena().local(Local {
                 id: new_id,
                 symbol: l.symbol.clone(),
                 sort: new_sort,
@@ -262,7 +280,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         })
     }
 
-    // --- Compound ---
+    // --- App (custom: apply sort substitution to qid and sort) ---
 
     fn on_app(
         &mut self,
@@ -274,58 +292,10 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
     ) -> Result<Term, Bottom> {
         let nid = self.mono_qid(id);
         let s = self.mono_opt_sort(sort);
-        Ok(self.arena.arena().app(nid, recs, s))
+        Ok(self.inner.arena().app(nid, recs, s))
     }
 
-    fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().eq(a, b))
-    }
-
-    fn on_distinct(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().distinct(recs))
-    }
-
-    fn on_and(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().and(recs))
-    }
-
-    fn on_or(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().or(recs))
-    }
-
-    fn on_xor(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().xor(recs))
-    }
-
-    fn on_not(&mut self, _: &Term, _: &Term, r: Term) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().not(r))
-    }
-
-    fn on_implies(
-        &mut self,
-        _: &Term,
-        _: &[Term],
-        _: &Term,
-        ps: Vec<Term>,
-        c: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().implies(ps, c))
-    }
-
-    fn on_ite(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        b: Term,
-        t: Term,
-        e: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().ite(b, t, e))
-    }
-
-    // --- Let ---
+    // --- Let (custom: remap local IDs) ---
 
     fn on_let_binding(
         &mut self,
@@ -338,7 +308,6 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         Ok(rec)
     }
 
-    /// Allocate new local IDs for let-bound variables and push a scope frame.
     fn setup_let_scope(
         &mut self,
         _: &Term,
@@ -350,7 +319,6 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         Ok(())
     }
 
-    /// Pop the scope and rebuild the let with new IDs and monomorphized bindings.
     fn on_let(
         &mut self,
         _: &Term,
@@ -365,12 +333,11 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
             .map(|(v, rec)| VarBinding(v.0.clone(), self.new_id_for(&v.0, v.1), rec))
             .collect();
         self.env.pop();
-        Ok(self.arena.arena().let_term(nbindings, body))
+        Ok(self.inner.arena().let_term(nbindings, body))
     }
 
-    // --- Quantifiers ---
+    // --- Quantifiers (custom: remap IDs + monomorphize sorts) ---
 
-    /// Allocate new local IDs for quantifier-bound variables and push a scope frame.
     fn setup_quantifier_scope(
         &mut self,
         _: &Term,
@@ -382,17 +349,6 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         Ok(())
     }
 
-    fn on_forall(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Term,
-    ) -> Result<Term, Bottom> {
-        let nvars = self.mono_quantifier_vars(vs);
-        Ok(self.arena.arena().forall(nvars, body))
-    }
-
     fn on_exists(
         &mut self,
         _: &Term,
@@ -401,12 +357,22 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         body: Term,
     ) -> Result<Term, Bottom> {
         let nvars = self.mono_quantifier_vars(vs);
-        Ok(self.arena.arena().exists(nvars, body))
+        Ok(self.inner.arena().exists(nvars, body))
     }
 
-    // --- Match ---
+    fn on_forall(
+        &mut self,
+        _: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        _: &Term,
+        body: Term,
+    ) -> Result<Term, Bottom> {
+        let nvars = self.mono_quantifier_vars(vs);
+        Ok(self.inner.arena().forall(nvars, body))
+    }
 
-    /// Allocate new local IDs for pattern-bound variables and push a scope frame.
+    // --- Match (custom: remap pattern variable IDs) ---
+
     fn setup_match_case_scope(
         &mut self,
         _: &Term,
@@ -419,7 +385,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         let frame = vars
             .into_iter()
             .map(|(name, old_id)| {
-                let new_id = self.arena.arena().new_local();
+                let new_id = self.inner.arena().new_local();
                 ((name, old_id), new_id)
             })
             .collect();
@@ -442,54 +408,6 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         };
         self.env.pop();
         Ok(arm)
-    }
-
-    fn on_match(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[PatternArm],
-        scrutinee: Term,
-        arms: Vec<PatternArm>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().matching(scrutinee, arms))
-    }
-
-    // --- Annotated ---
-
-    fn on_annotated(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[Attribute],
-        r: Term,
-        anns: Vec<Attribute>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().annotated(r, anns))
-    }
-
-    fn on_attribute_keyword(&mut self, kw: &Keyword) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Keyword(kw.clone()))
-    }
-
-    fn on_attribute_constant(
-        &mut self,
-        kw: &Keyword,
-        c: &Constant<Str>,
-    ) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Constant(kw.clone(), c.clone()))
-    }
-
-    fn on_attribute_symbol(&mut self, kw: &Keyword, s: &Str) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Symbol(kw.clone(), s.clone()))
-    }
-
-    fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Named(name.clone()))
-    }
-
-    fn on_attribute_pattern(&mut self, _: &[Term], recs: Vec<Term>) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Pattern(recs))
     }
 }
 

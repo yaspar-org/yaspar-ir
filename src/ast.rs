@@ -30,6 +30,7 @@
 //! - [`letintro`] — let-introduction via topological sorting (inverse of let-elimination).
 //! - [`mono`] — monomorphization of parametric datatypes.
 
+mod boilerplates;
 #[cfg(feature = "cnf")]
 pub(crate) mod cnf;
 mod ctx;
@@ -56,6 +57,7 @@ pub use crate::raw::alg::rec::{Bottom, IsBottom, TermRecursor};
 pub use crate::raw::alg::rec_memo::Memoize;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck, unif::SortSubst};
 pub use crate::untyped as u;
+pub use boilerplates::TypedBuilder;
 pub use gsubst::GlobalSubst;
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
 pub use subst::{Substitute, Substitution};

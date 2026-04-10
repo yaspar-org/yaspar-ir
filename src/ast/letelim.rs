@@ -19,16 +19,18 @@
 //! inverse operation (re-introducing let-bindings to share common sub-terms), see
 //! [`crate::ast::letintro`].
 
+use super::boilerplates::TypedBuilder;
 use crate::allocator::TermAllocator;
+use crate::ast::Sort;
+use crate::ast::{
+    Attribute, Constant, HasArena, Local, Memoize, PatternArm, QualifiedIdentifier, Str, Term,
+    TermRecursor, TypedTermRecursor,
+};
 use crate::containers::Mapping;
 use crate::raw::alg::VarBinding;
-use crate::raw::instance::{Attribute, PatternArm, Str, Term};
-use std::collections::HashMap;
-
-use crate::ast::Sort;
-use crate::ast::{HasArena, Memoize, TermRecursor, TypedTermRecursor};
 use crate::raw::alg::rec::Bottom;
-use crate::raw::alg::{Constant, Local, QualifiedIdentifier};
+use delegate::delegate;
+use std::collections::HashMap;
 use yaspar::ast::Keyword;
 
 /// Eliminates all let-bindings by applying substitutions properly
@@ -42,7 +44,7 @@ pub trait LetElim<Env> {
 ///
 /// It can be wrapped with [`Memoize`] for caching.
 pub struct LetEliminatorInner<'a, E> {
-    arena: &'a mut E,
+    inner: TypedBuilder<'a, E>,
     /// Environment stack: each frame maps `(name, id)` to the substituted term.
     /// Quantifier/match-bound variables are represented by frames with no entry
     /// (their locals simply won't be found, so they pass through unchanged).
@@ -58,7 +60,7 @@ where
 {
     pub fn new(arena: &'a mut E) -> Self {
         Self {
-            arena,
+            inner: TypedBuilder::new(arena),
             env: Vec::new(),
         }
     }
@@ -92,94 +94,36 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
     type Arm = PatternArm;
     type Err = Bottom;
 
-    // --- Leaves ---
-
-    fn on_constant(
-        &mut self,
-        current: &Term,
-        _: &Constant<Str>,
-        _: &Option<Sort>,
-    ) -> Result<Term, Bottom> {
-        Ok(current.clone())
-    }
-
-    fn on_global(
-        &mut self,
-        current: &Term,
-        _: &QualifiedIdentifier<Str, Sort>,
-        _: &Option<Sort>,
-    ) -> Result<Term, Bottom> {
-        Ok(current.clone())
+    delegate! {
+        to self.inner {
+            fn on_constant(&mut self, current: &Term, constant: &Constant, sort: &Option<Sort>) -> Result<Term, Bottom>;
+            fn on_global(&mut self, current: &Term, id: &QualifiedIdentifier, sort: &Option<Sort>) -> Result<Term, Bottom>;
+            fn on_app(&mut self, current: &Term, id: &QualifiedIdentifier, ts: &[Term], s: &Option<Sort>, recs: Vec<Self::Out>) -> Result<Term, Bottom>;
+            fn on_match(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: Self::Out, cases_rec: Vec<Self::Arm>) -> Result<Term, Bottom>;
+            fn on_annotated(&mut self, current: &Term, t: &Term, anns: &[Attribute], t_rec: Term, anns_rec: Vec<Attribute>) -> Result<Term, Bottom>;
+            fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Attribute, Bottom>;
+            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &crate::ast::alg::Constant<Str>) -> Result<Attribute, Bottom>;
+            fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
+            fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
+            fn on_distinct(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_and(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_or(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_xor(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_not(&mut self, current: &Term, t: &Term, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_implies(&mut self, current: &Term, ts: &[Term], t: &Term, ts_rec: Vec<Term>, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_ite(&mut self, current: &Term, b: &Term, t: &Term, e: &Term, b_rec: Term, t_rec: Term, e_rec: Term) -> Result<Term, Bottom>;
+        }
     }
 
     /// Look up the local variable in the environment. If it is let-bound (`Some(Some(t))`),
     /// return the substituted term. Otherwise (quantifier/match-bound or not found), keep as-is.
-    fn on_local(&mut self, current: &Term, id: &Local<Str, Sort>) -> Result<Term, Bottom> {
+    fn on_local(&mut self, current: &Term, id: &Local) -> Result<Term, Bottom> {
         Ok(match self.lookup(id.id_str(), id.id) {
             Some(Some(t)) => t,
             _ => current.clone(),
         })
-    }
-
-    // --- Compound ---
-
-    fn on_app(
-        &mut self,
-        _: &Term,
-        id: &QualifiedIdentifier<Str, Sort>,
-        _: &[Term],
-        s: &Option<Sort>,
-        recs: Vec<Term>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().app(id.clone(), recs, s.clone()))
-    }
-
-    fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().eq(a, b))
-    }
-
-    fn on_distinct(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().distinct(recs))
-    }
-
-    fn on_and(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().and(recs))
-    }
-
-    fn on_or(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().or(recs))
-    }
-
-    fn on_xor(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().xor(recs))
-    }
-
-    fn on_not(&mut self, _: &Term, _: &Term, r: Term) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().not(r))
-    }
-
-    fn on_implies(
-        &mut self,
-        _: &Term,
-        _: &[Term],
-        _: &Term,
-        ps: Vec<Term>,
-        c: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().implies(ps, c))
-    }
-
-    fn on_ite(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        b: Term,
-        t: Term,
-        e: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().ite(b, t, e))
     }
 
     // --- Let ---
@@ -241,17 +185,6 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
         Ok(())
     }
 
-    fn on_forall(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Term,
-    ) -> Result<Term, Bottom> {
-        self.env.pop();
-        Ok(self.arena.arena().forall(vs.to_vec(), body))
-    }
-
     fn on_exists(
         &mut self,
         _: &Term,
@@ -260,7 +193,18 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
         body: Term,
     ) -> Result<Term, Bottom> {
         self.env.pop();
-        Ok(self.arena.arena().exists(vs.to_vec(), body))
+        Ok(self.inner.arena().exists(vs.to_vec(), body))
+    }
+
+    fn on_forall(
+        &mut self,
+        _: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        _: &Term,
+        body: Term,
+    ) -> Result<Term, Bottom> {
+        self.env.pop();
+        Ok(self.inner.arena().forall(vs.to_vec(), body))
     }
 
     // --- Match ---
@@ -299,54 +243,6 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
             pattern: cases[idx].pattern.clone(),
             body,
         })
-    }
-
-    fn on_match(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[PatternArm],
-        scrutinee: Term,
-        arms: Vec<PatternArm>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().matching(scrutinee, arms))
-    }
-
-    // --- Annotated ---
-
-    fn on_annotated(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[Attribute],
-        r: Term,
-        anns: Vec<Attribute>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().annotated(r, anns))
-    }
-
-    fn on_attribute_keyword(&mut self, kw: &Keyword) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Keyword(kw.clone()))
-    }
-
-    fn on_attribute_constant(
-        &mut self,
-        kw: &Keyword,
-        c: &Constant<Str>,
-    ) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Constant(kw.clone(), c.clone()))
-    }
-
-    fn on_attribute_symbol(&mut self, kw: &Keyword, s: &Str) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Symbol(kw.clone(), s.clone()))
-    }
-
-    fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Named(name.clone()))
-    }
-
-    fn on_attribute_pattern(&mut self, _: &[Term], recs: Vec<Term>) -> Result<Attribute, Bottom> {
-        Ok(Attribute::Pattern(recs))
     }
 }
 
