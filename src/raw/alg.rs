@@ -782,6 +782,31 @@ impl<Str> Pattern<Str> {
                 .collect(),
         }
     }
+
+    /// Return variables and their ids of the given [Pattern]
+    pub fn variables_and_ids(&self) -> Vec<(Str, usize)>
+    where
+        Str: Clone,
+    {
+        match self {
+            Pattern::Wildcard(None) | Pattern::Ctor(_) => {
+                vec![]
+            }
+            Pattern::Wildcard(Some((name, id))) => {
+                vec![(name.clone(), *id)]
+            }
+            Pattern::Applied { arguments, .. } => arguments
+                .iter()
+                .filter_map(|o| {
+                    if let Some((name, id)) = o {
+                        Some((name.clone(), *id))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        }
+    }
 }
 
 /// An arm in a match expression; there is a pattern and a body
