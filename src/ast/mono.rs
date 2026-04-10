@@ -10,12 +10,19 @@ use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg;
 use crate::ast::alg::VarBinding;
 use crate::ast::{
-    ATerm, Attribute, ConstructorDec, DatatypeDec, HasArenaAlt, Local, QualifiedIdentifier, Sort,
-    Str, TC, Term,
+    ATerm, Attribute, ConstructorDec, DatatypeDec, HasArena, HasArenaAlt, Local,
+    QualifiedIdentifier, Sort, Str, TC, Term,
 };
 use crate::containers::{LocEnv, Mapping};
+use crate::raw::alg::Constant;
+use crate::raw::alg::rec::Bottom;
+use crate::raw::instance::PatternArm;
 use crate::raw::tc::unif::{SortSubst, apply_subst};
 use crate::traits::Repr;
+use std::collections::HashMap;
+use yaspar::ast::Keyword;
+
+use crate::ast::{TermRecursor, TypedTermRecursor};
 
 /// Trait for monomorphizing parametric types by substituting sort variables with concrete sorts.
 pub trait Monomorphization<E, I> {
@@ -349,6 +356,361 @@ where
         monomorphize_term(self, subst, &mut mono_env)
     }
 }
+
+/// Stack-safe term monomorphization using [`TermRecursor`].
+///
+/// Applies a [`SortSubst`] to every sort embedded in a term (constants, globals, locals,
+/// applications, quantifier bindings) and re-allocates local variable IDs to avoid collisions.
+///
+/// The environment stack maps `(name, old_id)` to `new_id` for scoped constructs.
+pub struct Monomorphizer<'a, E> {
+    arena: &'a mut E,
+    subst: &'a SortSubst,
+    /// Scoped old-id → new-id mappings. Each frame corresponds to a let, quantifier, or match arm.
+    env: Vec<HashMap<(Str, usize), usize>>,
+}
+
+impl<'a, E: HasArena> Monomorphizer<'a, E> {
+    pub fn new(arena: &'a mut E, subst: &'a SortSubst) -> Self {
+        Self {
+            arena,
+            subst,
+            env: Vec::new(),
+        }
+    }
+
+    fn mono_sort(&mut self, s: &Sort) -> Sort {
+        apply_subst(self.arena.arena(), self.subst, s)
+    }
+
+    fn mono_opt_sort(&mut self, s: &Option<Sort>) -> Option<Sort> {
+        s.as_ref().map(|s| self.mono_sort(s))
+    }
+
+    fn mono_qid(&mut self, qid: &QualifiedIdentifier) -> QualifiedIdentifier {
+        alg::QualifiedIdentifier(qid.0.clone(), self.mono_opt_sort(&qid.1))
+    }
+
+    /// Look up a local variable's new id from the env stack.
+    fn lookup_new_id(&self, name: &Str, id: usize) -> Option<usize> {
+        let key = (name.clone(), id);
+        self.env.lookup(&key)
+    }
+
+    /// Allocate new local IDs for a set of bindings and push a scope frame.
+    fn push_scope_for<T>(&mut self, vs: &[VarBinding<Str, T>]) {
+        let frame = vs
+            .iter()
+            .map(|v| {
+                let new_id = self.arena.arena().new_local();
+                ((v.0.clone(), v.1), new_id)
+            })
+            .collect();
+        self.env.push(frame);
+    }
+
+    /// Get the new id for a binding from the current top frame.
+    fn new_id_for(&self, name: &Str, old_id: usize) -> usize {
+        self.env.last().unwrap()[&(name.clone(), old_id)]
+    }
+}
+
+impl<E: HasArena> TermRecursor<Str, Sort, Term> for Monomorphizer<'_, E> {
+    type Out = Term;
+    type Attr = Attribute;
+    type Binding = Term;
+    type Pattern = ();
+    type Arm = PatternArm;
+    type Err = Bottom;
+
+    // --- Leaves ---
+
+    fn on_constant(
+        &mut self,
+        _: &Term,
+        c: &Constant<Str>,
+        sort: &Option<Sort>,
+    ) -> Result<Term, Bottom> {
+        let s = self.mono_opt_sort(sort);
+        Ok(self.arena.arena().constant(c.clone(), s))
+    }
+
+    fn on_global(
+        &mut self,
+        _: &Term,
+        id: &QualifiedIdentifier,
+        sort: &Option<Sort>,
+    ) -> Result<Term, Bottom> {
+        let nid = self.mono_qid(id);
+        let s = self.mono_opt_sort(sort);
+        Ok(self.arena.arena().global(nid, s))
+    }
+
+    fn on_local(&mut self, current: &Term, l: &Local) -> Result<Term, Bottom> {
+        Ok(if let Some(new_id) = self.lookup_new_id(&l.symbol, l.id) {
+            let new_sort = l.sort.as_ref().map(|s| self.mono_sort(s));
+            self.arena.arena().local(Local {
+                id: new_id,
+                symbol: l.symbol.clone(),
+                sort: new_sort,
+            })
+        } else {
+            current.clone()
+        })
+    }
+
+    // --- Compound ---
+
+    fn on_app(
+        &mut self,
+        _: &Term,
+        id: &QualifiedIdentifier,
+        _: &[Term],
+        sort: &Option<Sort>,
+        recs: Vec<Term>,
+    ) -> Result<Term, Bottom> {
+        let nid = self.mono_qid(id);
+        let s = self.mono_opt_sort(sort);
+        Ok(self.arena.arena().app(nid, recs, s))
+    }
+
+    fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().eq(a, b))
+    }
+
+    fn on_distinct(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().distinct(recs))
+    }
+
+    fn on_and(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().and(recs))
+    }
+
+    fn on_or(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().or(recs))
+    }
+
+    fn on_xor(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().xor(recs))
+    }
+
+    fn on_not(&mut self, _: &Term, _: &Term, r: Term) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().not(r))
+    }
+
+    fn on_implies(
+        &mut self,
+        _: &Term,
+        _: &[Term],
+        _: &Term,
+        ps: Vec<Term>,
+        c: Term,
+    ) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().implies(ps, c))
+    }
+
+    fn on_ite(
+        &mut self,
+        _: &Term,
+        _: &Term,
+        _: &Term,
+        _: &Term,
+        b: Term,
+        t: Term,
+        e: Term,
+    ) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().ite(b, t, e))
+    }
+
+    // --- Let ---
+
+    fn on_let_binding(
+        &mut self,
+        _: &Term,
+        _: &[VarBinding<Str, Term>],
+        _: &Term,
+        _: usize,
+        rec: Term,
+    ) -> Result<Term, Bottom> {
+        Ok(rec)
+    }
+
+    /// Allocate new local IDs for let-bound variables and push a scope frame.
+    fn setup_let_scope(
+        &mut self,
+        _: &Term,
+        vs: &[VarBinding<Str, Term>],
+        _: &Term,
+        _: &[Term],
+    ) -> Result<(), Bottom> {
+        self.push_scope_for(vs);
+        Ok(())
+    }
+
+    /// Pop the scope and rebuild the let with new IDs and monomorphized bindings.
+    fn on_let(
+        &mut self,
+        _: &Term,
+        vs: &[VarBinding<Str, Term>],
+        _: &Term,
+        vs_rec: Vec<Term>,
+        body: Term,
+    ) -> Result<Term, Bottom> {
+        let nbindings = vs
+            .iter()
+            .zip(vs_rec)
+            .map(|(v, rec)| VarBinding(v.0.clone(), self.new_id_for(&v.0, v.1), rec))
+            .collect();
+        self.env.pop();
+        Ok(self.arena.arena().let_term(nbindings, body))
+    }
+
+    // --- Quantifiers ---
+
+    /// Allocate new local IDs for quantifier-bound variables and push a scope frame.
+    fn setup_quantifier_scope(
+        &mut self,
+        _: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        _: &Term,
+        _: bool,
+    ) -> Result<(), Bottom> {
+        self.push_scope_for(vs);
+        Ok(())
+    }
+
+    fn on_forall(
+        &mut self,
+        _: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        _: &Term,
+        body: Term,
+    ) -> Result<Term, Bottom> {
+        let nvars = vs
+            .iter()
+            .map(|v| {
+                VarBinding(
+                    v.0.clone(),
+                    self.new_id_for(&v.0, v.1),
+                    self.mono_sort(&v.2),
+                )
+            })
+            .collect();
+        self.env.pop();
+        Ok(self.arena.arena().forall(nvars, body))
+    }
+
+    fn on_exists(
+        &mut self,
+        _: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        _: &Term,
+        body: Term,
+    ) -> Result<Term, Bottom> {
+        let nvars = vs
+            .iter()
+            .map(|v| {
+                VarBinding(
+                    v.0.clone(),
+                    self.new_id_for(&v.0, v.1),
+                    self.mono_sort(&v.2),
+                )
+            })
+            .collect();
+        self.env.pop();
+        Ok(self.arena.arena().exists(nvars, body))
+    }
+
+    // --- Match ---
+
+    /// Allocate new local IDs for pattern-bound variables and push a scope frame.
+    fn setup_match_case_scope(
+        &mut self,
+        _: &Term,
+        _: &Term,
+        cases: &[PatternArm],
+        _: &Term,
+        idx: usize,
+    ) -> Result<(), Bottom> {
+        let vars = cases[idx].pattern.variables_and_ids();
+        let frame = vars
+            .into_iter()
+            .map(|(name, old_id)| {
+                let new_id = self.arena.arena().new_local();
+                ((name, old_id), new_id)
+            })
+            .collect();
+        self.env.push(frame);
+        Ok(())
+    }
+
+    fn on_match_arm(
+        &mut self,
+        _: &Term,
+        _: &Term,
+        cases: &[PatternArm],
+        idx: usize,
+        _: (),
+        body: Term,
+    ) -> Result<PatternArm, Bottom> {
+        let arm = PatternArm {
+            pattern: cases[idx].pattern.clone(),
+            body,
+        };
+        self.env.pop();
+        Ok(arm)
+    }
+
+    fn on_match(
+        &mut self,
+        _: &Term,
+        _: &Term,
+        _: &[PatternArm],
+        scrutinee: Term,
+        arms: Vec<PatternArm>,
+    ) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().matching(scrutinee, arms))
+    }
+
+    // --- Annotated ---
+
+    fn on_annotated(
+        &mut self,
+        _: &Term,
+        _: &Term,
+        _: &[Attribute],
+        r: Term,
+        anns: Vec<Attribute>,
+    ) -> Result<Term, Bottom> {
+        Ok(self.arena.arena().annotated(r, anns))
+    }
+
+    fn on_attribute_keyword(&mut self, kw: &Keyword) -> Result<Attribute, Bottom> {
+        Ok(Attribute::Keyword(kw.clone()))
+    }
+
+    fn on_attribute_constant(
+        &mut self,
+        kw: &Keyword,
+        c: &Constant<Str>,
+    ) -> Result<Attribute, Bottom> {
+        Ok(Attribute::Constant(kw.clone(), c.clone()))
+    }
+
+    fn on_attribute_symbol(&mut self, kw: &Keyword, s: &Str) -> Result<Attribute, Bottom> {
+        Ok(Attribute::Symbol(kw.clone(), s.clone()))
+    }
+
+    fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom> {
+        Ok(Attribute::Named(name.clone()))
+    }
+
+    fn on_attribute_pattern(&mut self, _: &[Term], recs: Vec<Term>) -> Result<Attribute, Bottom> {
+        Ok(Attribute::Pattern(recs))
+    }
+}
+
+impl<E: HasArena> TypedTermRecursor for Monomorphizer<'_, E> {}
 
 #[cfg(test)]
 mod tests {

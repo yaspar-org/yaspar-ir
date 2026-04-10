@@ -339,10 +339,7 @@ impl Typecheck<Context> for u::Command {
 
 impl LetElim<Context> for Term {
     fn let_elim(&self, env: &mut Context) -> Self {
-        match LetEliminator::create(env).recurse_on_term(self) {
-            Ok(r) => r,
-            Err(b) => match b {},
-        }
+        LetEliminator::create(env).recurse_on_term_no_err(self)
     }
 }
 
