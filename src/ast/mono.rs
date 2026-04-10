@@ -7,18 +7,17 @@
 //! eliminating sort variables by substituting them with ground types.
 
 use crate::allocator::{LocalVarAllocator, TermAllocator};
-use crate::ast::alg;
 use crate::ast::alg::VarBinding;
 use crate::ast::{
-    ATerm, Attribute, ConstructorDec, DatatypeDec, HasArena, HasArenaAlt, Local,
-    QualifiedIdentifier, Sort, Str, TC, Term,
+    Attribute, ConstructorDec, DatatypeDec, HasArena, HasArenaAlt, Local, QualifiedIdentifier,
+    Sort, Str, TC, Term,
 };
-use crate::containers::{LocEnv, Mapping};
+use crate::ast::{Memoize, alg};
+use crate::containers::Mapping;
 use crate::raw::alg::Constant;
 use crate::raw::alg::rec::Bottom;
 use crate::raw::instance::PatternArm;
 use crate::raw::tc::unif::{SortSubst, apply_subst};
-use crate::traits::Repr;
 use std::collections::HashMap;
 use yaspar::ast::Keyword;
 
@@ -32,10 +31,28 @@ pub trait Monomorphization<E, I> {
     fn monomorphize(&self, input: &I, env: &mut E) -> Self::Output;
 }
 
-/// Environment for monomorphizing terms, tracking local variable ID mappings.
-struct TermMonoEnv<'a, E> {
+/// Stack-safe term monomorphization using [`TermRecursor`].
+///
+/// Applies a [`SortSubst`] to every sort embedded in a term (constants, globals, locals,
+/// applications, quantifier bindings) and re-allocates local variable IDs to avoid collisions.
+///
+/// The environment stack maps `(name, old_id)` to `new_id` for scoped constructs.
+pub struct MonomorphizerInner<'a, E> {
     arena: &'a mut E,
-    local: LocEnv<'a, Str, ()>,
+    subst: &'a SortSubst,
+    /// Scoped old-id → new-id mappings. Each frame corresponds to a let, quantifier, or match arm.
+    env: Vec<HashMap<(Str, usize), usize>>,
+}
+
+pub type Monomorphizer<'a, E> = Memoize<MonomorphizerInner<'a, E>, HashMap<Term, Term>>;
+
+impl<'a, E> Monomorphizer<'a, E>
+where
+    E: HasArena,
+{
+    pub fn create(arena: &'a mut E, subst: &'a SortSubst) -> Self {
+        Memoize::new(MonomorphizerInner::new(arena, subst))
+    }
 }
 
 /// Apply a sort substitution to a sort, replacing sort variables with their concrete instantiations.
@@ -122,255 +139,24 @@ where
     }
 }
 
-/// Monomorphize a qualified identifier by applying the substitution to its optional sort.
-fn monomorphize_qid<E: HasArenaAlt>(
-    qid: &QualifiedIdentifier,
-    subst: &SortSubst,
-    env: &mut E,
-) -> QualifiedIdentifier {
-    alg::QualifiedIdentifier(
-        qid.0.clone(),
-        qid.1.as_ref().map(|s| s.monomorphize(subst, env)),
-    )
-}
-
-/// Monomorphize an attribute by applying the substitution to pattern terms.
-fn monomorphize_attribute<'a, E: HasArenaAlt>(
-    attr: &Attribute,
-    subst: &SortSubst,
-    env: &mut TermMonoEnv<'a, E>,
-) -> Attribute {
-    match attr {
-        Attribute::Pattern(ts) => Attribute::Pattern(
-            ts.iter()
-                .map(|t| monomorphize_term(t, subst, env))
-                .collect(),
-        ),
-        _ => attr.clone(),
-    }
-}
-
-/// Recursively monomorphize a term by substituting sort variables with concrete sorts.
-///
-/// This traverses the term structure, applying the sort substitution to all embedded sorts
-/// (in constants, globals, locals, applications, quantifiers, etc.) and re-allocating local
-/// variable IDs to avoid collisions. Delegates to [`monomorphize_qid`] for qualified identifiers
-/// and [`monomorphize_attribute`] for annotations.
-fn monomorphize_term<'a, E: HasArenaAlt>(
-    term: &Term,
-    subst: &SortSubst,
-    env: &mut TermMonoEnv<'a, E>,
-) -> Term {
-    match term.repr() {
-        ATerm::Constant(c, sort) => {
-            let s = sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
-            env.arena.arena_alt().constant(c.clone(), s)
-        }
-        ATerm::Global(id, sort) => {
-            let nid = monomorphize_qid(id, subst, env.arena);
-            let s = sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
-            env.arena.arena_alt().global(nid, s)
-        }
-        ATerm::Local(l) => {
-            if let Some((new_id, _)) = env.local.lookup(&l.symbol) {
-                let new_sort = l.sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
-                env.arena.arena_alt().local(Local {
-                    id: new_id,
-                    symbol: l.symbol.clone(),
-                    sort: new_sort,
-                })
-            } else {
-                term.clone()
-            }
-        }
-        ATerm::App(id, ts, sort) => {
-            let nid = monomorphize_qid(id, subst, env.arena);
-            let nts = ts
-                .iter()
-                .map(|t| monomorphize_term(t, subst, env))
-                .collect();
-            let s = sort.as_ref().map(|s| s.monomorphize(subst, env.arena));
-            env.arena.arena_alt().app(nid, nts, s)
-        }
-        ATerm::Let(bindings, body) => {
-            let nbindings: Vec<_> = bindings
-                .iter()
-                .map(|b| {
-                    let new_id = env.arena.arena_alt().new_local();
-                    VarBinding(b.0.clone(), new_id, monomorphize_term(&b.2, subst, env))
-                })
-                .collect();
-            let tracking: Vec<_> = nbindings
-                .iter()
-                .map(|b| VarBinding(b.0.clone(), b.1, ()))
-                .collect();
-            let local = env.local.insert(&tracking).unwrap();
-            let mut new_env = TermMonoEnv {
-                arena: env.arena,
-                local,
-            };
-            let nbody = monomorphize_term(body, subst, &mut new_env);
-            env.arena.arena_alt().let_term(nbindings, nbody)
-        }
-        ATerm::Exists(vars, body) => {
-            let nvars: Vec<_> = vars
-                .iter()
-                .map(|v| {
-                    let new_id = env.arena.arena_alt().new_local();
-                    VarBinding(v.0.clone(), new_id, v.2.monomorphize(subst, env.arena))
-                })
-                .collect();
-            let tracking: Vec<_> = nvars
-                .iter()
-                .map(|v| VarBinding(v.0.clone(), v.1, ()))
-                .collect();
-            let local = env.local.insert(&tracking).unwrap();
-            let mut new_env = TermMonoEnv {
-                arena: env.arena,
-                local,
-            };
-            let nbody = monomorphize_term(body, subst, &mut new_env);
-            env.arena.arena_alt().exists(nvars, nbody)
-        }
-        ATerm::Forall(vars, body) => {
-            let nvars: Vec<_> = vars
-                .iter()
-                .map(|v| {
-                    let new_id = env.arena.arena_alt().new_local();
-                    VarBinding(v.0.clone(), new_id, v.2.monomorphize(subst, env.arena))
-                })
-                .collect();
-            let tracking: Vec<_> = nvars
-                .iter()
-                .map(|v| VarBinding(v.0.clone(), v.1, ()))
-                .collect();
-            let local = env.local.insert(&tracking).unwrap();
-            let mut new_env = TermMonoEnv {
-                arena: env.arena,
-                local,
-            };
-            let nbody = monomorphize_term(body, subst, &mut new_env);
-            env.arena.arena_alt().forall(nvars, nbody)
-        }
-        ATerm::Matching(scrutinee, cases) => {
-            let nscrutinee = monomorphize_term(scrutinee, subst, env);
-            let ncases = cases
-                .iter()
-                .map(|c| {
-                    let vars: Vec<_> = c
-                        .pattern
-                        .variables()
-                        .iter()
-                        .map(|&s| {
-                            let new_id = env.arena.arena_alt().new_local();
-                            VarBinding(s.clone(), new_id, ())
-                        })
-                        .collect();
-                    let local = env.local.insert(&vars).unwrap();
-                    let mut new_env = TermMonoEnv {
-                        arena: env.arena,
-                        local,
-                    };
-                    crate::ast::alg::PatternArm {
-                        pattern: c.pattern.clone(),
-                        body: monomorphize_term(&c.body, subst, &mut new_env),
-                    }
-                })
-                .collect();
-            env.arena.arena_alt().matching(nscrutinee, ncases)
-        }
-        ATerm::Annotated(t, anns) => {
-            let nt = monomorphize_term(t, subst, env);
-            let nanns = anns
-                .iter()
-                .map(|a| monomorphize_attribute(a, subst, env))
-                .collect();
-            env.arena.arena_alt().annotated(nt, nanns)
-        }
-        ATerm::Eq(a, b) => {
-            let na = monomorphize_term(a, subst, env);
-            let nb = monomorphize_term(b, subst, env);
-            env.arena.arena_alt().eq(na, nb)
-        }
-        ATerm::Distinct(ts) => {
-            let nts = ts
-                .iter()
-                .map(|t| monomorphize_term(t, subst, env))
-                .collect();
-            env.arena.arena_alt().distinct(nts)
-        }
-        ATerm::And(ts) => {
-            let nts = ts
-                .iter()
-                .map(|t| monomorphize_term(t, subst, env))
-                .collect();
-            env.arena.arena_alt().and(nts)
-        }
-        ATerm::Or(ts) => {
-            let nts = ts
-                .iter()
-                .map(|t| monomorphize_term(t, subst, env))
-                .collect();
-            env.arena.arena_alt().or(nts)
-        }
-        ATerm::Xor(ts) => {
-            let nts = ts
-                .iter()
-                .map(|t| monomorphize_term(t, subst, env))
-                .collect();
-            env.arena.arena_alt().xor(nts)
-        }
-        ATerm::Implies(ts, concl) => {
-            let nts = ts
-                .iter()
-                .map(|t| monomorphize_term(t, subst, env))
-                .collect();
-            let nconcl = monomorphize_term(concl, subst, env);
-            env.arena.arena_alt().implies(nts, nconcl)
-        }
-        ATerm::Not(t) => {
-            let nt = monomorphize_term(t, subst, env);
-            env.arena.arena_alt().not(nt)
-        }
-        ATerm::Ite(c, t, e) => {
-            let nc = monomorphize_term(c, subst, env);
-            let nt = monomorphize_term(t, subst, env);
-            let ne = monomorphize_term(e, subst, env);
-            env.arena.arena_alt().ite(nc, nt, ne)
-        }
-    }
-}
-
 /// Monomorphize a term by applying the sort substitution.
 impl<E> Monomorphization<E, SortSubst> for Term
 where
-    E: HasArenaAlt,
+    E: HasArena,
 {
     type Output = Self;
 
     fn monomorphize(&self, subst: &SortSubst, env: &mut E) -> Self {
-        let mut mono_env = TermMonoEnv {
+        let mut mono = MonomorphizerInner {
             arena: env,
-            local: LocEnv::Nil,
+            subst,
+            env: vec![],
         };
-        monomorphize_term(self, subst, &mut mono_env)
+        mono.recurse_on_term_no_err(self)
     }
 }
 
-/// Stack-safe term monomorphization using [`TermRecursor`].
-///
-/// Applies a [`SortSubst`] to every sort embedded in a term (constants, globals, locals,
-/// applications, quantifier bindings) and re-allocates local variable IDs to avoid collisions.
-///
-/// The environment stack maps `(name, old_id)` to `new_id` for scoped constructs.
-pub struct Monomorphizer<'a, E> {
-    arena: &'a mut E,
-    subst: &'a SortSubst,
-    /// Scoped old-id → new-id mappings. Each frame corresponds to a let, quantifier, or match arm.
-    env: Vec<HashMap<(Str, usize), usize>>,
-}
-
-impl<'a, E: HasArena> Monomorphizer<'a, E> {
+impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     pub fn new(arena: &'a mut E, subst: &'a SortSubst) -> Self {
         Self {
             arena,
@@ -413,9 +199,26 @@ impl<'a, E: HasArena> Monomorphizer<'a, E> {
     fn new_id_for(&self, name: &Str, old_id: usize) -> usize {
         self.env.last().unwrap()[&(name.clone(), old_id)]
     }
+
+    /// Monomorphize quantifier bindings: remap IDs and apply sort substitution.
+    /// Pops the scope frame.
+    fn mono_quantifier_vars(&mut self, vs: &[VarBinding<Str, Sort>]) -> Vec<VarBinding<Str, Sort>> {
+        let nvars = vs
+            .iter()
+            .map(|v| {
+                VarBinding(
+                    v.0.clone(),
+                    self.new_id_for(&v.0, v.1),
+                    self.mono_sort(&v.2),
+                )
+            })
+            .collect();
+        self.env.pop();
+        nvars
+    }
 }
 
-impl<E: HasArena> TermRecursor<Str, Sort, Term> for Monomorphizer<'_, E> {
+impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
     type Out = Term;
     type Attr = Attribute;
     type Binding = Term;
@@ -586,17 +389,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for Monomorphizer<'_, E> {
         _: &Term,
         body: Term,
     ) -> Result<Term, Bottom> {
-        let nvars = vs
-            .iter()
-            .map(|v| {
-                VarBinding(
-                    v.0.clone(),
-                    self.new_id_for(&v.0, v.1),
-                    self.mono_sort(&v.2),
-                )
-            })
-            .collect();
-        self.env.pop();
+        let nvars = self.mono_quantifier_vars(vs);
         Ok(self.arena.arena().forall(nvars, body))
     }
 
@@ -607,17 +400,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for Monomorphizer<'_, E> {
         _: &Term,
         body: Term,
     ) -> Result<Term, Bottom> {
-        let nvars = vs
-            .iter()
-            .map(|v| {
-                VarBinding(
-                    v.0.clone(),
-                    self.new_id_for(&v.0, v.1),
-                    self.mono_sort(&v.2),
-                )
-            })
-            .collect();
-        self.env.pop();
+        let nvars = self.mono_quantifier_vars(vs);
         Ok(self.arena.arena().exists(nvars, body))
     }
 
@@ -710,7 +493,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for Monomorphizer<'_, E> {
     }
 }
 
-impl<E: HasArena> TypedTermRecursor for Monomorphizer<'_, E> {}
+impl<E: HasArena> TypedTermRecursor for MonomorphizerInner<'_, E> {}
 
 #[cfg(test)]
 mod tests {

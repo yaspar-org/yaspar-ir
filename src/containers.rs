@@ -185,23 +185,3 @@ pub(crate) fn sanitize_bindings<Str: Contains<T = String> + Hash + Eq, T>(
     }
     Ok(())
 }
-
-impl<'b, Str, T> LocEnv<'b, Str, T>
-where
-    Str: Contains<T = String> + Hash + Eq + Clone,
-    T: Clone,
-{
-    pub(crate) fn insert<'c>(
-        &'c self,
-        vars: &'b Vec<VarBinding<Str, T>>,
-    ) -> Result<LocEnv<'b, Str, T>, String>
-    where
-        'c: 'b,
-    {
-        sanitize_bindings(vars, |v| v.0.clone())?;
-        Ok(LocEnv::Cons {
-            car: vars,
-            cdr: self,
-        })
-    }
-}
