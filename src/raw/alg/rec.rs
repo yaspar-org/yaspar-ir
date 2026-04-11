@@ -39,6 +39,22 @@ use either::Either;
 #[derive(Clone, Debug, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Bottom {}
 
+/// A trait witnessing that a type is uninhabited (isomorphic to [`Bottom`]).
+///
+/// This is used as a bound on [`TermRecursor::recurse_on_term_no_err`] to statically
+/// guarantee that the recursor cannot fail, allowing the result to be unwrapped safely.
+pub trait IsBottom {
+    /// Convert `self` into [`Bottom`]. Since both types are uninhabited, this is
+    /// a vacuously true identity — it can never actually be called at runtime.
+    fn bottom(self) -> Bottom;
+}
+
+impl IsBottom for Bottom {
+    fn bottom(self) -> Bottom {
+        self
+    }
+}
+
 /// A visitor trait for performing stack-safe, bottom-up recursion over [`Term`] trees.
 ///
 /// Implementors define one callback per `Term` variant. Leaf callbacks (`on_constant`,
@@ -74,6 +90,8 @@ pub trait TermRecursor<Str, So, T> {
     /// The type produced by an arm in a match expression.
     type Arm;
     /// The error type returned when a callback fails.
+    ///
+    /// Set to [Bottom] to enable [Self::recurse_on_term_no_err].
     type Err;
 
     /// Entry point: recursively process `t` using the stack-based traversal.
@@ -83,6 +101,20 @@ pub trait TermRecursor<Str, So, T> {
         T: Contains<T: Repr<T = Term<Str, So, T>>>,
     {
         term_recursion(self, t)
+    }
+
+    /// Convenience entry point for infallible recursors (where `Err = Bottom`).
+    ///
+    /// Equivalent to [`recurse_on_term`](Self::recurse_on_term) but returns `Self::Out`
+    /// directly instead of `Result`, since the error branch is statically unreachable.
+    fn recurse_on_term_no_err(&mut self, t: &T) -> Self::Out
+    where
+        Self: Sized,
+        T: Contains<T: Repr<T = Term<Str, So, T>>>,
+        Self::Err: IsBottom,
+    {
+        self.recurse_on_term(t)
+            .unwrap_or_else(|b| match b.bottom() {})
     }
 
     // --- Leaf callbacks ---

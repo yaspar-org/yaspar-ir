@@ -493,11 +493,11 @@ impl TermRecursor<Str, Sort, Term> for TermDepth {
     fn on_annotated(&mut self, _: &Term, _: &Term, _: &[Attribute<Str, Term>], r: usize, _: Vec<()>) -> Result<usize, Bottom> { Ok(1 + r) }
 
     // Attributes
-    fn on_attribute_keyword(&mut self, _: &Term, _: &yaspar::ast::Keyword) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_constant(&mut self, _: &Term, _: &yaspar::ast::Keyword, _: &Constant<Str>) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_symbol(&mut self, _: &Term, _: &yaspar::ast::Keyword, _: &Str) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_named(&mut self, _: &Term, _: &Str) -> Result<(), Bottom> { Ok(()) }
-    fn on_attribute_pattern(&mut self, _: &Term, _: &[Term], r: Vec<usize>) -> Result<(), Bottom> {
+    fn on_attribute_keyword(&mut self,  _: &yaspar::ast::Keyword) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_constant(&mut self, _: &yaspar::ast::Keyword, _: &Constant<Str>) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_symbol(&mut self, _: &yaspar::ast::Keyword, _: &Str) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_named(&mut self, _: &Str) -> Result<(), Bottom> { Ok(()) }
+    fn on_attribute_pattern(&mut self, _: &[Term], r: Vec<usize>) -> Result<(), Bottom> {
         Ok(())
     }
 }
@@ -508,11 +508,11 @@ impl TypedTermRecursor for TermDepth {}
 To use it:
 
 ```rust
-let depth = match TermDepth.recurse_on_term(&some_term) {
-    Ok(d) => d,
-    Err(b) => match b {},  // Bottom is uninhabited
-};
+let depth = TermDepth.recurse_on_term_no_err(&some_term);
 ```
+
+The `recurse_on_term_no_err` method is available when setting `Err` to `Bottom`. 
+It returns the output directly without wrapping in `Result`.
 
 The convenience trait `TypedTermRecursor` is a marker for recursors specialized to the typed AST
 (`Str`, `Sort`, `Term`). An analogous `UntypedTermRecursor` exists for untyped ASTs.
