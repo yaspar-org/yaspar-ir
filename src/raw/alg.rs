@@ -304,6 +304,16 @@ impl<Str, So> Local<Str, So> {
     }
 }
 
+impl<Str, So> From<VarBinding<Str, So>> for Local<Str, So> {
+    fn from(value: VarBinding<Str, So>) -> Self {
+        Self {
+            id: value.1,
+            symbol: value.0,
+            sort: Some(value.2),
+        }
+    }
+}
+
 /// Represent attributes in SMTLib
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Attribute<Str, T> {
