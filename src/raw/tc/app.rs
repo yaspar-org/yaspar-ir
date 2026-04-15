@@ -12,7 +12,7 @@ use crate::raw::instance::{
     BvInSort, BvOutSort, FetchSort, HasArenaAlt, Index, QualifiedIdentifier, Sig, SigIndex, Sort,
     Str, Term, Theory,
 };
-use crate::statics::BV_RE;
+use crate::statics::{BV_RE, TO_REAL};
 use crate::traits::Contains;
 use dashu::base::BitTest;
 use dashu::integer::UBig;
@@ -278,7 +278,7 @@ where
         // in the current way.
         //
         // c.f. https://smt-lib.org/logics-all.shtml#AUFNIRA
-        let to_real = super::check_global_var_locally(env, "to_real")?; // this should pass for the sake of symbol table declaration.
+        let to_real = super::check_global_var_locally(env, TO_REAL)?; // this should pass for the sake of symbol table declaration.
         let to_real = QualifiedIdentifier::simple(to_real);
         let real = env.arena.real_sort();
         let coerced = env.arena.app(to_real, vec![t.clone()], Some(real));

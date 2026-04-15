@@ -13,7 +13,7 @@ use crate::ast::cnf::CNFCache;
 use crate::ast::ctx::Caches;
 use crate::ast::ctx::{Arena, BvInSort, BvOutSort, EMP_SET, Sig, SigIndex, SortDef, Str, Theory};
 use crate::ast::ctx::{Context, ContextFrame, ContextMeta, LOGICS};
-use crate::statics::{ARRAY, BOOL};
+use crate::statics::*;
 use crate::traits::Repr;
 use dashu::integer::UBig;
 use std::collections::HashMap;
@@ -67,16 +67,16 @@ impl Context {
             .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
 
-        let minus = self.allocate_symbol("-");
-        let plus = self.allocate_symbol("+");
-        let times = self.allocate_symbol("*");
-        let div = self.allocate_symbol("div");
-        let modd = self.allocate_symbol("mod");
-        let abs = self.allocate_symbol("abs");
-        let le = self.allocate_symbol("<=");
-        let lt = self.allocate_symbol("<");
-        let ge = self.allocate_symbol(">=");
-        let gt = self.allocate_symbol(">");
+        let minus = self.allocate_symbol(SUB);
+        let plus = self.allocate_symbol(ADD);
+        let times = self.allocate_symbol(MUL);
+        let div = self.allocate_symbol(IDIV);
+        let modd = self.allocate_symbol(MOD);
+        let abs = self.allocate_symbol(ABS);
+        let le = self.allocate_symbol(LE);
+        let lt = self.allocate_symbol(LT);
+        let ge = self.allocate_symbol(GE);
+        let gt = self.allocate_symbol(GT);
         let one_or_more = Sig::VarLenFunc(int.clone(), 1, int.clone());
         let two_or_more = Sig::VarLenFunc(int.clone(), 2, int.clone());
         let unary_sig = Sig::func(vec![int.clone()], int.clone());
@@ -102,14 +102,14 @@ impl Context {
         self.frame
             .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
-        let minus = self.allocate_symbol("-");
-        let plus = self.allocate_symbol("+");
-        let times = self.allocate_symbol("*");
-        let real_div = self.allocate_symbol("/");
-        let le = self.allocate_symbol("<=");
-        let lt = self.allocate_symbol("<");
-        let ge = self.allocate_symbol(">=");
-        let gt = self.allocate_symbol(">");
+        let minus = self.allocate_symbol(SUB);
+        let plus = self.allocate_symbol(ADD);
+        let times = self.allocate_symbol(MUL);
+        let real_div = self.allocate_symbol(RDIV);
+        let le = self.allocate_symbol(LE);
+        let lt = self.allocate_symbol(LT);
+        let ge = self.allocate_symbol(GE);
+        let gt = self.allocate_symbol(GT);
         let one_or_more = Sig::VarLenFunc(real.clone(), 1, real.clone());
         let two_or_more = Sig::VarLenFunc(real.clone(), 2, real.clone());
         let bin_pred_sig = Sig::VarLenFunc(real.clone(), 2, self.bool_sort());
@@ -136,20 +136,20 @@ impl Context {
             .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
 
-        let minus = self.allocate_symbol("-");
-        let plus = self.allocate_symbol("+");
-        let times = self.allocate_symbol("*");
-        let div = self.allocate_symbol("div");
-        let real_div = self.allocate_symbol("/");
-        let modd = self.allocate_symbol("mod");
-        let abs = self.allocate_symbol("abs");
-        let le = self.allocate_symbol("<=");
-        let lt = self.allocate_symbol("<");
-        let ge = self.allocate_symbol(">=");
-        let gt = self.allocate_symbol(">");
-        let to_real = self.allocate_symbol("to_real");
-        let to_int = self.allocate_symbol("to_int");
-        let is_int = self.allocate_symbol("is_int");
+        let minus = self.allocate_symbol(SUB);
+        let plus = self.allocate_symbol(ADD);
+        let times = self.allocate_symbol(MUL);
+        let div = self.allocate_symbol(IDIV);
+        let real_div = self.allocate_symbol(RDIV);
+        let modd = self.allocate_symbol(MOD);
+        let abs = self.allocate_symbol(ABS);
+        let le = self.allocate_symbol(LE);
+        let lt = self.allocate_symbol(LT);
+        let ge = self.allocate_symbol(GE);
+        let gt = self.allocate_symbol(GT);
+        let to_real = self.allocate_symbol(TO_REAL);
+        let to_int = self.allocate_symbol(TO_INT);
+        let is_int = self.allocate_symbol(IS_INT);
         let unary_sig = Sig::func(vec![int.clone()], int.clone());
         let two_ints = Sig::func(vec![int.clone(), int.clone()], int.clone());
         let two_or_more_ints = Sig::VarLenFunc(int.clone(), 2, int.clone());
@@ -217,46 +217,46 @@ impl Context {
         let re_unary_sig = Sig::func(vec![reglan.clone()], reglan.clone());
         let re_binary_sig = Sig::VarLenFunc(reglan.clone(), 2, reglan.clone());
 
-        let char = self.allocate_symbol("char");
+        let char = self.allocate_symbol(CHAR);
 
-        let str_pp = self.allocate_symbol("str.++");
-        let str_len = self.allocate_symbol("str.len");
-        let str_lt = self.allocate_symbol("str.<");
-        let str_to_re = self.allocate_symbol("str.to_re");
-        let str_in_re = self.allocate_symbol("str.in_re");
-        let re_none = self.allocate_symbol("re.none");
-        let re_all = self.allocate_symbol("re.all");
-        let re_allchar = self.allocate_symbol("re.allchar");
-        let re_pp = self.allocate_symbol("re.++");
-        let re_union = self.allocate_symbol("re.union");
-        let re_inter = self.allocate_symbol("re.inter");
-        let re_star = self.allocate_symbol("re.*");
+        let str_pp = self.allocate_symbol(STR_CONCAT);
+        let str_len = self.allocate_symbol(STR_LEN);
+        let str_lt = self.allocate_symbol(STR_LT);
+        let str_to_re = self.allocate_symbol(STR_TO_RE);
+        let str_in_re = self.allocate_symbol(STR_IN_RE);
+        let re_none = self.allocate_symbol(RE_NONE);
+        let re_all = self.allocate_symbol(RE_ALL);
+        let re_allchar = self.allocate_symbol(RE_ALLCHAR);
+        let re_pp = self.allocate_symbol(RE_CONCAT);
+        let re_union = self.allocate_symbol(RE_UNION);
+        let re_inter = self.allocate_symbol(RE_INTER);
+        let re_star = self.allocate_symbol(RE_STAR);
 
         // additional functions
-        let str_le = self.allocate_symbol("str.<=");
-        let str_at = self.allocate_symbol("str.at");
-        let str_substr = self.allocate_symbol("str.substr");
-        let str_prefixof = self.allocate_symbol("str.prefixof");
-        let str_suffixof = self.allocate_symbol("str.suffixof");
-        let str_contains = self.allocate_symbol("str.contains");
-        let str_indexof = self.allocate_symbol("str.indexof");
-        let str_replace = self.allocate_symbol("str.replace");
-        let str_replace_all = self.allocate_symbol("str.replace_all");
-        let str_replace_re = self.allocate_symbol("str.replace_re");
-        let str_replace_re_all = self.allocate_symbol("str.replace_re_all");
-        let re_comp = self.allocate_symbol("re.comp");
-        let re_diff = self.allocate_symbol("re.diff");
-        let re_p = self.allocate_symbol("re.+");
-        let re_opt = self.allocate_symbol("re.opt");
-        let re_range = self.allocate_symbol("re.range");
-        let re_hat = self.allocate_symbol("re.^");
-        let re_loop = self.allocate_symbol("re.loop");
+        let str_le = self.allocate_symbol(STR_LE);
+        let str_at = self.allocate_symbol(STR_AT);
+        let str_substr = self.allocate_symbol(STR_SUBSTR);
+        let str_prefixof = self.allocate_symbol(STR_PREFIXOF);
+        let str_suffixof = self.allocate_symbol(STR_SUFFIXOF);
+        let str_contains = self.allocate_symbol(STR_CONTAINS);
+        let str_indexof = self.allocate_symbol(STR_INDEXOF);
+        let str_replace = self.allocate_symbol(STR_REPLACE);
+        let str_replace_all = self.allocate_symbol(STR_REPLACE_ALL);
+        let str_replace_re = self.allocate_symbol(STR_REPLACE_RE);
+        let str_replace_re_all = self.allocate_symbol(STR_REPLACE_RE_ALL);
+        let re_comp = self.allocate_symbol(RE_COMP);
+        let re_diff = self.allocate_symbol(RE_DIFF);
+        let re_p = self.allocate_symbol(RE_ADD);
+        let re_opt = self.allocate_symbol(RE_OPT);
+        let re_range = self.allocate_symbol(RE_RANGE);
+        let re_hat = self.allocate_symbol(RE_POWER);
+        let re_loop = self.allocate_symbol(RE_LOOP);
 
-        let str_is_digit = self.allocate_symbol("str.is_digit");
-        let str_to_code = self.allocate_symbol("str.to_code");
-        let str_from_code = self.allocate_symbol("str.from_code");
-        let str_to_int = self.allocate_symbol("str.to_int");
-        let str_from_int = self.allocate_symbol("str.from_int");
+        let str_is_digit = self.allocate_symbol(STR_IS_DIGIT);
+        let str_to_code = self.allocate_symbol(STR_TO_CODE);
+        let str_from_code = self.allocate_symbol(STR_FROM_CODE);
+        let str_to_int = self.allocate_symbol(STR_TO_INT);
+        let str_from_int = self.allocate_symbol(STR_FROM_INT);
 
         let default_symbol_table = HashMap::from([
             builtin(
@@ -350,8 +350,8 @@ impl Context {
         let sort_y = self.simple_sort("Y");
         let array_xy = self.array_sort(sort_x.clone(), sort_y.clone());
 
-        let select = self.allocate_symbol("select");
-        let store = self.allocate_symbol("store");
+        let select = self.allocate_symbol(SELECT);
+        let store = self.allocate_symbol(STORE);
 
         let default_symbol_table = HashMap::from([
             builtin(
@@ -426,60 +426,60 @@ impl Context {
         let bool = self.bool_sort();
         let bv1 = self.bv_sort(UBig::from(1u8));
 
-        let concat = self.allocate_symbol("concat");
-        let extract = self.allocate_symbol("extract");
-        let bvnot = self.allocate_symbol("bvnot");
-        let bvneg = self.allocate_symbol("bvneg");
-        let bvand = self.allocate_symbol("bvand");
-        let bvor = self.allocate_symbol("bvor");
-        let bvadd = self.allocate_symbol("bvadd");
-        let bvmul = self.allocate_symbol("bvmul");
-        let bvudiv = self.allocate_symbol("bvudiv");
-        let bvurem = self.allocate_symbol("bvurem");
-        let bvshl = self.allocate_symbol("bvshl");
-        let bvlshr = self.allocate_symbol("bvlshr");
-        let bvult = self.allocate_symbol("bvult");
-        let bvnego = self.allocate_symbol("bvnego");
-        let bvuaddo = self.allocate_symbol("bvuaddo");
-        let bvsaddo = self.allocate_symbol("bvsaddo");
-        let bvumulo = self.allocate_symbol("bvumulo");
-        let bvsmulo = self.allocate_symbol("bvsmulo");
+        let concat = self.allocate_symbol(BV_CONCAT);
+        let extract = self.allocate_symbol(BV_EXTRACT);
+        let bvnot = self.allocate_symbol(BV_NOT);
+        let bvneg = self.allocate_symbol(BV_NEG);
+        let bvand = self.allocate_symbol(BV_AND);
+        let bvor = self.allocate_symbol(BV_OR);
+        let bvadd = self.allocate_symbol(BV_ADD);
+        let bvmul = self.allocate_symbol(BV_MUL);
+        let bvudiv = self.allocate_symbol(BV_UDIV);
+        let bvurem = self.allocate_symbol(BV_UREM);
+        let bvshl = self.allocate_symbol(BV_SHL);
+        let bvlshr = self.allocate_symbol(BV_LSHR);
+        let bvult = self.allocate_symbol(BV_ULT);
+        let bvnego = self.allocate_symbol(BV_NEGO);
+        let bvuaddo = self.allocate_symbol(BV_UADDO);
+        let bvsaddo = self.allocate_symbol(BV_SADDO);
+        let bvumulo = self.allocate_symbol(BV_UMULO);
+        let bvsmulo = self.allocate_symbol(BV_SMULO);
 
-        let ubv_to_int = self.allocate_symbol("ubv_to_int");
-        let sbv_to_int = self.allocate_symbol("sbv_to_int");
-        let bv2nat = self.allocate_symbol("bv2nat");
-        let bv2int = self.allocate_symbol("bv2int");
-        let int_to_bv = self.allocate_symbol("int_to_bv");
-        let nat2bv = self.allocate_symbol("nat2bv");
-        let int2bv = self.allocate_symbol("int2bv");
+        let ubv_to_int = self.allocate_symbol(UBV_TO_INT);
+        let sbv_to_int = self.allocate_symbol(SBV_TO_INT);
+        let bv2nat = self.allocate_symbol(BV2NAT);
+        let bv2int = self.allocate_symbol(BV2INT);
+        let int_to_bv = self.allocate_symbol(INT_TO_BV);
+        let nat2bv = self.allocate_symbol(NAT2BV);
+        let int2bv = self.allocate_symbol(INT2BV);
 
-        let bvnand = self.allocate_symbol("bvnand");
-        let bvnor = self.allocate_symbol("bvnor");
-        let bvxor = self.allocate_symbol("bvxor");
+        let bvnand = self.allocate_symbol(BV_NAND);
+        let bvnor = self.allocate_symbol(BV_NOR);
+        let bvxor = self.allocate_symbol(BV_XOR);
         let bvxnor = self.allocate_symbol("bvxnor");
-        let bvcomp = self.allocate_symbol("bvcomp");
-        let bvsub = self.allocate_symbol("bvsub");
-        let bvsdiv = self.allocate_symbol("bvsdiv");
-        let bvsrem = self.allocate_symbol("bvsrem");
-        let bvsmod = self.allocate_symbol("bvsmod");
-        let bvashr = self.allocate_symbol("bvashr");
-        let bvusubo = self.allocate_symbol("bvusubo");
-        let bvssubo = self.allocate_symbol("bvssubo");
-        let bvsdivo = self.allocate_symbol("bvsdivo");
+        let bvcomp = self.allocate_symbol(BV_COMP);
+        let bvsub = self.allocate_symbol(BV_SUB);
+        let bvsdiv = self.allocate_symbol(BV_SDIV);
+        let bvsrem = self.allocate_symbol(BV_SREM);
+        let bvsmod = self.allocate_symbol(BV_SMOD);
+        let bvashr = self.allocate_symbol(BV_ASHR);
+        let bvusubo = self.allocate_symbol(BV_USUBO);
+        let bvssubo = self.allocate_symbol(BV_SSUBO);
+        let bvsdivo = self.allocate_symbol(BV_SDIVO);
 
-        let repeat = self.allocate_symbol("repeat");
-        let zero_extend = self.allocate_symbol("zero_extend");
-        let sign_extend = self.allocate_symbol("sign_extend");
-        let rotate_left = self.allocate_symbol("rotate_left");
-        let rotate_right = self.allocate_symbol("rotate_right");
+        let repeat = self.allocate_symbol(BV_REPEAT);
+        let zero_extend = self.allocate_symbol(BV_ZERO_EXTEND);
+        let sign_extend = self.allocate_symbol(BV_SIGN_EXTEND);
+        let rotate_left = self.allocate_symbol(BV_ROTATE_LEFT);
+        let rotate_right = self.allocate_symbol(BV_ROTATE_RIGHT);
 
-        let bvule = self.allocate_symbol("bvule");
-        let bvugt = self.allocate_symbol("bvugt");
-        let bvuge = self.allocate_symbol("bvuge");
-        let bvslt = self.allocate_symbol("bvslt");
-        let bvsle = self.allocate_symbol("bvsle");
-        let bvsgt = self.allocate_symbol("bvsgt");
-        let bvsge = self.allocate_symbol("bvsge");
+        let bvule = self.allocate_symbol(BV_ULE);
+        let bvugt = self.allocate_symbol(BV_UGT);
+        let bvuge = self.allocate_symbol(BV_UGE);
+        let bvslt = self.allocate_symbol(BV_SLT);
+        let bvsle = self.allocate_symbol(BV_SLE);
+        let bvsgt = self.allocate_symbol(BV_SGT);
+        let bvsge = self.allocate_symbol(BV_SGE);
 
         let opt1_sig = Sig::BvFunc(0, 1, false, vec![BvInSort::BitVec(0)], BvOutSort::bv_var(0));
         let opt2_sig = Sig::BvFunc(

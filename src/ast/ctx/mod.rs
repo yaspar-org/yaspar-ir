@@ -51,7 +51,7 @@ use std::fmt::{Debug, Formatter};
 use crate::ast::cnf::{CNFCache, CNFEnv};
 #[cfg(feature = "cnf")]
 pub use crate::ast::cnf::{CNFConversion, partition_nnfs};
-use crate::statics::{BITVEC, BV_RE};
+use crate::statics::{AND, BITVEC, BV_RE, DISTINCT, EQ, IMPLIES, IS, ITE, NOT, OR, XOR};
 use crate::traits::AllocatableString;
 pub use crate::traits::Contains;
 pub use crate::traits::Repr;
@@ -128,7 +128,7 @@ lazy_static! {
     static ref EMP_SET: HashSet<Theory> = HashSet::from([]);
     static ref SPECIAL_SYMBOLS: HashSet<&'static str> = {
       let mut set = yaspar::tokens::SPECIAL_SYMBOLS.keys().cloned().collect::<HashSet<_>>();
-        set.extend(["and", "or", "xor", "not", "ite", "=>", "distinct", "="].iter());
+        set.extend([AND, OR, XOR, NOT, ITE, IMPLIES, DISTINCT, EQ].iter());
         set
     };
 }
@@ -347,7 +347,7 @@ impl Context {
     }
 
     fn check_is_sym(&self, sym: &Str) -> Result<()> {
-        if self.check_support_theory(Theory::Datatypes).is_ok() && sym.inner() == "is" {
+        if self.check_support_theory(Theory::Datatypes).is_ok() && sym.inner() == IS {
             Err("`is` cannot be used as a symbol!".into())
         } else {
             Ok(())
@@ -730,6 +730,7 @@ where
 mod tests {
     use super::*;
     use crate::ast::{LetElim, Typecheck, u};
+    use crate::statics::{ADD, LT, MUL, SUB};
     use crate::untyped::UntypedAst;
     use dashu::integer::IBig;
 
@@ -826,13 +827,13 @@ mod tests {
         let bool_sort = context.bool_sort();
         let f3 = context.simple_sorted_symbol("f3", int_sort.clone());
 
-        let times = context.get_symbol_str("*").unwrap().0;
+        let times = context.get_symbol_str(MUL).unwrap().0;
         let four = context.integer(IBig::from(4)).unwrap();
         let t1 = context.app(times, vec![four, f3], Some(int_sort.clone()));
-        let plus = context.get_symbol_str("+").unwrap().0;
+        let plus = context.get_symbol_str(ADD).unwrap().0;
         let one = context.integer(IBig::from(1)).unwrap();
         let t2 = context.app(plus, vec![t1, one], Some(int_sort.clone()));
-        let lt = context.get_symbol_str("<").unwrap().0;
+        let lt = context.get_symbol_str(LT).unwrap().0;
         let two = context.integer(IBig::from(2)).unwrap();
         let t3 = context.app(lt, vec![t2, two], Some(bool_sort.clone()));
         let nt3 = context.not(t3);
@@ -857,21 +858,21 @@ mod tests {
         let f3 = context.simple_sorted_symbol("f3", int_sort.clone());
         let f4 = context.get_symbol_str("f4").unwrap().0;
 
-        let times = context.get_symbol_str("*").unwrap().0;
+        let times = context.get_symbol_str(MUL).unwrap().0;
         let four = context.integer(IBig::from(4)).unwrap();
         let t1 = context.app(times, vec![four, f3], Some(int_sort.clone()));
-        let plus = context.get_symbol_str("+").unwrap().0;
+        let plus = context.get_symbol_str(ADD).unwrap().0;
         let one = context.integer(IBig::from(1)).unwrap();
         let v0 = context.app(plus.clone(), vec![t1, one.clone()], Some(int_sort.clone()));
 
-        let minus = context.get_symbol_str("-").unwrap().0;
+        let minus = context.get_symbol_str(SUB).unwrap().0;
         let t2 = context.app(minus.clone(), vec![v0.clone(), one], Some(int_sort.clone()));
         let v1 = context.app(f4, vec![v0.clone(), t2], Some(int_sort.clone()));
 
         let t3 = context.app(minus, vec![v1.clone(), v0], Some(int_sort.clone()));
         let two = context.integer(IBig::from(2)).unwrap();
         let t4 = context.app(plus, vec![t3, two], Some(int_sort.clone()));
-        let lt = context.get_symbol_str("<").unwrap().0;
+        let lt = context.get_symbol_str(LT).unwrap().0;
         let t5 = context.app(lt, vec![v1, t4], Some(bool_sort.clone()));
 
         assert_eq!(tct, t5);
@@ -909,8 +910,8 @@ mod tests {
             .unwrap();
 
         let builtins = context.builtin_symbols();
-        assert!(builtins.contains(&context.allocate_symbol("+")));
-        assert!(builtins.contains(&context.allocate_symbol("-")));
+        assert!(builtins.contains(&context.allocate_symbol(ADD)));
+        assert!(builtins.contains(&context.allocate_symbol(SUB)));
         assert!(!builtins.contains(&context.allocate_symbol("x")));
         assert!(!builtins.contains(&context.allocate_symbol("f")));
     }

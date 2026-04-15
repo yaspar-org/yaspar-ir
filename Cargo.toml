@@ -39,3 +39,6 @@ num-order = "1.2.0"
 name = "yaspar_ir"
 path = "src/lib.rs"
 crate-type = ["lib"]
+
+[package.metadata.docs.rs]
+features = ["all", "cvc5"]
