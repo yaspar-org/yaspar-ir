@@ -230,7 +230,7 @@ where
                 BV_NAND => Some(IdentifierKind::BvNand),
                 BV_NOR => Some(IdentifierKind::BvNor),
                 BV_XOR => Some(IdentifierKind::BvXor),
-                BV_NXOR => Some(IdentifierKind::BvNxor),
+                BV_XNOR => Some(IdentifierKind::BvNxor),
                 BV_COMP => Some(IdentifierKind::BvComp),
                 BV_SUB => Some(IdentifierKind::BvSub),
                 BV_SDIV => Some(IdentifierKind::BvSdiv),

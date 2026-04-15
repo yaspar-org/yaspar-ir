@@ -456,7 +456,7 @@ impl Context {
         let bvnand = self.allocate_symbol(BV_NAND);
         let bvnor = self.allocate_symbol(BV_NOR);
         let bvxor = self.allocate_symbol(BV_XOR);
-        let bvxnor = self.allocate_symbol("bvxnor");
+        let bvxnor = self.allocate_symbol(BV_XNOR);
         let bvcomp = self.allocate_symbol(BV_COMP);
         let bvsub = self.allocate_symbol(BV_SUB);
         let bvsdiv = self.allocate_symbol(BV_SDIV);

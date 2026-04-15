@@ -234,7 +234,7 @@ impl<Str> IdentifierKind<Str> {
             IdentifierKind::BvNand => BV_NAND,
             IdentifierKind::BvNor => BV_NOR,
             IdentifierKind::BvXor => BV_XOR,
-            IdentifierKind::BvNxor => BV_NXOR,
+            IdentifierKind::BvNxor => BV_XNOR,
             IdentifierKind::BvComp => BV_COMP,
             IdentifierKind::BvSub => BV_SUB,
             IdentifierKind::BvSdiv => BV_SDIV,
