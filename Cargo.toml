@@ -40,3 +40,6 @@ delegate = "0.13"
 name = "yaspar_ir"
 path = "src/lib.rs"
 crate-type = ["lib"]
+
+[package.metadata.docs.rs]
+features = ["all", "cvc5"]

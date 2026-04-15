@@ -17,6 +17,7 @@ use crate::ast::{
 };
 use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::raw::instance::HasArena;
+use crate::statics::{IS, IS_DASH};
 use crate::traits::{AllocatableString, Contains};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
@@ -285,7 +286,7 @@ impl<'a, 'b> DtDeclContext<'a, 'b> {
     {
         let mut added_names = HashSet::new();
         let ctor = self.check_name(ctor, &mut added_names)?;
-        let mut is_sym = "is-".to_string();
+        let mut is_sym = IS_DASH.to_string();
         is_sym.push_str(ctor.inner());
         let is_sym = self.allocate_symbol(&is_sym);
         self.check_name(is_sym, &mut added_names)?;
@@ -525,7 +526,7 @@ pub(crate) fn check_dt_emptiness<D: Borrow<DatatypeDef>>(def_map: &HashMap<Str, 
 /// Sorts have been inserted, so we only insert symbols
 pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Context) {
     let bool_sort = env.bool_sort();
-    let is_symb = env.allocate_symbol("is");
+    let is_symb = env.allocate_symbol(IS);
     let x_var = env.allocate_symbol("x");
     for def in defs {
         for ctor in &def.dec.constructors {
@@ -582,7 +583,7 @@ pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Con
 
             // 4. insert is-X testers
             //    we expand is-X to (_ is X) by defining the former in terms of the latter
-            let mut is_sym = "is-".to_string();
+            let mut is_sym = IS_DASH.to_string();
             is_sym.push_str(ctor.ctor.inner());
             let is_sym = env.allocate_symbol(&is_sym);
             let sig = Sig::ParFunc(
