@@ -32,6 +32,7 @@ use crate::traits::{Contains, Repr};
 use delegate::delegate;
 use either::Either;
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use yaspar::ast::Keyword;
 
 /// A caching wrapper that memoizes the `Out` results of a [`TermRecursor`].
@@ -50,6 +51,20 @@ pub struct Memoize<R, M> {
     /// The term-to-result cache. Publicly accessible so callers can inspect, reuse,
     /// or pre-populate it across traversals.
     pub cache: M,
+}
+
+impl<R, M> Deref for Memoize<R, M> {
+    type Target = R;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<R, M> DerefMut for Memoize<R, M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl<R, T, Out> Memoize<R, HashMap<T, Out>> {

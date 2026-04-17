@@ -11,7 +11,7 @@
 //! - [`ConvertToCvc5<Env, A>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
 //! - [`Cvc5Env`] — holds a [`cvc5::TermManager`] and caches for sort/term/symbol translation.
 //!   Used as the environment for `Sort::to_cvc5` and `Term::to_cvc5`.
-//! - [`Cvc5EnvSolver`] — wraps a [`Cvc5Env`] and a [`Solver`]. Used as the environment
+//! - [`Cvc5EnvSolver`] — wraps a [`Cvc5EnvInner`] and a [`Solver`]. Used as the environment
 //!   for `Command::to_cvc5`, since commands may interact with the solver (e.g. `assert`,
 //!   `check-sat`, `define-fun`).
 //!
@@ -32,7 +32,7 @@
 //!
 //! let tm = TermManager::new();
 //! let mut solver = Solver::new(&tm);
-//! let mut env = Cvc5Env::new(&tm);
+//! let mut env = Cvc5Env::create(&tm);
 //! let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
 //! for cmd in &cmds {
 //!     cmd.to_cvc5(&mut es, &mut ctx).unwrap();
@@ -91,19 +91,6 @@ pub trait ConvertToCvc5<Env, A> {
     fn to_cvc5(&self, env: &mut Env, arena: &mut A) -> Res<Self::Output>;
 }
 
-/// Environment for translating yaspar-ir ASTs to cvc5 objects.
-pub struct Cvc5Env<'tm> {
-    tm: &'tm TermManager,
-    sort: HashMap<Str, CSort<'tm>>,
-    globals: HashMap<Str, CTerm<'tm>>,
-    locals: HashMap<usize, WithPattern<'tm>>,
-    sort_cache: HashMap<Sort, CSort<'tm>>,
-    term_cache: HashMap<Term, CTerm<'tm>>,
-    dt_sorts: HashMap<Str, CSort<'tm>>,
-    scope_stack: Vec<Vec<CTerm<'tm>>>,
-    sort_subst_map: HashMap<Term, Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct WithPattern<'tm> {
     term: CTerm<'tm>,
@@ -125,7 +112,19 @@ impl<'tm> From<CTerm<'tm>> for WithPattern<'tm> {
     }
 }
 
-impl<'tm> Cvc5Env<'tm> {
+/// Environment for translating yaspar-ir ASTs to cvc5 objects.
+pub struct Cvc5EnvInner<'tm> {
+    tm: &'tm TermManager,
+    sort: HashMap<Str, CSort<'tm>>,
+    globals: HashMap<Str, CTerm<'tm>>,
+    locals: HashMap<usize, WithPattern<'tm>>,
+    sort_cache: HashMap<Sort, CSort<'tm>>,
+    dt_sorts: HashMap<Str, CSort<'tm>>,
+    scope_stack: Vec<Vec<CTerm<'tm>>>,
+    sort_subst_map: HashMap<Term, Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>>,
+}
+
+impl<'tm> Cvc5EnvInner<'tm> {
     pub fn new(tm: &'tm TermManager) -> Self {
         Self {
             tm,
@@ -133,14 +132,21 @@ impl<'tm> Cvc5Env<'tm> {
             globals: HashMap::new(),
             locals: HashMap::new(),
             sort_cache: HashMap::new(),
-            term_cache: HashMap::new(),
             dt_sorts: HashMap::new(),
             scope_stack: vec![],
+            sort_subst_map: Default::default(),
         }
     }
 }
+pub type Cvc5Env<'tm> = Memoize<Cvc5EnvInner<'tm>, HashMap<Term, WithPattern<'tm>>>;
 
-/// Environment combining a [`Cvc5Env`] with a [`Solver`] for translating commands.
+impl<'tm> Cvc5Env<'tm> {
+    pub fn create(tm: &'tm TermManager) -> Self {
+        Self::new(Cvc5EnvInner::new(tm))
+    }
+}
+
+/// Environment combining a [`Cvc5EnvInner`] with a [`Solver`] for translating commands.
 pub struct Cvc5EnvSolver<'a, 'tm> {
     pub env: &'a mut Cvc5Env<'tm>,
     pub solver: &'a mut Solver<'tm>,
@@ -153,10 +159,10 @@ impl<'a, 'tm> Cvc5EnvSolver<'a, 'tm> {
 }
 
 // ── Sort translation ─────────────────────────────────────────
-impl<'tm, A> ConvertToCvc5<Cvc5Env<'tm>, A> for Sort {
+impl<'tm, A> ConvertToCvc5<Cvc5EnvInner<'tm>, A> for Sort {
     type Output = CSort<'tm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<CSort<'tm>> {
+    fn to_cvc5(&self, env: &mut Cvc5EnvInner<'tm>, arena: &mut A) -> Res<CSort<'tm>> {
         if let Some(cs) = env.sort_cache.get(self) {
             return Ok(cs.clone());
         }
@@ -168,7 +174,7 @@ impl<'tm, A> ConvertToCvc5<Cvc5Env<'tm>, A> for Sort {
 
 fn translate_sort_inner<'tm, A>(
     sort: &Sort,
-    env: &mut Cvc5Env<'tm>,
+    env: &mut Cvc5EnvInner<'tm>,
     arena: &mut A,
 ) -> Res<CSort<'tm>> {
     let s = sort.repr();
@@ -221,6 +227,15 @@ fn translate_sort_inner<'tm, A>(
     }
 
     Err(format!("unsupported sort: {sort}"))
+}
+
+impl<'tm, A> ConvertToCvc5<Cvc5Env<'tm>, A> for Sort {
+    type Output = CSort<'tm>;
+
+    #[inline]
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<Self::Output> {
+        self.to_cvc5(&mut env.inner, arena)
+    }
 }
 
 // ── Identifier kind → cvc5 Kind mapping ─────────────────────
@@ -326,12 +341,7 @@ impl<'tm, A> ConvertToCvc5<Cvc5Env<'tm>, A> for Term {
     type Output = CTerm<'tm>;
 
     fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<CTerm<'tm>> {
-        if let Some(ct) = env.term_cache.get(self) {
-            return Ok(ct.clone());
-        }
-        let ct = translate_term_inner(self, env, arena)?;
-        env.term_cache.insert(self.clone(), ct.clone());
-        Ok(ct)
+        env.recurse_on_term(self).map(|t| t.into())
     }
 }
 
@@ -339,7 +349,7 @@ fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
     terms.into_iter().map(|t| t.into()).collect()
 }
 
-impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
+impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     type Out = WithPattern<'tm>;
     type Attr = Vec<CTerm<'tm>>;
     type Binding = (usize, WithPattern<'tm>);
@@ -706,20 +716,20 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
     }
 }
 
-impl<'tm> TypedTermRecursor for Cvc5Env<'tm> {}
+impl<'tm> TypedTermRecursor for Cvc5EnvInner<'tm> {}
 
-impl<'tm, T, A, E> ConvertToCvc5<Cvc5Env<'tm>, A> for [T]
+impl<'tm, T, A, E> ConvertToCvc5<Cvc5EnvInner<'tm>, A> for [T]
 where
-    T: ConvertToCvc5<Cvc5Env<'tm>, A, Output = E>,
+    T: ConvertToCvc5<Cvc5EnvInner<'tm>, A, Output = E>,
 {
     type Output = Vec<E>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<Vec<E>> {
+    fn to_cvc5(&self, env: &mut Cvc5EnvInner<'tm>, arena: &mut A) -> Res<Vec<E>> {
         self.iter().map(|t| t.to_cvc5(env, arena)).collect()
     }
 }
 
-impl<'tm> Cvc5Env<'tm> {
+impl<'tm> Cvc5EnvInner<'tm> {
     fn translate_constant(&self, c: &Constant, s: &Sort) -> Res<WithPattern<'tm>> {
         use alg::Constant::*;
         match c {
@@ -1204,7 +1214,7 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm> {
     }
 
     fn build_dt_decls<A: HasArenaAlt>(
-        env: &mut Cvc5Env<'tm>,
+        env: &mut Cvc5EnvInner<'tm>,
         defs: &[alg::DatatypeDef<Str, Sort>],
         arena: &mut A,
     ) -> Res<Vec<cvc5::DatatypeDecl<'tm>>> {
@@ -1239,7 +1249,7 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm> {
     }
 
     fn register_dt_functions<A: HasArenaAlt>(
-        env: &mut Cvc5Env<'tm>,
+        env: &mut Cvc5EnvInner<'tm>,
         sort: CSort<'tm>,
         dec: &DatatypeDec,
         arena: &mut A,

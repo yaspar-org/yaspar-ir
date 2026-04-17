@@ -18,7 +18,7 @@ fn run_script(script: &str) {
         .unwrap();
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es, &mut ctx).unwrap();
@@ -36,7 +36,7 @@ fn check_sat(script: &str) -> bool {
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
     solver.set_option("produce-models", "true");
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es, &mut ctx).unwrap();
@@ -276,7 +276,7 @@ fn translate_term_standalone() {
         .unwrap();
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es, &mut ctx).unwrap();
@@ -294,7 +294,7 @@ fn error_unknown_global() {
     let int_sort = ctx.int_sort();
     let x = ctx.simple_sorted_symbol("x", int_sort);
     let tm = TermManager::new();
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     assert!(x.to_cvc5(&mut env, &mut ctx).is_err());
 }
 
@@ -305,7 +305,7 @@ fn error_unsupported_sort() {
     // A custom sort that cvc5 doesn't know about
     let custom = ctx.simple_sort("MyCustomSort");
     let tm = TermManager::new();
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     assert!(custom.to_cvc5(&mut env, &mut ctx).is_err());
 }
 
@@ -328,7 +328,7 @@ fn locals_cleaned_up_after_quantifier_error() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
 
     // Translate set-logic only — skip declare-const y
     cmds[0]
@@ -368,7 +368,7 @@ fn locals_cleaned_up_after_let_error() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     cmds[0].to_cvc5(&mut es, &mut ctx).unwrap();
     // Skip declare-const y
@@ -397,7 +397,7 @@ fn locals_cleaned_up_after_define_fun_error() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     cmds[0].to_cvc5(&mut es, &mut ctx).unwrap();
     // Skip declare-const y
@@ -428,7 +428,7 @@ fn named_annotation_registers_global() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     // All commands should succeed — "pos" from :named must be usable in the second assert
     for cmd in &cmds {
@@ -634,7 +634,7 @@ fn with_script_results(script: &str, options: &[(&str, &str)], f: impl FnOnce(&[
     for (k, v) in options {
         solver.set_option(k, v);
     }
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     let results: Vec<_> = cmds
         .iter()
