@@ -220,6 +220,7 @@ pub trait TermRecursor<Str, So, T> {
         current: &T,
         scrutinee: &T,
         cases: &[PatternArm<Str, T>],
+        scrutinee_rec: &Self::Out,
         case_idx: usize,
         current_pattern: Self::Pattern,
         arm: Self::Out,
@@ -621,6 +622,7 @@ where
                     current,
                     scrutinee,
                     cases,
+                    &scrutinee_rec,
                     case_rec.len(),
                     current_pattern.unwrap(),
                     result,
@@ -939,7 +941,7 @@ where
                     id,
                     args,
                     sort,
-                    rec: vec![],
+                    rec: Vec::with_capacity(args.len()),
                 });
                 Ok(Either::Left(&args[0]))
             }
@@ -960,7 +962,7 @@ where
                     current,
                     vs,
                     body,
-                    vs_rec: vec![],
+                    vs_rec: Vec::with_capacity(vs.len()),
                 });
                 Ok(Either::Left(&vs[0].2))
             }
@@ -1013,7 +1015,7 @@ where
                     current,
                     kind: NaryKind::Distinct,
                     ts,
-                    rec: vec![],
+                    rec: Vec::with_capacity(ts.len()),
                 });
                 Ok(Either::Left(&ts[0]))
             }
@@ -1026,7 +1028,7 @@ where
                     current,
                     kind: NaryKind::And,
                     ts,
-                    rec: vec![],
+                    rec: Vec::with_capacity(ts.len()),
                 });
                 Ok(Either::Left(&ts[0]))
             }
@@ -1039,7 +1041,7 @@ where
                     current,
                     kind: NaryKind::Or,
                     ts,
-                    rec: vec![],
+                    rec: Vec::with_capacity(ts.len()),
                 });
                 Ok(Either::Left(&ts[0]))
             }
@@ -1052,7 +1054,7 @@ where
                     current,
                     kind: NaryKind::Xor,
                     ts,
-                    rec: vec![],
+                    rec: Vec::with_capacity(ts.len()),
                 });
                 Ok(Either::Left(&ts[0]))
             }
@@ -1071,7 +1073,7 @@ where
                     current,
                     ts,
                     t: concl,
-                    rec: vec![],
+                    rec: Vec::with_capacity(ts.len()),
                 });
                 Ok(Either::Left(&ts[0]))
             }

@@ -398,6 +398,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         _: &Term,
         _: &Term,
         cases: &[PatternArm],
+        scrutinee_rec: &Term,
         idx: usize,
         _: (),
         body: Term,

@@ -49,12 +49,14 @@
 //! Quantifier `:pattern` annotations are translated to cvc5 `INST_PATTERN` / `INST_PATTERN_LIST`
 //! terms, which guide quantifier instantiation. Other annotations are ignored.
 
+use crate::ast::alg::VarBinding;
 use crate::ast::*;
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::traits::{Contains, Repr};
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
 use std::collections::HashMap;
+use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
 
 pub type CSort<'tm> = cvc5::Sort<'tm>;
@@ -94,10 +96,33 @@ pub struct Cvc5Env<'tm> {
     tm: &'tm TermManager,
     sort: HashMap<Str, CSort<'tm>>,
     globals: HashMap<Str, CTerm<'tm>>,
-    locals: HashMap<usize, CTerm<'tm>>,
+    locals: HashMap<usize, WithPattern<'tm>>,
     sort_cache: HashMap<Sort, CSort<'tm>>,
     term_cache: HashMap<Term, CTerm<'tm>>,
     dt_sorts: HashMap<Str, CSort<'tm>>,
+    scope_stack: Vec<Vec<CTerm<'tm>>>,
+    sort_subst_map: HashMap<Term, Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct WithPattern<'tm> {
+    term: CTerm<'tm>,
+    patterns: Vec<CTerm<'tm>>,
+}
+
+impl<'tm> From<WithPattern<'tm>> for CTerm<'tm> {
+    fn from(value: WithPattern<'tm>) -> Self {
+        value.term
+    }
+}
+
+impl<'tm> From<CTerm<'tm>> for WithPattern<'tm> {
+    fn from(value: CTerm<'tm>) -> Self {
+        WithPattern {
+            term: value,
+            patterns: vec![],
+        }
+    }
 }
 
 impl<'tm> Cvc5Env<'tm> {
@@ -110,6 +135,7 @@ impl<'tm> Cvc5Env<'tm> {
             sort_cache: HashMap::new(),
             term_cache: HashMap::new(),
             dt_sorts: HashMap::new(),
+            scope_stack: vec![],
         }
     }
 }
@@ -127,7 +153,7 @@ impl<'a, 'tm> Cvc5EnvSolver<'a, 'tm> {
 }
 
 // ── Sort translation ─────────────────────────────────────────
-impl<'tm, A: HasArenaAlt> ConvertToCvc5<Cvc5Env<'tm>, A> for Sort {
+impl<'tm, A> ConvertToCvc5<Cvc5Env<'tm>, A> for Sort {
     type Output = CSort<'tm>;
 
     fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<CSort<'tm>> {
@@ -140,7 +166,7 @@ impl<'tm, A: HasArenaAlt> ConvertToCvc5<Cvc5Env<'tm>, A> for Sort {
     }
 }
 
-fn translate_sort_inner<'tm, A: HasArenaAlt>(
+fn translate_sort_inner<'tm, A>(
     sort: &Sort,
     env: &mut Cvc5Env<'tm>,
     arena: &mut A,
@@ -296,7 +322,7 @@ fn ident_kind_to_cvc5(k: &alg::IdentifierKind<Str>) -> Option<Kind> {
 }
 
 // ── Term translation ─────────────────────────────────────────
-impl<'tm, A: HasArenaAlt> ConvertToCvc5<Cvc5Env<'tm>, A> for Term {
+impl<'tm, A> ConvertToCvc5<Cvc5Env<'tm>, A> for Term {
     type Output = CTerm<'tm>;
 
     fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<CTerm<'tm>> {
@@ -309,85 +335,345 @@ impl<'tm, A: HasArenaAlt> ConvertToCvc5<Cvc5Env<'tm>, A> for Term {
     }
 }
 
-fn translate_term_inner<'tm, A: HasArenaAlt>(
-    term: &Term,
-    env: &mut Cvc5Env<'tm>,
-    arena: &mut A,
-) -> Res<CTerm<'tm>> {
-    use alg::Term as AT;
-    match term.repr() {
-        AT::Constant(c, _) => env.translate_constant(c),
-        AT::Global(qid, sort) => {
-            // it's fine due to typed invariant
-            let sort = sort.as_ref().unwrap();
-            env.translate_global(qid, sort, arena)
-        }
-        AT::Local(loc) => env
-            .locals
-            .get(&loc.id)
+fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
+    terms.into_iter().map(|t| t.into()).collect()
+}
+
+impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
+    type Out = WithPattern<'tm>;
+    type Attr = Vec<CTerm<'tm>>;
+    type Binding = (usize, WithPattern<'tm>);
+    type Pattern = ();
+    type Arm = CTerm<'tm>;
+    type Err = String;
+
+    fn on_constant(
+        &mut self,
+        current: &Term,
+        constant: &Constant,
+        sort: &Option<Sort>,
+    ) -> Res<WithPattern<'tm>> {
+        self.translate_constant(constant, sort.as_ref().unwrap())
+    }
+
+    fn on_global(
+        &mut self,
+        current: &Term,
+        id: &QualifiedIdentifier,
+        sort: &Option<Sort>,
+    ) -> Res<WithPattern<'tm>> {
+        // it's fine due to typed invariant
+        let sort = sort.as_ref().unwrap();
+        self.translate_global(id, sort)
+    }
+
+    fn on_local(&mut self, current: &Term, id: &Local) -> Res<WithPattern<'tm>> {
+        self.locals
+            .get(&id.id)
             .cloned()
-            .ok_or_else(|| format!("unbound local: {}", loc.symbol)),
-        AT::Not(t) => {
-            let nt = t.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::Not, &[nt]))
+            .ok_or_else(|| format!("unbound local: {}", id.symbol))
+    }
+
+    fn on_app(
+        &mut self,
+        current: &Term,
+        id: &QualifiedIdentifier,
+        ts: &[Term],
+        s: &Option<Sort>,
+        recs: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        self.translate_app(
+            id,
+            recs.into_iter().map(|t| t.into()).collect(),
+            s.as_ref().unwrap(),
+        )
+    }
+
+    fn on_annotated(
+        &mut self,
+        current: &Term,
+        t: &Term,
+        anns: &[Attribute],
+        t_rec: WithPattern<'tm>,
+        anns_rec: Vec<Vec<CTerm<'tm>>>,
+    ) -> Res<WithPattern<'tm>> {
+        // do not handle other annotations
+        let mut pats = t_rec.patterns;
+        anns_rec.into_iter().for_each(|ps| pats.extend(ps));
+        Ok(WithPattern {
+            term: t_rec.term,
+            patterns: pats,
+        })
+    }
+    fn on_eq(
+        &mut self,
+        current: &Term,
+        a: &Term,
+        b: &Term,
+        a_rec: WithPattern<'tm>,
+        b_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self
+            .tm
+            .mk_term(Kind::Equal, &[a_rec.into(), b_rec.into()])
+            .into())
+    }
+    fn on_distinct(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Distinct, &to_term_vec(ts_rec)).into())
+    }
+    fn on_and(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::And, &to_term_vec(ts_rec)).into())
+    }
+    fn on_or(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Or, &&to_term_vec(ts_rec)).into())
+    }
+    fn on_xor(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Xor, &to_term_vec(ts_rec)).into())
+    }
+    fn on_not(
+        &mut self,
+        current: &Term,
+        t: &Term,
+        t_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Not, &[t_rec.into()]).into())
+    }
+    fn on_implies(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        t: &Term,
+        ts_rec: Vec<WithPattern<'tm>>,
+        t_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        let mut all = ts_rec;
+        all.push(t_rec);
+        Ok(self.tm.mk_term(Kind::Implies, &to_term_vec(all)).into())
+    }
+    fn on_ite(
+        &mut self,
+        current: &Term,
+        b: &Term,
+        t: &Term,
+        e: &Term,
+        b_rec: WithPattern<'tm>,
+        t_rec: WithPattern<'tm>,
+        e_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self
+            .tm
+            .mk_term(Kind::Ite, &[b_rec.into(), t_rec.into(), e_rec.into()])
+            .into())
+    }
+
+    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+    fn on_attribute_constant(
+        &mut self,
+        keyword: &Keyword,
+        constant: &Constant,
+    ) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+    fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+    fn on_attribute_named(&mut self, name: &Str) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+    fn on_attribute_pattern(
+        &mut self,
+        patterns: &[Term],
+        patterns_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<Vec<CTerm<'tm>>> {
+        Ok(to_term_vec(patterns_rec))
+    }
+
+    fn setup_quantifier_scope(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        t: &Term,
+        is_forall: bool,
+    ) -> Res<()> {
+        self.bind_vars(vs)
+    }
+
+    fn on_exists(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        t: &Term,
+        t_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        let bound = self.unbind_vars(vs)?;
+        self.translate_quantifier_body(Kind::Exists, bound, t_rec)
+    }
+
+    fn on_forall(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        t: &Term,
+        t_rec: Self::Out,
+    ) -> Res<WithPattern<'tm>> {
+        let bound = self.unbind_vars(vs)?;
+        self.translate_quantifier_body(Kind::Forall, bound, t_rec)
+    }
+
+    fn on_let_binding(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Term>],
+        body: &Term,
+        binding_idx: usize,
+        binding_rec: WithPattern<'tm>,
+    ) -> Res<Self::Binding> {
+        let idx = vs[binding_idx].1;
+        Ok((idx, binding_rec))
+    }
+
+    fn setup_let_scope(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Term>],
+        body: &Term,
+        vs_rec: &[Self::Binding],
+    ) -> Res<()> {
+        for (idx, t) in vs_rec {
+            self.locals.insert(*idx, t.clone());
         }
-        AT::Eq(a, b) => {
-            let (ca, cb) = (a.to_cvc5(env, arena)?, b.to_cvc5(env, arena)?);
-            Ok(env.tm.mk_term(Kind::Equal, &[ca, cb]))
+        Ok(())
+    }
+
+    fn on_let(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Term>],
+        body: &Term,
+        vs_rec: Vec<Self::Binding>,
+        body_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        for (idx, _) in vs_rec {
+            self.locals.remove(&idx);
         }
-        AT::Distinct(ts) => {
-            let cts = ts.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::Distinct, &cts))
+        Ok(body_rec)
+    }
+
+    fn setup_match_case_scope(
+        &mut self,
+        current: &Term,
+        scrutinee: &Term,
+        cases: &[PatternArm],
+        scrutinee_rec: &Self::Out,
+        case_idx: usize,
+    ) -> Res<Self::Pattern> {
+        let scr_sort = scrutinee_rec.term.sort();
+        let dt = scr_sort.datatype();
+        if !self.sort_subst_map.contains_key(scrutinee) {
+            // For parametric datatypes, selector codomain sorts are uninstantiated (e.g. X).
+            // We need to substitute the sort parameters with the actual instantiated parameters.
+            let subst: Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)> = if dt.is_parametric() {
+                let params = dt.parameters();
+                let inst_params = scr_sort.instantiated_parameters();
+                Some((params, inst_params))
+            } else {
+                None
+            };
+            self.sort_subst_map.insert(scrutinee.clone(), subst);
         }
-        AT::And(ts) => {
-            let cts = ts.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::And, &cts))
-        }
-        AT::Or(ts) => {
-            let cts = ts.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::Or, &cts))
-        }
-        AT::Xor(ts) => {
-            let cts = ts.to_cvc5(env, arena)?;
-            let mut r = cts[0].clone();
-            for c in &cts[1..] {
-                r = env.tm.mk_term(Kind::Xor, &[r, CTerm::clone(c)]);
+        let subst = self.sort_subst_map.get(scrutinee).unwrap();
+        match &cases[case_idx].pattern {
+            Pattern::Wildcard(v) => {
+                let pv = match v {
+                    None => self.tm.mk_anonymous_var(scr_sort.clone()),
+                    Some((name, id)) => {
+                        let v = self.tm.mk_var(scr_sort.clone(), &name);
+                        self.locals.insert(*id, v.clone().into());
+                        v
+                    }
+                };
+                self.scope_stack.push(vec![pv]);
             }
-            Ok(r)
+            Pattern::Ctor(_) => {
+                self.bind_vars(&[])?;
+            }
+            Pattern::Applied { ctor, arguments } => {
+                let ctor = dt.constructor_by_name(ctor);
+                let mut pattern_args = Vec::new();
+                for (i, arg) in arguments.iter().enumerate() {
+                    let mut sel_sort = ctor.selector(i).codomain_sort();
+                    if let Some((params, inst)) = subst {
+                        sel_sort = sel_sort.substitute_sorts(params, inst);
+                    }
+                    let pv = match arg {
+                        Some((name, id)) => {
+                            let bv = self.tm.mk_var(sel_sort, name);
+                            self.locals.insert(*id, bv.clone().into());
+                            bv
+                        }
+                        None => self.tm.mk_anonymous_var(sel_sort),
+                    };
+                    pattern_args.push(pv);
+                }
+                self.scope_stack.push(pattern_args);
+            }
         }
-        AT::Implies(premises, concl) => {
-            let mut all = premises.to_cvc5(env, arena)?;
-            all.push(concl.to_cvc5(env, arena)?);
-            Ok(env.tm.mk_term(Kind::Implies, &all))
-        }
-        AT::Ite(c, t, e) => {
-            let (cc, ct, ce) = (
-                c.to_cvc5(env, arena)?,
-                t.to_cvc5(env, arena)?,
-                e.to_cvc5(env, arena)?,
-            );
-            Ok(env.tm.mk_term(Kind::Ite, &[cc, ct, ce]))
-        }
-        AT::Forall(vars, body) => {
-            env.translate_quantifier(Kind::Forall, vars, body, arena)
-        }
-        AT::Exists(vars, body) => {
-            env.translate_quantifier(Kind::Exists, vars, body, arena)
-        }
-        AT::Let(bindings, body) => env.translate_let(bindings, body, arena),
-        AT::App(qid, args, ret) => {
-            // it's fine due to typed invariant
-            env.translate_app(qid, args, ret.as_ref().unwrap(), arena)
-        }
-        AT::Annotated(t, _) => {
-            // do not handle other annotations
-            t.to_cvc5(env, arena)
-        }
-        AT::Matching(scrutinee, arms) => env.translate_matching(scrutinee, arms, arena),
+
+        Ok(())
+    }
+
+    fn on_match_arm(
+        &mut self,
+        current: &Term,
+        scrutinee: &Term,
+        cases: &[PatternArm],
+        scrutinee_rec: &Self::Out,
+        case_idx: usize,
+        current_pattern: Self::Pattern,
+        arm: Self::Out,
+    ) -> Res<Self::Arm> {
+        let scr_sort = scrutinee_rec.term.sort();
+        let dt = scr_sort.datatype();
+        todo!()
+    }
+
+    fn on_match(
+        &mut self,
+        current: &Term,
+        scrutinee: &Term,
+        cases: &[PatternArm],
+        scrutinee_rec: Self::Out,
+        cases_rec: Vec<Self::Arm>,
+    ) -> Res<WithPattern<'tm>> {
+        todo!()
     }
 }
 
-impl<'tm, T, A: HasArenaAlt, E> ConvertToCvc5<Cvc5Env<'tm>, A> for [T]
+impl<'tm> TypedTermRecursor for Cvc5Env<'tm> {}
+
+impl<'tm, T, A, E> ConvertToCvc5<Cvc5Env<'tm>, A> for [T]
 where
     T: ConvertToCvc5<Cvc5Env<'tm>, A, Output = E>,
 {
@@ -399,20 +685,26 @@ where
 }
 
 impl<'tm> Cvc5Env<'tm> {
-    fn translate_constant(&self, c: &Constant) -> Res<CTerm<'tm>> {
+    fn translate_constant(&self, c: &Constant, s: &Sort) -> Res<WithPattern<'tm>> {
         use alg::Constant::*;
         match c {
-            Bool(true) => Ok(self.tm.mk_true()),
-            Bool(false) => Ok(self.tm.mk_false()),
-            Numeral(n) => Ok(self.tm.mk_integer_from_str(&n.to_string())),
-            Decimal(d) => Ok(self.tm.mk_real_from_str(&d.to_string())),
-            String(s) => Ok(self.tm.mk_string(s, false)),
+            Bool(true) => Ok(self.tm.mk_true().into()),
+            Bool(false) => Ok(self.tm.mk_false().into()),
+            Numeral(n) => {
+                if s.is_real() {
+                    Ok(self.tm.mk_real_from_str(&n.to_string()).into())
+                } else {
+                    Ok(self.tm.mk_integer_from_str(&n.to_string()).into())
+                }
+            }
+            Decimal(d) => Ok(self.tm.mk_real_from_str(&d.to_string()).into()),
+            String(s) => Ok(self.tm.mk_string(s, false).into()),
             Binary(bytes, len) => {
                 let bits = binary_to_string(bytes, *len);
                 let w: u32 = (*len)
                     .try_into()
                     .map_err(|_| format!("binary literal width too large: {len}"))?;
-                Ok(self.tm.mk_bv_from_str(w, &bits, 2))
+                Ok(self.tm.mk_bv_from_str(w, &bits, 2).into())
             }
             Hexadecimal(bytes, len) => {
                 let hex = hex_to_string(bytes, *len);
@@ -420,7 +712,7 @@ impl<'tm> Cvc5Env<'tm> {
                     .checked_mul(4)
                     .and_then(|n| n.try_into().ok())
                     .ok_or_else(|| format!("hex literal width too large: {len}"))?;
-                Ok(self.tm.mk_bv_from_str(w, &hex, 16))
+                Ok(self.tm.mk_bv_from_str(w, &hex, 16).into())
             }
         }
     }
@@ -434,17 +726,12 @@ impl<'tm> Cvc5Env<'tm> {
     /// Look up a constructor by name in the datatype behind `sort`, returning its
     /// instantiated term if the datatype is parametric. Returns `None` when the sort
     /// is not in the sort table, the datatype is not parametric, or no constructor matches.
-    fn resolve_parametric_ctor<A: HasArenaAlt>(
-        &mut self,
-        name: &str,
-        sort: &Sort,
-        arena: &mut A,
-    ) -> Res<Option<CTerm<'tm>>> {
+    fn resolve_parametric_ctor(&mut self, name: &str, sort: &Sort) -> Res<Option<CTerm<'tm>>> {
         let sort_name = sort.repr().sort_name();
         if let Some(base_sort) = self.sort.get(sort_name).cloned() {
             let dt = base_sort.datatype();
             if dt.is_parametric() {
-                let crs = sort.to_cvc5(self, arena)?;
+                let crs = sort.to_cvc5(self, &mut ())?;
                 for i in 0..dt.num_constructors() {
                     let ctor = dt.constructor(i);
                     if ctor.name() == name {
@@ -456,21 +743,23 @@ impl<'tm> Cvc5Env<'tm> {
         Ok(None)
     }
 
-    fn translate_global<A: HasArenaAlt>(
+    fn translate_global(
         &mut self,
         qid: &QualifiedIdentifier,
         sort: &Sort,
-        arena: &mut A,
-    ) -> Res<CTerm<'tm>> {
+    ) -> Res<WithPattern<'tm>> {
         use alg::IdentifierKind::*;
         let name = qid.id_str();
         match qid.get_kind() {
-            Some(Char(hex, _)) => Ok(self.tm.mk_string(
-                &String::from_utf8(hex).map_err(|err| {
-                    format!("symbol {qid} cannot be converted to a String: {err}")
-                })?,
-                false,
-            )),
+            Some(Char(hex, _)) => Ok(self
+                .tm
+                .mk_string(
+                    &String::from_utf8(hex).map_err(|err| {
+                        format!("symbol {qid} cannot be converted to a String: {err}")
+                    })?,
+                    false,
+                )
+                .into()),
             _ => {
                 // For sort-ascribed parametric constructors like (as nil (List Int)),
                 // resolve via the instantiated sort using instantiated_term
@@ -481,115 +770,68 @@ impl<'tm> Cvc5Env<'tm> {
                     .ok_or_else(|| format!("unknown global symbol: {name}"))?;
                 let is_ctor = t.sort().is_dt_constructor();
                 if is_ctor {
-                    if let Some(ct) = self.resolve_parametric_ctor(name, sort, arena)? {
-                        Ok(self.tm.mk_term(Kind::ApplyConstructor, &[ct]))
+                    if let Some(ct) = self.resolve_parametric_ctor(name, sort)? {
+                        Ok(self.tm.mk_term(Kind::ApplyConstructor, &[ct]).into())
                     } else {
-                        Ok(self.tm.mk_term(Kind::ApplyConstructor, &[t]))
+                        Ok(self.tm.mk_term(Kind::ApplyConstructor, &[t]).into())
                     }
                 } else {
-                    Ok(t)
+                    Ok(t.into())
                 }
             }
         }
     }
 
     /// Translate sorted variable bindings into cvc5 bound variables, inserting them into `locals`.
-    fn bind_vars<A: HasArenaAlt>(
-        &mut self,
-        vars: &[alg::VarBinding<Str, Sort>],
-        arena: &mut A,
-    ) -> Res<Vec<CTerm<'tm>>> {
+    fn bind_vars(&mut self, vars: &[VarBinding<Str, Sort>]) -> Res<()> {
         let mut bound = Vec::with_capacity(vars.len());
         for v in vars {
-            let cs = v.2.to_cvc5(self, arena)?;
+            let cs = v.2.to_cvc5(self, &mut ())?;
             let bv = self.tm.mk_var(cs, &v.0);
-            self.locals.insert(v.1, bv.clone());
+            self.locals.insert(v.1, bv.clone().into());
             bound.push(bv);
         }
-        Ok(bound)
+        self.scope_stack.push(bound);
+        Ok(())
     }
 
     /// Remove variable bindings from `locals`.
-    fn unbind_vars(&mut self, vars: &[alg::VarBinding<Str, Sort>]) {
+    fn unbind_vars(&mut self, vars: &[VarBinding<Str, Sort>]) -> Res<Vec<CTerm<'tm>>> {
         for v in vars {
             self.locals.remove(&v.1);
         }
+        self.scope_stack
+            .pop()
+            .ok_or_else(|| "invariance violation: scope management failure".into())
     }
 
-    fn translate_quantifier<A: HasArenaAlt>(
+    fn translate_quantifier_body(
         &mut self,
         kind: Kind,
-        vars: &[alg::VarBinding<Str, Sort>],
-        body: &Term,
-        arena: &mut A,
-    ) -> Res<CTerm<'tm>> {
-        let bound = self.bind_vars(vars, arena)?;
-        let result = self.translate_quantifier_body(kind, body, &bound, arena);
-        self.unbind_vars(vars);
-        result
-    }
-
-    fn translate_quantifier_body<A: HasArenaAlt>(
-        &mut self,
-        kind: Kind,
-        body: &Term,
-        bound: &[CTerm<'tm>],
-        arena: &mut A,
-    ) -> Res<CTerm<'tm>> {
-        let bvl = self.tm.mk_term(Kind::VariableList, bound);
+        bound: Vec<CTerm<'tm>>,
+        t_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        let bvl = self.tm.mk_term(Kind::VariableList, &bound);
 
         // Peel off annotations from the body to extract :pattern triggers
-        let (inner_body, attrs) = match body.repr() {
-            ATerm::Annotated(t, attrs) => (t, Some(attrs)),
-            _ => (body, None),
-        };
-        let cbody = inner_body.to_cvc5(self, arena)?;
+        let cbody = t_rec.term;
 
         // Build INST_PATTERN_LIST from :pattern annotations
-        if let Some(attrs) = attrs {
-            let mut pats = Vec::new();
-            for attr in attrs {
-                if let Attribute::Pattern(terms) = attr {
-                    let cterms = terms.to_cvc5(self, arena)?;
-                    pats.push(self.tm.mk_term(Kind::InstPattern, &cterms));
-                }
-            }
-            if !pats.is_empty() {
-                let plist = self.tm.mk_term(Kind::InstPatternList, &pats);
-                return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]));
-            }
+        if !t_rec.patterns.is_empty() {
+            let pats = self.tm.mk_term(Kind::InstPattern, &t_rec.patterns);
+            let plist = self
+                .tm
+                .mk_term(Kind::InstPatternList, std::slice::from_ref(&pats));
+            return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]).into());
         }
-
-        Ok(self.tm.mk_term(kind, &[bvl, cbody]))
+        Ok(self.tm.mk_term(kind, &[bvl, cbody]).into())
     }
 
-    fn translate_let<A: HasArenaAlt>(
+    fn translate_matching(
         &mut self,
-        bindings: &[alg::VarBinding<Str, Term>],
-        body: &Term,
-        arena: &mut A,
-    ) -> Res<CTerm<'tm>> {
-        let new_bindings = bindings
-            .iter()
-            .map(|b| Ok((b.1, b.2.to_cvc5(self, arena)?)))
-            .collect::<Res<Vec<_>>>()?;
-        for b in new_bindings {
-            self.locals.insert(b.0, b.1);
-        }
-        let result = body.to_cvc5(self, arena);
-        for b in bindings {
-            self.locals.remove(&b.1);
-        }
-        result
-    }
-
-    fn translate_matching<A: HasArenaAlt>(
-        &mut self,
-        scrutinee: &Term,
+        cscrutinee: &CTerm<'tm>,
         arms: &[alg::PatternArm<Str, Term>],
-        arena: &mut A,
     ) -> Res<CTerm<'tm>> {
-        let cscrutinee = scrutinee.to_cvc5(self, arena)?;
         let scr_sort = cscrutinee.sort();
         let dt = scr_sort.datatype();
         // For parametric datatypes, selector codomain sorts are uninstantiated (e.g. X).
@@ -612,12 +854,9 @@ impl<'tm> Cvc5Env<'tm> {
                     } else {
                         ctor.term()
                     };
-                    let ctor_app = self
-                        .tm
-                        .mk_term(Kind::ApplyConstructor, &[ctor_term]);
+                    let ctor_app = self.tm.mk_term(Kind::ApplyConstructor, &[ctor_term]);
                     let cbody = arm.body.to_cvc5(self, arena)?;
-                    self.tm
-                        .mk_term(Kind::MatchCase, &[ctor_app, cbody])
+                    self.tm.mk_term(Kind::MatchCase, &[ctor_app, cbody])
                 }
                 alg::Pattern::Applied {
                     ctor: name,
@@ -633,30 +872,22 @@ impl<'tm> Cvc5Env<'tm> {
                         if let Some((ref params, ref inst)) = subst {
                             sel_sort = sel_sort.substitute_sorts(params, inst);
                         }
-                        let bv = match arg {
+                        let pv = match arg {
                             Some((_, id)) => {
-                                // todo: mk_var allows NULL name in C. cyc5-rs should expose this.
-                                // cvc5 should be responsible for handling fresh names.
-                                let fresh = arena.arena_alt().fresh_x().to_string();
-                                let bv = self.tm.mk_var(sel_sort, &fresh);
+                                let bv = self.tm.mk_anonymous_var(sel_sort);
                                 self.locals.insert(*id, bv.clone());
                                 bv
                             }
-                            None => {
-                                let fresh = arena.arena_alt().fresh_x().to_string();
-                                self.tm.mk_var(sel_sort, &fresh)
-                            }
+                            None => self.tm.mk_anonymous_var(sel_sort),
                         };
-                        vars.push(bv.clone());
-                        pattern_args.push(bv);
+                        vars.push(pv.clone());
+                        pattern_args.push(pv);
                     }
                     let mut pat_children = vec![ctor.term()];
                     pat_children.extend(pattern_args);
-                    let pattern = self
-                        .tm
-                        .mk_term(Kind::ApplyConstructor, &pat_children);
+                    let pattern = self.tm.mk_term(Kind::ApplyConstructor, &pat_children);
                     let vlist = self.tm.mk_term(Kind::VariableList, &vars);
-                    let cbody = arm.body.to_cvc5(self, arena);
+                    let cbody = arm.body.to_cvc5(self, &mut ());
                     for (_, id) in arguments.iter().flatten() {
                         self.locals.remove(id);
                     }
@@ -665,21 +896,19 @@ impl<'tm> Cvc5Env<'tm> {
                         .mk_term(Kind::MatchBindCase, &[vlist, pattern, cbody])
                 }
                 alg::Pattern::Wildcard(binding) => {
-                    let fresh = arena.arena_alt().fresh_x().to_string();
-                    let bv = self.tm.mk_var(scr_sort.clone(), &fresh);
+                    let pv = self.tm.mk_anonymous_var(scr_sort.clone());
                     if let Some((_, id)) = binding {
-                        self.locals.insert(*id, bv.clone());
+                        self.locals.insert(*id, pv.clone());
                     }
                     let vlist = self
                         .tm
-                        .mk_term(Kind::VariableList, std::slice::from_ref(&bv));
+                        .mk_term(Kind::VariableList, std::slice::from_ref(&pv));
                     let cbody = arm.body.to_cvc5(self, arena);
                     if let Some((_, id)) = binding {
                         self.locals.remove(id);
                     }
                     let cbody = cbody?;
-                    self.tm
-                        .mk_term(Kind::MatchBindCase, &[vlist, bv, cbody])
+                    self.tm.mk_term(Kind::MatchBindCase, &[vlist, pv, cbody])
                 }
             };
             cases.push(case);
@@ -690,14 +919,12 @@ impl<'tm> Cvc5Env<'tm> {
         Ok(self.tm.mk_term(Kind::Match, &match_children))
     }
 
-    fn translate_app<A: HasArenaAlt>(
+    fn translate_app(
         &mut self,
         qid: &QualifiedIdentifier,
-        args: &[Term],
+        cargs: Vec<CTerm<'tm>>,
         rs: &Sort,
-        arena: &mut A,
-    ) -> Res<CTerm<'tm>> {
-        let cargs = args.to_cvc5(self, arena)?;
+    ) -> Res<WithPattern<'tm>> {
         let id = &qid.0;
         let kind = id.get_kind();
         // Handle unary minus: (- x) → NEG
@@ -716,7 +943,7 @@ impl<'tm> Cvc5Env<'tm> {
         if let Some(f) = self.globals.get(name).cloned() {
             let fs = f.sort();
             if fs.is_dt_constructor() {
-                if let Some(ct) = self.resolve_parametric_ctor(name, rs, arena)? {
+                if let Some(ct) = self.resolve_parametric_ctor(name, rs)? {
                     Ok(self.mk_applied(Kind::ApplyConstructor, ct, cargs))
                 } else {
                     Ok(self.mk_applied(Kind::ApplyConstructor, f, cargs))
@@ -733,7 +960,11 @@ impl<'tm> Cvc5Env<'tm> {
         }
     }
 
-    fn translate_indexed_app(&self, ik: &IdentifierKind, cargs: Vec<CTerm<'tm>>) -> Res<CTerm<'tm>> {
+    fn translate_indexed_app(
+        &self,
+        ik: &IdentifierKind,
+        cargs: Vec<CTerm<'tm>>,
+    ) -> Res<CTerm<'tm>> {
         use alg::IdentifierKind::*;
         let mk = |kind, indices: &[u32]| {
             let op = self.tm.mk_op(kind, indices);
@@ -743,18 +974,13 @@ impl<'tm> Cvc5Env<'tm> {
             n.try_into().map_err(|_| format!("index too large: {n}"))
         };
         match ik {
-            Extract(hi, lo) => mk(
-                Kind::BitvectorExtract,
-                &[to_u32(hi)?, to_u32(lo)?],
-            ),
+            Extract(hi, lo) => mk(Kind::BitvectorExtract, &[to_u32(hi)?, to_u32(lo)?]),
             Repeat(n) => mk(Kind::BitvectorRepeat, &[to_u32(n)?]),
             ZeroExtend(n) => mk(Kind::BitvectorZeroExtend, &[to_u32(n)?]),
             SignExtend(n) => mk(Kind::BitvectorSignExtend, &[to_u32(n)?]),
             RotateLeft(n) => mk(Kind::BitvectorRotateLeft, &[to_u32(n)?]),
             RotateRight(n) => mk(Kind::BitvectorRotateRight, &[to_u32(n)?]),
-            IntToBv(n) | Int2Bv(n) | Nat2Bv(n) => {
-                mk(Kind::IntToBitvector, &[to_u32(n)?])
-            }
+            IntToBv(n) | Int2Bv(n) | Nat2Bv(n) => mk(Kind::IntToBitvector, &[to_u32(n)?]),
             RePower(n) => mk(Kind::RegexpRepeat, &[to_u32(n)?]),
             ReLoop(lo, hi) => mk(Kind::RegexpLoop, &[to_u32(lo)?, to_u32(hi)?]),
             Is(cname) => {
@@ -944,9 +1170,9 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm> {
     ) -> Res<CommandResult<'tm>> {
         let env = &mut *self.env;
         let out = fd.out_sort.to_cvc5(env, arena)?;
-        let vars = env.bind_vars(&fd.vars, arena)?;
+        env.bind_vars(&fd.vars)?;
         let body = fd.body.to_cvc5(env, arena);
-        env.unbind_vars(&fd.vars);
+        let vars = env.unbind_vars(&fd.vars)?;
         let body = body?;
         let ct = if recursive {
             self.solver.define_fun_rec(&fd.name, &vars, out, body, true)
@@ -986,9 +1212,9 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm> {
         let mut all_vars = Vec::with_capacity(fds.len());
         let mut bodies = Vec::with_capacity(fds.len());
         for fd in fds {
-            let vars = env.bind_vars(&fd.vars, arena)?;
+            env.bind_vars(&fd.vars)?;
             let body = fd.body.to_cvc5(env, arena);
-            env.unbind_vars(&fd.vars);
+            let vars = env.unbind_vars(&fd.vars)?;
             all_vars.push(vars);
             bodies.push(body?);
         }
@@ -1034,7 +1260,8 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm> {
         let mut decls = Vec::with_capacity(defs.len());
         for def in defs {
             let params = &def.dec.params;
-            let cvc5_params: Vec<CSort<'tm>> = params.iter().map(|p| env.tm.mk_param_sort(p)).collect();
+            let cvc5_params: Vec<CSort<'tm>> =
+                params.iter().map(|p| env.tm.mk_param_sort(p)).collect();
             for (p, cs) in params.iter().zip(&cvc5_params) {
                 env.dt_sorts.insert(p.clone(), cs.clone());
             }

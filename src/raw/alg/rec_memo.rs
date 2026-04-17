@@ -29,6 +29,7 @@ use crate::ast::alg::{
 };
 use crate::containers::InsertableMapping;
 use crate::traits::{Contains, Repr};
+use delegate::delegate;
 use either::Either;
 use std::collections::HashMap;
 use yaspar::ast::Keyword;
@@ -99,6 +100,20 @@ where
         memo_term_recursion(self, t)
     }
 
+    delegate! {
+        to self.inner {
+            fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err>;
+            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &Constant<Str>) -> Result<Self::Attr, Self::Err>;
+            fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Self::Attr, Self::Err>;
+            fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err>;
+            fn on_attribute_pattern(&mut self, patterns: &[T], patterns_rec: Vec<Self::Out>) -> Result<Self::Attr, Self::Err>;
+            fn on_let_binding(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, binding_idx: usize, binding_rec: Self::Out) -> Result<Self::Binding, Self::Err>;
+            fn setup_let_scope(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, vs_rec: &[Self::Binding]) -> Result<(), Self::Err>;
+            fn setup_quantifier_scope(&mut self, current: &T, vs: &[VarBinding<Str, So>], t: &T, is_forall: bool) -> Result<(), Self::Err>;
+            fn setup_match_case_scope(&mut self, current: &T, scrutinee: &T, cases: &[PatternArm<Str, T>], scrutinee_rec: &Self::Out, case_idx: usize) -> Result<Self::Pattern, Self::Err>;
+        }
+    }
+
     fn on_constant(
         &mut self,
         current: &T,
@@ -140,28 +155,6 @@ where
         Ok(r)
     }
 
-    fn on_let_binding(
-        &mut self,
-        current: &T,
-        vs: &[VarBinding<Str, T>],
-        body: &T,
-        binding_idx: usize,
-        binding_rec: Self::Out,
-    ) -> Result<Self::Binding, Self::Err> {
-        self.inner
-            .on_let_binding(current, vs, body, binding_idx, binding_rec)
-    }
-
-    fn setup_let_scope(
-        &mut self,
-        current: &T,
-        vs: &[VarBinding<Str, T>],
-        body: &T,
-        vs_rec: &[Self::Binding],
-    ) -> Result<(), Self::Err> {
-        self.inner.setup_let_scope(current, vs, body, vs_rec)
-    }
-
     fn on_let(
         &mut self,
         current: &T,
@@ -173,16 +166,6 @@ where
         let r = self.inner.on_let(current, vs, body, vs_rec, body_rec)?;
         self.cache.insert(current.clone(), r.clone());
         Ok(r)
-    }
-
-    fn setup_quantifier_scope(
-        &mut self,
-        current: &T,
-        vs: &[VarBinding<Str, So>],
-        t: &T,
-        is_forall: bool,
-    ) -> Result<(), Self::Err> {
-        self.inner.setup_quantifier_scope(current, vs, t, is_forall)
     }
 
     fn on_exists(
@@ -209,29 +192,25 @@ where
         Ok(r)
     }
 
-    fn setup_match_case_scope(
+    fn on_match_arm(
         &mut self,
         current: &T,
         scrutinee: &T,
         cases: &[PatternArm<Str, T>],
         scrutinee_rec: &Self::Out,
         case_idx: usize,
-    ) -> Result<Self::Pattern, Self::Err> {
-        self.inner
-            .setup_match_case_scope(current, scrutinee, cases, scrutinee_rec, case_idx)
-    }
-
-    fn on_match_arm(
-        &mut self,
-        current: &T,
-        scrutinee: &T,
-        cases: &[PatternArm<Str, T>],
-        case_idx: usize,
         current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Result<Self::Arm, Self::Err> {
-        self.inner
-            .on_match_arm(current, scrutinee, cases, case_idx, current_pattern, arm)
+        self.inner.on_match_arm(
+            current,
+            scrutinee,
+            cases,
+            scrutinee_rec,
+            case_idx,
+            current_pattern,
+            arm,
+        )
     }
 
     fn on_match(
@@ -260,38 +239,6 @@ where
         let r = self.inner.on_annotated(current, t, anns, t_rec, anns_rec)?;
         self.cache.insert(current.clone(), r.clone());
         Ok(r)
-    }
-
-    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_keyword(keyword)
-    }
-
-    fn on_attribute_constant(
-        &mut self,
-        keyword: &Keyword,
-        constant: &Constant<Str>,
-    ) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_constant(keyword, constant)
-    }
-
-    fn on_attribute_symbol(
-        &mut self,
-        keyword: &Keyword,
-        symbol: &Str,
-    ) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_symbol(keyword, symbol)
-    }
-
-    fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_named(name)
-    }
-
-    fn on_attribute_pattern(
-        &mut self,
-        patterns: &[T],
-        patterns_rec: Vec<Self::Out>,
-    ) -> Result<Self::Attr, Self::Err> {
-        self.inner.on_attribute_pattern(patterns, patterns_rec)
     }
 
     fn on_eq(

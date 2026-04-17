@@ -905,6 +905,7 @@ where
         current: &T,
         _scrutinee: &T,
         _cases: &[alg::PatternArm<St, T>],
+        _scrutinee_rec: &Self::Out,
         _case_idx: usize,
         current_pattern: Self::Pattern,
         arm: Self::Out,

@@ -141,11 +141,12 @@ impl TermRecursor<Str, Sort, Term> for TouchedTermSize {
 
     fn on_match_arm(
         &mut self,
-        _current: &Term,
-        _scrutinee: &Term,
-        _cases: &[PatternArm<Str, Term>],
-        _case_idx: usize,
-        _current_pattern: Self::Pattern,
+        current: &T,
+        scrutinee: &T,
+        cases: &[PatternArm<Str, T>],
+        scrutinee_rec: &Self::Out,
+        case_idx: usize,
+        current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Result<Self::Arm, Self::Err> {
         Ok(arm)

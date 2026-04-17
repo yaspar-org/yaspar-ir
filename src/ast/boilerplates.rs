@@ -199,6 +199,7 @@ where
         _current: &Term,
         _scrutinee: &Term,
         cases: &[PatternArm],
+        _scrutinee_rec: &Self::Out,
         case_idx: usize,
         _current_pattern: Self::Pattern,
         arm: Self::Out,

@@ -175,6 +175,7 @@ impl TermRecursor<Str, Sort, Term> for FreeLocalVariableFinder {
         _current: &Term,
         _scrutinee: &Term,
         cases: &[PatternArm],
+        _scrutinee_rec: &Self::Out,
         case_idx: usize,
         _current_pattern: Self::Pattern,
         _arm: Self::Out,

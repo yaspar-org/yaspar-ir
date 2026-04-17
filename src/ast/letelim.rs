@@ -234,6 +234,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
         _: &Term,
         _: &Term,
         cases: &[PatternArm],
+        scrutinee_rec: &Term,
         idx: usize,
         _: (),
         body: Term,
