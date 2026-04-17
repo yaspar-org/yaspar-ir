@@ -362,12 +362,10 @@ impl ActionOnTerm for UntypedAst {
                 }
                 IdentifierKind::Implies => {
                     match args.pop() {
-                        None => {}
-                        Some(rt) => {
-                            if !args.is_empty() {
-                                return Ok(wrap(ATerm::Implies(args, rt).into(), range));
-                            }
+                        Some(rt) if !args.is_empty() => {
+                            return Ok(wrap(ATerm::Implies(args, rt).into(), range));
                         }
+                        _ => {}
                     }
                     Err(ParseError::User {
                         error: GrammarError::Other {

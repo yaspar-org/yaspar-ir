@@ -8,7 +8,7 @@
 //!
 //! # Overview
 //!
-//! - [`ConvertToCvc5<Env, A>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
+//! - [`ConvertToCvc5<Env>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
 //! - [`Cvc5Env`] — holds a [`cvc5::TermManager`] and caches for sort/term/symbol translation.
 //!   Used as the environment for `Sort::to_cvc5` and `Term::to_cvc5`.
 //! - [`Cvc5EnvSolver`] — wraps a [`Cvc5EnvInner`] and a [`Solver`]. Used as the environment
@@ -41,7 +41,7 @@
 //!
 //! # Caching
 //!
-//! `Cvc5Env` caches translated sorts and terms so that repeated translations of the same
+//! [`Cvc5Env`] caches translated sorts and terms so that repeated translations of the same
 //! hashconsed object return the cached cvc5 object directly.
 //!
 //! # Annotations
@@ -112,6 +112,8 @@ impl<'tm> From<CTerm<'tm>> for WithPattern<'tm> {
     }
 }
 
+type SortSubst<'tm> = Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>;
+
 /// Environment for translating yaspar-ir ASTs to cvc5 objects.
 pub struct Cvc5EnvInner<'tm> {
     tm: &'tm TermManager,
@@ -121,7 +123,7 @@ pub struct Cvc5EnvInner<'tm> {
     sort_cache: HashMap<Sort, CSort<'tm>>,
     dt_sorts: HashMap<String, CSort<'tm>>,
     scope_stack: Vec<Vec<CTerm<'tm>>>,
-    sort_subst_map: HashMap<Term, Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>>,
+    sort_subst_map: HashMap<Term, SortSubst<'tm>>,
 }
 
 impl<'tm> Cvc5EnvInner<'tm> {
@@ -355,7 +357,7 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_constant(
         &mut self,
-        current: &Term,
+        _current: &Term,
         constant: &Constant,
         sort: &Option<Sort>,
     ) -> Res<WithPattern<'tm>> {
@@ -364,7 +366,7 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_global(
         &mut self,
-        current: &Term,
+        _current: &Term,
         id: &QualifiedIdentifier,
         sort: &Option<Sort>,
     ) -> Res<WithPattern<'tm>> {
@@ -373,7 +375,7 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
         self.translate_global(id, sort)
     }
 
-    fn on_local(&mut self, current: &Term, id: &Local) -> Res<WithPattern<'tm>> {
+    fn on_local(&mut self, _current: &Term, id: &Local) -> Res<WithPattern<'tm>> {
         self.locals
             .get(&id.id)
             .cloned()
@@ -382,9 +384,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_app(
         &mut self,
-        current: &Term,
+        _current: &Term,
         id: &QualifiedIdentifier,
-        ts: &[Term],
+        _ts: &[Term],
         s: &Option<Sort>,
         recs: Vec<WithPattern<'tm>>,
     ) -> Res<WithPattern<'tm>> {
@@ -397,9 +399,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_let_binding(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Term>],
-        body: &Term,
+        _body: &Term,
         binding_idx: usize,
         binding_rec: WithPattern<'tm>,
     ) -> Res<Self::Binding> {
@@ -408,9 +410,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn setup_let_scope(
         &mut self,
-        current: &Term,
-        vs: &[VarBinding<Str, Term>],
-        body: &Term,
+        _current: &Term,
+        _vs: &[VarBinding<Str, Term>],
+        _body: &Term,
         vs_rec: &[Self::Binding],
     ) -> Res<()> {
         for (idx, t) in vs_rec {
@@ -420,9 +422,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn on_let(
         &mut self,
-        current: &Term,
-        vs: &[VarBinding<Str, Term>],
-        body: &Term,
+        _current: &Term,
+        _vs: &[VarBinding<Str, Term>],
+        _body: &Term,
         vs_rec: Vec<Self::Binding>,
         body_rec: WithPattern<'tm>,
     ) -> Res<WithPattern<'tm>> {
@@ -433,18 +435,18 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn setup_quantifier_scope(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Sort>],
-        t: &Term,
-        is_forall: bool,
+        _t: &Term,
+        _is_forall: bool,
     ) -> Res<()> {
         self.bind_vars(vs)
     }
     fn on_exists(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Sort>],
-        t: &Term,
+        _t: &Term,
         t_rec: WithPattern<'tm>,
     ) -> Res<WithPattern<'tm>> {
         let bound = self.unbind_vars(vs, |v| &v.1)?;
@@ -452,9 +454,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn on_forall(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Sort>],
-        t: &Term,
+        _t: &Term,
         t_rec: Self::Out,
     ) -> Res<WithPattern<'tm>> {
         let bound = self.unbind_vars(vs, |v| &v.1)?;
@@ -462,7 +464,7 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn setup_match_case_scope(
         &mut self,
-        current: &Term,
+        _current: &Term,
         scrutinee: &Term,
         cases: &[PatternArm],
         scrutinee_rec: &Self::Out,
@@ -473,7 +475,7 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
         if !self.sort_subst_map.contains_key(scrutinee) {
             // For parametric datatypes, selector codomain sorts are uninstantiated (e.g. X).
             // We need to substitute the sort parameters with the actual instantiated parameters.
-            let subst: Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)> = if dt.is_parametric() {
+            let subst: SortSubst<'tm> = if dt.is_parametric() {
                 let params = dt.parameters();
                 let inst_params = scr_sort.instantiated_parameters();
                 Some((params, inst_params))
@@ -488,7 +490,7 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
                 let pv = match v {
                     None => self.tm.mk_anonymous_var(scr_sort.clone()),
                     Some((name, id)) => {
-                        let v = self.tm.mk_var(scr_sort.clone(), &name);
+                        let v = self.tm.mk_var(scr_sort.clone(), name);
                         self.locals.insert(*id, v.clone().into());
                         v
                     }
@@ -524,18 +526,17 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn on_match_arm(
         &mut self,
-        current: &Term,
-        scrutinee: &Term,
+        _current: &Term,
+        _scrutinee: &Term,
         cases: &[PatternArm],
         scrutinee_rec: &Self::Out,
         case_idx: usize,
-        current_pattern: Self::Pattern,
+        _current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Res<Self::Arm> {
         let scr_sort = scrutinee_rec.term.sort();
         let dt = scr_sort.datatype();
         let mut args = self.unbind_vars(&cases[case_idx].pattern.variables_and_ids(), |v| &v.1)?;
-        let subst = self.sort_subst_map.get(scrutinee).unwrap();
         match &cases[case_idx].pattern {
             Pattern::Wildcard(_) => {
                 // we know there is only one variable
@@ -571,9 +572,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn on_match(
         &mut self,
-        current: &Term,
-        scrutinee: &Term,
-        cases: &[PatternArm],
+        _current: &Term,
+        _scrutinee: &Term,
+        _cases: &[PatternArm],
         scrutinee_rec: Self::Out,
         cases_rec: Vec<Self::Arm>,
     ) -> Res<WithPattern<'tm>> {
@@ -584,9 +585,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_annotated(
         &mut self,
-        current: &Term,
-        t: &Term,
-        anns: &[Attribute],
+        _current: &Term,
+        _t: &Term,
+        _anns: &[Attribute],
         t_rec: WithPattern<'tm>,
         anns_rec: Vec<Vec<CTerm<'tm>>>,
     ) -> Res<WithPattern<'tm>> {
@@ -598,26 +599,26 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
             patterns: pats,
         })
     }
-    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Res<Vec<CTerm<'tm>>> {
+    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<Vec<CTerm<'tm>>> {
         Ok(vec![])
     }
     fn on_attribute_constant(
         &mut self,
-        keyword: &Keyword,
-        constant: &Constant,
+        _keyword: &Keyword,
+        _constant: &Constant,
     ) -> Res<Vec<CTerm<'tm>>> {
         Ok(vec![])
     }
-    fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Res<Vec<CTerm<'tm>>> {
+    fn on_attribute_symbol(&mut self, _keyword: &Keyword, _symbol: &Str) -> Res<Vec<CTerm<'tm>>> {
         Ok(vec![])
     }
-    fn on_attribute_named(&mut self, name: &Str) -> Res<Vec<CTerm<'tm>>> {
+    fn on_attribute_named(&mut self, _name: &Str) -> Res<Vec<CTerm<'tm>>> {
         Ok(vec![])
     }
 
     fn on_attribute_pattern(
         &mut self,
-        patterns: &[Term],
+        _patterns: &[Term],
         patterns_rec: Vec<WithPattern<'tm>>,
     ) -> Res<Vec<CTerm<'tm>>> {
         Ok(to_term_vec(patterns_rec))
@@ -625,9 +626,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_eq(
         &mut self,
-        current: &Term,
-        a: &Term,
-        b: &Term,
+        _current: &Term,
+        _a: &Term,
+        _b: &Term,
         a_rec: WithPattern<'tm>,
         b_rec: WithPattern<'tm>,
     ) -> Res<WithPattern<'tm>> {
@@ -639,8 +640,8 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_distinct(
         &mut self,
-        current: &Term,
-        ts: &[Term],
+        _current: &Term,
+        _ts: &[Term],
         ts_rec: Vec<WithPattern<'tm>>,
     ) -> Res<WithPattern<'tm>> {
         Ok(self.tm.mk_term(Kind::Distinct, &to_term_vec(ts_rec)).into())
@@ -648,8 +649,8 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_and(
         &mut self,
-        current: &Term,
-        ts: &[Term],
+        _current: &Term,
+        _ts: &[Term],
         ts_rec: Vec<WithPattern<'tm>>,
     ) -> Res<WithPattern<'tm>> {
         Ok(self.tm.mk_term(Kind::And, &to_term_vec(ts_rec)).into())
@@ -657,17 +658,17 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_or(
         &mut self,
-        current: &Term,
-        ts: &[Term],
+        _current: &Term,
+        _ts: &[Term],
         ts_rec: Vec<WithPattern<'tm>>,
     ) -> Res<WithPattern<'tm>> {
-        Ok(self.tm.mk_term(Kind::Or, &&to_term_vec(ts_rec)).into())
+        Ok(self.tm.mk_term(Kind::Or, &to_term_vec(ts_rec)).into())
     }
 
     fn on_xor(
         &mut self,
-        current: &Term,
-        ts: &[Term],
+        _current: &Term,
+        _ts: &[Term],
         ts_rec: Vec<WithPattern<'tm>>,
     ) -> Res<WithPattern<'tm>> {
         Ok(self.tm.mk_term(Kind::Xor, &to_term_vec(ts_rec)).into())
@@ -675,8 +676,8 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_not(
         &mut self,
-        current: &Term,
-        t: &Term,
+        _current: &Term,
+        _t: &Term,
         t_rec: WithPattern<'tm>,
     ) -> Res<WithPattern<'tm>> {
         Ok(self.tm.mk_term(Kind::Not, &[t_rec.into()]).into())
@@ -684,9 +685,9 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_implies(
         &mut self,
-        current: &Term,
-        ts: &[Term],
-        t: &Term,
+        _current: &Term,
+        _ts: &[Term],
+        _t: &Term,
         ts_rec: Vec<WithPattern<'tm>>,
         t_rec: WithPattern<'tm>,
     ) -> Res<WithPattern<'tm>> {
@@ -697,10 +698,10 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
 
     fn on_ite(
         &mut self,
-        current: &Term,
-        b: &Term,
-        t: &Term,
-        e: &Term,
+        _current: &Term,
+        _b: &Term,
+        _t: &Term,
+        _e: &Term,
         b_rec: WithPattern<'tm>,
         t_rec: WithPattern<'tm>,
         e_rec: WithPattern<'tm>,

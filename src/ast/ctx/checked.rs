@@ -548,10 +548,10 @@ impl Context {
         match &opt {
             Attribute::Keyword(_) => {}
             Attribute::Constant(kw, c) => match kw {
-                Keyword::DiagnosticOutputChannel | Keyword::RegularOutputChannel => {
-                    if !matches!(c, alg::Constant::String(_)) {
-                        return Err(format!("TC: keyword {kw} expected a string!"));
-                    }
+                Keyword::DiagnosticOutputChannel | Keyword::RegularOutputChannel
+                    if !matches!(c, alg::Constant::String(_)) =>
+                {
+                    return Err(format!("TC: keyword {kw} expected a string!"));
                 }
                 Keyword::GlobalDeclarations
                 | Keyword::InteractiveMode
@@ -561,15 +561,15 @@ impl Context {
                 | Keyword::ProduceModels
                 | Keyword::ProduceProofs
                 | Keyword::ProduceUnsatAssumptions
-                | Keyword::ProduceUnsatCores => {
-                    if !matches!(c, alg::Constant::Bool(_)) {
-                        return Err(format!("TC: keyword {kw} expected a bool!"));
-                    }
+                | Keyword::ProduceUnsatCores
+                    if !matches!(c, alg::Constant::Bool(_)) =>
+                {
+                    return Err(format!("TC: keyword {kw} expected a bool!"));
                 }
-                Keyword::RandomSeed | Keyword::ReproducibleResourceLimit | Keyword::Verbosity => {
-                    if !matches!(c, alg::Constant::Numeral(_)) {
-                        return Err(format!("TC: keyword {kw} expected a number!"));
-                    }
+                Keyword::RandomSeed | Keyword::ReproducibleResourceLimit | Keyword::Verbosity
+                    if !matches!(c, alg::Constant::Numeral(_)) =>
+                {
+                    return Err(format!("TC: keyword {kw} expected a number!"));
                 }
                 _ => {}
             },

@@ -616,19 +616,20 @@ Currently, the crate provides the following functionalities:
 11. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
 12. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
 13. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
-    `cvc5`. It translates typed `Sort`s, `Term`s, and `Command`s to their cvc5-rs counterparts, with caching and
-    support for quantifier `:pattern` annotations.
+    `cvc5`. It translates typed `Sort`s, `Term`s, and `Command`s to their cvc5 counterparts, with memoized caching
+    and support for quantifier `:pattern` annotations.
 
 ### Translation to cvc5
 
-The `cvc5` module exposes the `ConvertToCvc5<Env, A>` trait, which provides a uniform `.to_cvc5(env, ctx)` method for
+The `cvc5` module exposes the `ConvertToCvc5<Env>` trait, which provides a uniform `.to_cvc5(env)` method for
 translating sorts, terms, and commands. Two environment types are used:
 
-- `Cvc5Env` — wraps a `TermManager` and caches. Used for translating `Sort`s and `Term`s.
+- `Cvc5Env` — a memoized wrapper around `Cvc5EnvInner` that caches term translations. Used for
+  translating `Sort`s and `Term`s.
 - `Cvc5EnvSolver` — wraps a `Cvc5Env` and a `Solver`. Used for translating `Command`s.
 
 ```rust
-use cvc5_rs::{Solver, TermManager};
+use cvc5::{Solver, TermManager};
 use yaspar_ir::ast::{Context, Typecheck};
 use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 use yaspar_ir::untyped::UntypedAst;
@@ -648,20 +649,20 @@ fn main() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
 
     // translate commands (which internally translate sorts and terms)
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        cmd.to_cvc5(&mut es, &mut ctx).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
 
     // sorts and terms can also be translated individually
     let int = ctx.int_sort();
-    let cvc5_int = int.to_cvc5(&mut env, &mut ctx).unwrap();
+    let cvc5_int = int.to_cvc5(&mut env).unwrap();
 
     let term = UntypedAst.parse_term_str("(+ x 1)").unwrap().type_check(&mut ctx).unwrap();
-    let cvc5_term = term.to_cvc5(&mut env, &mut ctx).unwrap();
+    let cvc5_term = term.to_cvc5(&mut env).unwrap();
 }
 ```
 
