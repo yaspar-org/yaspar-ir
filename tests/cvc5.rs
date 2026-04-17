@@ -3,7 +3,7 @@
 
 #![cfg(feature = "cvc5")]
 
-use cvc5_rs::{Solver, TermManager};
+use cvc5::{Solver, TermManager};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
 use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 use yaspar_ir::untyped::UntypedAst;

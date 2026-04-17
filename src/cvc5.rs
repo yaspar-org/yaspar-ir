@@ -1,15 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Translation from yaspar-ir typed ASTs to cvc5-rs objects.
+//! Translation from yaspar-ir typed ASTs to cvc5 objects.
 //!
 //! This module provides the [`ConvertToCvc5`] trait and two environment types for translating
-//! yaspar-ir typed ASTs into their cvc5-rs counterparts. It requires the `cvc5` feature.
+//! yaspar-ir typed ASTs into their cvc5 counterparts. It requires the `cvc5` feature.
 //!
 //! # Overview
 //!
 //! - [`ConvertToCvc5<Env, A>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
-//! - [`Cvc5Env`] — holds a [`cvc5_rs::TermManager`] and caches for sort/term/symbol translation.
+//! - [`Cvc5Env`] — holds a [`cvc5::TermManager`] and caches for sort/term/symbol translation.
 //!   Used as the environment for `Sort::to_cvc5` and `Term::to_cvc5`.
 //! - [`Cvc5EnvSolver`] — wraps a [`Cvc5Env`] and a [`Solver`]. Used as the environment
 //!   for `Command::to_cvc5`, since commands may interact with the solver (e.g. `assert`,
@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```rust
-//! use cvc5_rs::{Solver, TermManager};
+//! use cvc5::{Solver, TermManager};
 //! use yaspar_ir::ast::{Context, Typecheck};
 //! use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 //! use yaspar_ir::untyped::UntypedAst;
@@ -53,58 +53,57 @@ use crate::ast::*;
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::traits::{Contains, Repr};
-pub use cvc5_rs::{Kind, ProofComponent, Solver, TermManager};
-use std::borrow::Borrow;
+pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
 use std::collections::HashMap;
 use yaspar::{binary_to_string, hex_to_string};
 
-pub type CSort = cvc5_rs::Sort;
-pub type CTerm = cvc5_rs::Term;
-pub type CResult = cvc5_rs::Result;
-pub type CProof = cvc5_rs::Proof;
+pub type CSort<'tm> = cvc5::Sort<'tm>;
+pub type CTerm<'tm> = cvc5::Term<'tm>;
+pub type CResult<'tm> = cvc5::Result<'tm>;
+pub type CProof<'tm> = cvc5::Proof<'tm>;
 type Res<T> = std::result::Result<T, String>;
 
 /// The result of translating and executing a single SMTLib command via cvc5.
 #[derive(Debug)]
-pub enum CommandResult {
+pub enum CommandResult<'tm> {
     /// No meaningful return value (declarations, definitions, `assert`, `set-logic`,
     /// `set-info`, `set-option`, `define-sort`, `reset-assertions`, `echo`, `exit`).
     None,
     /// Result of `check-sat` or `check-sat-assuming`.
-    CheckSat(CResult),
+    CheckSat(CResult<'tm>),
     /// Result of `get-value`: a list of terms.
-    GetValue(Vec<CTerm>),
+    GetValue(Vec<CTerm<'tm>>),
     /// Result of `get-model`: the model as a string.
     GetModel(String),
     /// Result of `get-assertions`, `get-unsat-core`, or `get-unsat-assumptions`: a list of terms.
-    Terms(Vec<CTerm>),
+    Terms(Vec<CTerm<'tm>>),
     /// Result of `get-info` or `get-option`: a string response.
     Info(String),
     /// Result of `get-proof`: the full proof tree.
-    GetProof(Vec<CProof>),
+    GetProof(Vec<CProof<'tm>>),
 }
 
-/// Convert a yaspar-ir typed AST node to its cvc5-rs counterpart.
+/// Convert a yaspar-ir typed AST node to its cvc5 counterpart.
 pub trait ConvertToCvc5<Env, A> {
     type Output;
     fn to_cvc5(&self, env: &mut Env, arena: &mut A) -> Res<Self::Output>;
 }
 
-/// Environment for translating yaspar-ir ASTs to cvc5-rs objects.
-pub struct Cvc5Env {
-    tm: TermManager,
-    sort: HashMap<Str, CSort>,
-    globals: HashMap<Str, CTerm>,
-    locals: HashMap<usize, CTerm>,
-    sort_cache: HashMap<Sort, CSort>,
-    term_cache: HashMap<Term, CTerm>,
-    dt_sorts: HashMap<Str, CSort>,
+/// Environment for translating yaspar-ir ASTs to cvc5 objects.
+pub struct Cvc5Env<'tm> {
+    tm: &'tm TermManager,
+    sort: HashMap<Str, CSort<'tm>>,
+    globals: HashMap<Str, CTerm<'tm>>,
+    locals: HashMap<usize, CTerm<'tm>>,
+    sort_cache: HashMap<Sort, CSort<'tm>>,
+    term_cache: HashMap<Term, CTerm<'tm>>,
+    dt_sorts: HashMap<Str, CSort<'tm>>,
 }
 
-impl Cvc5Env {
-    pub fn new(tm: impl Borrow<TermManager>) -> Self {
+impl<'tm> Cvc5Env<'tm> {
+    pub fn new(tm: &'tm TermManager) -> Self {
         Self {
-            tm: tm.borrow().clone(),
+            tm,
             sort: HashMap::new(),
             globals: HashMap::new(),
             locals: HashMap::new(),
@@ -116,22 +115,22 @@ impl Cvc5Env {
 }
 
 /// Environment combining a [`Cvc5Env`] with a [`Solver`] for translating commands.
-pub struct Cvc5EnvSolver<'a> {
-    pub env: &'a mut Cvc5Env,
-    pub solver: &'a mut Solver,
+pub struct Cvc5EnvSolver<'a, 'tm> {
+    pub env: &'a mut Cvc5Env<'tm>,
+    pub solver: &'a mut Solver<'tm>,
 }
 
-impl<'a> Cvc5EnvSolver<'a> {
-    pub fn new(env: &'a mut Cvc5Env, solver: &'a mut Solver) -> Self {
+impl<'a, 'tm> Cvc5EnvSolver<'a, 'tm> {
+    pub fn new(env: &'a mut Cvc5Env<'tm>, solver: &'a mut Solver<'tm>) -> Self {
         Self { env, solver }
     }
 }
 
 // ── Sort translation ─────────────────────────────────────────
-impl<A: HasArenaAlt> ConvertToCvc5<Cvc5Env, A> for Sort {
-    type Output = CSort;
+impl<'tm, A: HasArenaAlt> ConvertToCvc5<Cvc5Env<'tm>, A> for Sort {
+    type Output = CSort<'tm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env, arena: &mut A) -> Res<CSort> {
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<CSort<'tm>> {
         if let Some(cs) = env.sort_cache.get(self) {
             return Ok(cs.clone());
         }
@@ -141,11 +140,11 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5Env, A> for Sort {
     }
 }
 
-fn translate_sort_inner<A: HasArenaAlt>(
+fn translate_sort_inner<'tm, A: HasArenaAlt>(
     sort: &Sort,
-    env: &mut Cvc5Env,
+    env: &mut Cvc5Env<'tm>,
     arena: &mut A,
-) -> Res<CSort> {
+) -> Res<CSort<'tm>> {
     let s = sort.repr();
     let name = s.sort_name();
     if let Some(n) = s.is_bv() {
@@ -202,105 +201,105 @@ fn translate_sort_inner<A: HasArenaAlt>(
 fn ident_kind_to_cvc5(k: &alg::IdentifierKind<Str>) -> Option<Kind> {
     use alg::IdentifierKind::*;
     Some(match k {
-        Add => Kind::CVC5_KIND_ADD,
-        Sub => Kind::CVC5_KIND_SUB,
-        Mul => Kind::CVC5_KIND_MULT,
-        Idiv => Kind::CVC5_KIND_INTS_DIVISION,
-        Rdiv => Kind::CVC5_KIND_DIVISION,
-        Mod => Kind::CVC5_KIND_INTS_MODULUS,
-        Abs => Kind::CVC5_KIND_ABS,
-        Le => Kind::CVC5_KIND_LEQ,
-        Lt => Kind::CVC5_KIND_LT,
-        Ge => Kind::CVC5_KIND_GEQ,
-        Gt => Kind::CVC5_KIND_GT,
-        ToReal => Kind::CVC5_KIND_TO_REAL,
-        ToInt => Kind::CVC5_KIND_TO_INTEGER,
-        IsInt => Kind::CVC5_KIND_IS_INTEGER,
-        Select => Kind::CVC5_KIND_SELECT,
-        Store => Kind::CVC5_KIND_STORE,
-        StrConcat => Kind::CVC5_KIND_STRING_CONCAT,
-        StrLen => Kind::CVC5_KIND_STRING_LENGTH,
-        StrLt => Kind::CVC5_KIND_STRING_LT,
-        StrLe => Kind::CVC5_KIND_STRING_LEQ,
-        StrAt => Kind::CVC5_KIND_STRING_CHARAT,
-        StrSubstr => Kind::CVC5_KIND_STRING_SUBSTR,
-        StrPrefixof => Kind::CVC5_KIND_STRING_PREFIX,
-        StrSuffixof => Kind::CVC5_KIND_STRING_SUFFIX,
-        StrContains => Kind::CVC5_KIND_STRING_CONTAINS,
-        StrIndexof => Kind::CVC5_KIND_STRING_INDEXOF,
-        StrReplace => Kind::CVC5_KIND_STRING_REPLACE,
-        StrReplaceAll => Kind::CVC5_KIND_STRING_REPLACE_ALL,
-        StrReplaceRe => Kind::CVC5_KIND_STRING_REPLACE_RE,
-        StrReplaceReAll => Kind::CVC5_KIND_STRING_REPLACE_RE_ALL,
-        StrToRe => Kind::CVC5_KIND_STRING_TO_REGEXP,
-        StrInRe => Kind::CVC5_KIND_STRING_IN_REGEXP,
-        StrIsDigit => Kind::CVC5_KIND_STRING_IS_DIGIT,
-        StrToCode => Kind::CVC5_KIND_STRING_TO_CODE,
-        StrFromCode => Kind::CVC5_KIND_STRING_FROM_CODE,
-        StrToInt => Kind::CVC5_KIND_STRING_TO_INT,
-        StrFromInt => Kind::CVC5_KIND_STRING_FROM_INT,
-        ReNone => Kind::CVC5_KIND_REGEXP_NONE,
-        ReAll => Kind::CVC5_KIND_REGEXP_ALL,
-        ReAllChar => Kind::CVC5_KIND_REGEXP_ALLCHAR,
-        ReConcat => Kind::CVC5_KIND_REGEXP_CONCAT,
-        ReUnion => Kind::CVC5_KIND_REGEXP_UNION,
-        ReInter => Kind::CVC5_KIND_REGEXP_INTER,
-        ReStar => Kind::CVC5_KIND_REGEXP_STAR,
-        ReComp => Kind::CVC5_KIND_REGEXP_COMPLEMENT,
-        ReDiff => Kind::CVC5_KIND_REGEXP_DIFF,
-        ReAdd => Kind::CVC5_KIND_REGEXP_PLUS,
-        ReOpt => Kind::CVC5_KIND_REGEXP_OPT,
-        ReRange => Kind::CVC5_KIND_REGEXP_RANGE,
-        Concat => Kind::CVC5_KIND_BITVECTOR_CONCAT,
-        BvNot => Kind::CVC5_KIND_BITVECTOR_NOT,
-        BvNeg => Kind::CVC5_KIND_BITVECTOR_NEG,
-        BvAnd => Kind::CVC5_KIND_BITVECTOR_AND,
-        BvOr => Kind::CVC5_KIND_BITVECTOR_OR,
-        BvAdd => Kind::CVC5_KIND_BITVECTOR_ADD,
-        BvMul => Kind::CVC5_KIND_BITVECTOR_MULT,
-        BvUdiv => Kind::CVC5_KIND_BITVECTOR_UDIV,
-        BvUrem => Kind::CVC5_KIND_BITVECTOR_UREM,
-        BvShl => Kind::CVC5_KIND_BITVECTOR_SHL,
-        BvLshr => Kind::CVC5_KIND_BITVECTOR_LSHR,
-        BvUlt => Kind::CVC5_KIND_BITVECTOR_ULT,
-        BvNand => Kind::CVC5_KIND_BITVECTOR_NAND,
-        BvNor => Kind::CVC5_KIND_BITVECTOR_NOR,
-        BvXor => Kind::CVC5_KIND_BITVECTOR_XOR,
-        BvNxor => Kind::CVC5_KIND_BITVECTOR_XNOR,
-        BvComp => Kind::CVC5_KIND_BITVECTOR_COMP,
-        BvSub => Kind::CVC5_KIND_BITVECTOR_SUB,
-        BvSdiv => Kind::CVC5_KIND_BITVECTOR_SDIV,
-        BvSrem => Kind::CVC5_KIND_BITVECTOR_SREM,
-        BvSmod => Kind::CVC5_KIND_BITVECTOR_SMOD,
-        BvAShr => Kind::CVC5_KIND_BITVECTOR_ASHR,
-        BvUle => Kind::CVC5_KIND_BITVECTOR_ULE,
-        BvUgt => Kind::CVC5_KIND_BITVECTOR_UGT,
-        BvUge => Kind::CVC5_KIND_BITVECTOR_UGE,
-        BvSlt => Kind::CVC5_KIND_BITVECTOR_SLT,
-        BvSle => Kind::CVC5_KIND_BITVECTOR_SLE,
-        BvSgt => Kind::CVC5_KIND_BITVECTOR_SGT,
-        BvSge => Kind::CVC5_KIND_BITVECTOR_SGE,
-        BvNego => Kind::CVC5_KIND_BITVECTOR_NEGO,
-        BvUaddo => Kind::CVC5_KIND_BITVECTOR_UADDO,
-        BvSaddo => Kind::CVC5_KIND_BITVECTOR_SADDO,
-        BvUmulo => Kind::CVC5_KIND_BITVECTOR_UMULO,
-        BvSmulo => Kind::CVC5_KIND_BITVECTOR_SMULO,
-        UbvToInt => Kind::CVC5_KIND_BITVECTOR_UBV_TO_INT,
-        SbvToInt => Kind::CVC5_KIND_BITVECTOR_SBV_TO_INT,
-        Bv2Nat => Kind::CVC5_KIND_BITVECTOR_SBV_TO_INT,
-        Bv2Int => Kind::CVC5_KIND_BITVECTOR_SBV_TO_INT,
-        BvUsubo => Kind::CVC5_KIND_BITVECTOR_USUBO,
-        BvSsubo => Kind::CVC5_KIND_BITVECTOR_SSUBO,
-        BvSdivo => Kind::CVC5_KIND_BITVECTOR_SDIVO,
+        Add => Kind::Add,
+        Sub => Kind::Sub,
+        Mul => Kind::Mult,
+        Idiv => Kind::IntsDivision,
+        Rdiv => Kind::Division,
+        Mod => Kind::IntsModulus,
+        Abs => Kind::Abs,
+        Le => Kind::Leq,
+        Lt => Kind::Lt,
+        Ge => Kind::Geq,
+        Gt => Kind::Gt,
+        ToReal => Kind::ToReal,
+        ToInt => Kind::ToInteger,
+        IsInt => Kind::IsInteger,
+        Select => Kind::Select,
+        Store => Kind::Store,
+        StrConcat => Kind::StringConcat,
+        StrLen => Kind::StringLength,
+        StrLt => Kind::StringLt,
+        StrLe => Kind::StringLeq,
+        StrAt => Kind::StringCharat,
+        StrSubstr => Kind::StringSubstr,
+        StrPrefixof => Kind::StringPrefix,
+        StrSuffixof => Kind::StringSuffix,
+        StrContains => Kind::StringContains,
+        StrIndexof => Kind::StringIndexof,
+        StrReplace => Kind::StringReplace,
+        StrReplaceAll => Kind::StringReplaceAll,
+        StrReplaceRe => Kind::StringReplaceRe,
+        StrReplaceReAll => Kind::StringReplaceReAll,
+        StrToRe => Kind::StringToRegexp,
+        StrInRe => Kind::StringInRegexp,
+        StrIsDigit => Kind::StringIsDigit,
+        StrToCode => Kind::StringToCode,
+        StrFromCode => Kind::StringFromCode,
+        StrToInt => Kind::StringToInt,
+        StrFromInt => Kind::StringFromInt,
+        ReNone => Kind::RegexpNone,
+        ReAll => Kind::RegexpAll,
+        ReAllChar => Kind::RegexpAllchar,
+        ReConcat => Kind::RegexpConcat,
+        ReUnion => Kind::RegexpUnion,
+        ReInter => Kind::RegexpInter,
+        ReStar => Kind::RegexpStar,
+        ReComp => Kind::RegexpComplement,
+        ReDiff => Kind::RegexpDiff,
+        ReAdd => Kind::RegexpPlus,
+        ReOpt => Kind::RegexpOpt,
+        ReRange => Kind::RegexpRange,
+        Concat => Kind::BitvectorConcat,
+        BvNot => Kind::BitvectorNot,
+        BvNeg => Kind::BitvectorNeg,
+        BvAnd => Kind::BitvectorAnd,
+        BvOr => Kind::BitvectorOr,
+        BvAdd => Kind::BitvectorAdd,
+        BvMul => Kind::BitvectorMult,
+        BvUdiv => Kind::BitvectorUdiv,
+        BvUrem => Kind::BitvectorUrem,
+        BvShl => Kind::BitvectorShl,
+        BvLshr => Kind::BitvectorLshr,
+        BvUlt => Kind::BitvectorUlt,
+        BvNand => Kind::BitvectorNand,
+        BvNor => Kind::BitvectorNor,
+        BvXor => Kind::BitvectorXor,
+        BvNxor => Kind::BitvectorXnor,
+        BvComp => Kind::BitvectorComp,
+        BvSub => Kind::BitvectorSub,
+        BvSdiv => Kind::BitvectorSdiv,
+        BvSrem => Kind::BitvectorSrem,
+        BvSmod => Kind::BitvectorSmod,
+        BvAShr => Kind::BitvectorAshr,
+        BvUle => Kind::BitvectorUle,
+        BvUgt => Kind::BitvectorUgt,
+        BvUge => Kind::BitvectorUge,
+        BvSlt => Kind::BitvectorSlt,
+        BvSle => Kind::BitvectorSle,
+        BvSgt => Kind::BitvectorSgt,
+        BvSge => Kind::BitvectorSge,
+        BvNego => Kind::BitvectorNego,
+        BvUaddo => Kind::BitvectorUaddo,
+        BvSaddo => Kind::BitvectorSaddo,
+        BvUmulo => Kind::BitvectorUmulo,
+        BvSmulo => Kind::BitvectorSmulo,
+        UbvToInt => Kind::BitvectorUbvToInt,
+        SbvToInt => Kind::BitvectorSbvToInt,
+        Bv2Nat => Kind::BitvectorSbvToInt,
+        Bv2Int => Kind::BitvectorSbvToInt,
+        BvUsubo => Kind::BitvectorUsubo,
+        BvSsubo => Kind::BitvectorSsubo,
+        BvSdivo => Kind::BitvectorSdivo,
         _ => return None,
     })
 }
 
 // ── Term translation ─────────────────────────────────────────
-impl<A: HasArenaAlt> ConvertToCvc5<Cvc5Env, A> for Term {
-    type Output = CTerm;
+impl<'tm, A: HasArenaAlt> ConvertToCvc5<Cvc5Env<'tm>, A> for Term {
+    type Output = CTerm<'tm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env, arena: &mut A) -> Res<CTerm> {
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<CTerm<'tm>> {
         if let Some(ct) = env.term_cache.get(self) {
             return Ok(ct.clone());
         }
@@ -310,11 +309,11 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5Env, A> for Term {
     }
 }
 
-fn translate_term_inner<A: HasArenaAlt>(
+fn translate_term_inner<'tm, A: HasArenaAlt>(
     term: &Term,
-    env: &mut Cvc5Env,
+    env: &mut Cvc5Env<'tm>,
     arena: &mut A,
-) -> Res<CTerm> {
+) -> Res<CTerm<'tm>> {
     use alg::Term as AT;
     match term.repr() {
         AT::Constant(c, _) => env.translate_constant(c),
@@ -330,36 +329,36 @@ fn translate_term_inner<A: HasArenaAlt>(
             .ok_or_else(|| format!("unbound local: {}", loc.symbol)),
         AT::Not(t) => {
             let nt = t.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::CVC5_KIND_NOT, &[nt]))
+            Ok(env.tm.mk_term(Kind::Not, &[nt]))
         }
         AT::Eq(a, b) => {
             let (ca, cb) = (a.to_cvc5(env, arena)?, b.to_cvc5(env, arena)?);
-            Ok(env.tm.mk_term(Kind::CVC5_KIND_EQUAL, &[ca, cb]))
+            Ok(env.tm.mk_term(Kind::Equal, &[ca, cb]))
         }
         AT::Distinct(ts) => {
             let cts = ts.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::CVC5_KIND_DISTINCT, &cts))
+            Ok(env.tm.mk_term(Kind::Distinct, &cts))
         }
         AT::And(ts) => {
             let cts = ts.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::CVC5_KIND_AND, &cts))
+            Ok(env.tm.mk_term(Kind::And, &cts))
         }
         AT::Or(ts) => {
             let cts = ts.to_cvc5(env, arena)?;
-            Ok(env.tm.mk_term(Kind::CVC5_KIND_OR, &cts))
+            Ok(env.tm.mk_term(Kind::Or, &cts))
         }
         AT::Xor(ts) => {
             let cts = ts.to_cvc5(env, arena)?;
             let mut r = cts[0].clone();
             for c in &cts[1..] {
-                r = env.tm.mk_term(Kind::CVC5_KIND_XOR, &[r, CTerm::clone(c)]);
+                r = env.tm.mk_term(Kind::Xor, &[r, CTerm::clone(c)]);
             }
             Ok(r)
         }
         AT::Implies(premises, concl) => {
             let mut all = premises.to_cvc5(env, arena)?;
             all.push(concl.to_cvc5(env, arena)?);
-            Ok(env.tm.mk_term(Kind::CVC5_KIND_IMPLIES, &all))
+            Ok(env.tm.mk_term(Kind::Implies, &all))
         }
         AT::Ite(c, t, e) => {
             let (cc, ct, ce) = (
@@ -367,13 +366,13 @@ fn translate_term_inner<A: HasArenaAlt>(
                 t.to_cvc5(env, arena)?,
                 e.to_cvc5(env, arena)?,
             );
-            Ok(env.tm.mk_term(Kind::CVC5_KIND_ITE, &[cc, ct, ce]))
+            Ok(env.tm.mk_term(Kind::Ite, &[cc, ct, ce]))
         }
         AT::Forall(vars, body) => {
-            env.translate_quantifier(Kind::CVC5_KIND_FORALL, vars, body, arena)
+            env.translate_quantifier(Kind::Forall, vars, body, arena)
         }
         AT::Exists(vars, body) => {
-            env.translate_quantifier(Kind::CVC5_KIND_EXISTS, vars, body, arena)
+            env.translate_quantifier(Kind::Exists, vars, body, arena)
         }
         AT::Let(bindings, body) => env.translate_let(bindings, body, arena),
         AT::App(qid, args, ret) => {
@@ -388,19 +387,19 @@ fn translate_term_inner<A: HasArenaAlt>(
     }
 }
 
-impl<T, A: HasArenaAlt, E> ConvertToCvc5<Cvc5Env, A> for [T]
+impl<'tm, T, A: HasArenaAlt, E> ConvertToCvc5<Cvc5Env<'tm>, A> for [T]
 where
-    T: ConvertToCvc5<Cvc5Env, A, Output = E>,
+    T: ConvertToCvc5<Cvc5Env<'tm>, A, Output = E>,
 {
     type Output = Vec<E>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env, arena: &mut A) -> Res<Vec<E>> {
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm>, arena: &mut A) -> Res<Vec<E>> {
         self.iter().map(|t| t.to_cvc5(env, arena)).collect()
     }
 }
 
-impl Cvc5Env {
-    fn translate_constant(&self, c: &Constant) -> Res<CTerm> {
+impl<'tm> Cvc5Env<'tm> {
+    fn translate_constant(&self, c: &Constant) -> Res<CTerm<'tm>> {
         use alg::Constant::*;
         match c {
             Bool(true) => Ok(self.tm.mk_true()),
@@ -427,7 +426,7 @@ impl Cvc5Env {
     }
 
     /// Build `(kind head args...)`.
-    fn mk_applied(&self, kind: Kind, head: CTerm, mut args: Vec<CTerm>) -> CTerm {
+    fn mk_applied(&self, kind: Kind, head: CTerm<'tm>, mut args: Vec<CTerm<'tm>>) -> CTerm<'tm> {
         args.insert(0, head);
         self.tm.mk_term(kind, &args)
     }
@@ -440,7 +439,7 @@ impl Cvc5Env {
         name: &str,
         sort: &Sort,
         arena: &mut A,
-    ) -> Res<Option<CTerm>> {
+    ) -> Res<Option<CTerm<'tm>>> {
         let sort_name = sort.repr().sort_name();
         if let Some(base_sort) = self.sort.get(sort_name).cloned() {
             let dt = base_sort.datatype();
@@ -462,7 +461,7 @@ impl Cvc5Env {
         qid: &QualifiedIdentifier,
         sort: &Sort,
         arena: &mut A,
-    ) -> Res<CTerm> {
+    ) -> Res<CTerm<'tm>> {
         use alg::IdentifierKind::*;
         let name = qid.id_str();
         match qid.get_kind() {
@@ -483,9 +482,9 @@ impl Cvc5Env {
                 let is_ctor = t.sort().is_dt_constructor();
                 if is_ctor {
                     if let Some(ct) = self.resolve_parametric_ctor(name, sort, arena)? {
-                        Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ct]))
+                        Ok(self.tm.mk_term(Kind::ApplyConstructor, &[ct]))
                     } else {
-                        Ok(self.tm.mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[t]))
+                        Ok(self.tm.mk_term(Kind::ApplyConstructor, &[t]))
                     }
                 } else {
                     Ok(t)
@@ -499,7 +498,7 @@ impl Cvc5Env {
         &mut self,
         vars: &[alg::VarBinding<Str, Sort>],
         arena: &mut A,
-    ) -> Res<Vec<CTerm>> {
+    ) -> Res<Vec<CTerm<'tm>>> {
         let mut bound = Vec::with_capacity(vars.len());
         for v in vars {
             let cs = v.2.to_cvc5(self, arena)?;
@@ -523,7 +522,7 @@ impl Cvc5Env {
         vars: &[alg::VarBinding<Str, Sort>],
         body: &Term,
         arena: &mut A,
-    ) -> Res<CTerm> {
+    ) -> Res<CTerm<'tm>> {
         let bound = self.bind_vars(vars, arena)?;
         let result = self.translate_quantifier_body(kind, body, &bound, arena);
         self.unbind_vars(vars);
@@ -534,10 +533,10 @@ impl Cvc5Env {
         &mut self,
         kind: Kind,
         body: &Term,
-        bound: &[CTerm],
+        bound: &[CTerm<'tm>],
         arena: &mut A,
-    ) -> Res<CTerm> {
-        let bvl = self.tm.mk_term(Kind::CVC5_KIND_VARIABLE_LIST, bound);
+    ) -> Res<CTerm<'tm>> {
+        let bvl = self.tm.mk_term(Kind::VariableList, bound);
 
         // Peel off annotations from the body to extract :pattern triggers
         let (inner_body, attrs) = match body.repr() {
@@ -552,11 +551,11 @@ impl Cvc5Env {
             for attr in attrs {
                 if let Attribute::Pattern(terms) = attr {
                     let cterms = terms.to_cvc5(self, arena)?;
-                    pats.push(self.tm.mk_term(Kind::CVC5_KIND_INST_PATTERN, &cterms));
+                    pats.push(self.tm.mk_term(Kind::InstPattern, &cterms));
                 }
             }
             if !pats.is_empty() {
-                let plist = self.tm.mk_term(Kind::CVC5_KIND_INST_PATTERN_LIST, &pats);
+                let plist = self.tm.mk_term(Kind::InstPatternList, &pats);
                 return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]));
             }
         }
@@ -569,7 +568,7 @@ impl Cvc5Env {
         bindings: &[alg::VarBinding<Str, Term>],
         body: &Term,
         arena: &mut A,
-    ) -> Res<CTerm> {
+    ) -> Res<CTerm<'tm>> {
         let new_bindings = bindings
             .iter()
             .map(|b| Ok((b.1, b.2.to_cvc5(self, arena)?)))
@@ -589,13 +588,13 @@ impl Cvc5Env {
         scrutinee: &Term,
         arms: &[alg::PatternArm<Str, Term>],
         arena: &mut A,
-    ) -> Res<CTerm> {
+    ) -> Res<CTerm<'tm>> {
         let cscrutinee = scrutinee.to_cvc5(self, arena)?;
         let scr_sort = cscrutinee.sort();
         let dt = scr_sort.datatype();
         // For parametric datatypes, selector codomain sorts are uninstantiated (e.g. X).
         // We need to substitute the sort parameters with the actual instantiated parameters.
-        let subst: Option<(Vec<CSort>, Vec<CSort>)> = if dt.is_parametric() {
+        let subst: Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)> = if dt.is_parametric() {
             let params = dt.parameters();
             let inst_params = scr_sort.instantiated_parameters();
             Some((params, inst_params))
@@ -615,10 +614,10 @@ impl Cvc5Env {
                     };
                     let ctor_app = self
                         .tm
-                        .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &[ctor_term]);
+                        .mk_term(Kind::ApplyConstructor, &[ctor_term]);
                     let cbody = arm.body.to_cvc5(self, arena)?;
                     self.tm
-                        .mk_term(Kind::CVC5_KIND_MATCH_CASE, &[ctor_app, cbody])
+                        .mk_term(Kind::MatchCase, &[ctor_app, cbody])
                 }
                 alg::Pattern::Applied {
                     ctor: name,
@@ -655,15 +654,15 @@ impl Cvc5Env {
                     pat_children.extend(pattern_args);
                     let pattern = self
                         .tm
-                        .mk_term(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, &pat_children);
-                    let vlist = self.tm.mk_term(Kind::CVC5_KIND_VARIABLE_LIST, &vars);
+                        .mk_term(Kind::ApplyConstructor, &pat_children);
+                    let vlist = self.tm.mk_term(Kind::VariableList, &vars);
                     let cbody = arm.body.to_cvc5(self, arena);
                     for (_, id) in arguments.iter().flatten() {
                         self.locals.remove(id);
                     }
                     let cbody = cbody?;
                     self.tm
-                        .mk_term(Kind::CVC5_KIND_MATCH_BIND_CASE, &[vlist, pattern, cbody])
+                        .mk_term(Kind::MatchBindCase, &[vlist, pattern, cbody])
                 }
                 alg::Pattern::Wildcard(binding) => {
                     let fresh = arena.arena_alt().fresh_x().to_string();
@@ -673,14 +672,14 @@ impl Cvc5Env {
                     }
                     let vlist = self
                         .tm
-                        .mk_term(Kind::CVC5_KIND_VARIABLE_LIST, std::slice::from_ref(&bv));
+                        .mk_term(Kind::VariableList, std::slice::from_ref(&bv));
                     let cbody = arm.body.to_cvc5(self, arena);
                     if let Some((_, id)) = binding {
                         self.locals.remove(id);
                     }
                     let cbody = cbody?;
                     self.tm
-                        .mk_term(Kind::CVC5_KIND_MATCH_BIND_CASE, &[vlist, bv, cbody])
+                        .mk_term(Kind::MatchBindCase, &[vlist, bv, cbody])
                 }
             };
             cases.push(case);
@@ -688,7 +687,7 @@ impl Cvc5Env {
 
         let mut match_children = vec![cscrutinee];
         match_children.extend(cases);
-        Ok(self.tm.mk_term(Kind::CVC5_KIND_MATCH, &match_children))
+        Ok(self.tm.mk_term(Kind::Match, &match_children))
     }
 
     fn translate_app<A: HasArenaAlt>(
@@ -697,7 +696,7 @@ impl Cvc5Env {
         args: &[Term],
         rs: &Sort,
         arena: &mut A,
-    ) -> Res<CTerm> {
+    ) -> Res<CTerm<'tm>> {
         let cargs = args.to_cvc5(self, arena)?;
         let id = &qid.0;
         let kind = id.get_kind();
@@ -705,7 +704,7 @@ impl Cvc5Env {
         if let Some(IdentifierKind::Sub) = kind
             && cargs.len() == 1
         {
-            return Ok(self.tm.mk_term(Kind::CVC5_KIND_NEG, &cargs));
+            return Ok(self.tm.mk_term(Kind::Neg, &cargs));
         }
         if let Some(kind) = kind.as_ref().and_then(ident_kind_to_cvc5) {
             return Ok(self.tm.mk_term(kind, &cargs));
@@ -718,23 +717,23 @@ impl Cvc5Env {
             let fs = f.sort();
             if fs.is_dt_constructor() {
                 if let Some(ct) = self.resolve_parametric_ctor(name, rs, arena)? {
-                    Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, ct, cargs))
+                    Ok(self.mk_applied(Kind::ApplyConstructor, ct, cargs))
                 } else {
-                    Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_CONSTRUCTOR, f, cargs))
+                    Ok(self.mk_applied(Kind::ApplyConstructor, f, cargs))
                 }
             } else if fs.is_dt_selector() {
-                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_SELECTOR, f, cargs))
+                Ok(self.mk_applied(Kind::ApplySelector, f, cargs))
             } else if fs.is_dt_tester() {
-                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_TESTER, f, cargs))
+                Ok(self.mk_applied(Kind::ApplyTester, f, cargs))
             } else {
-                Ok(self.mk_applied(Kind::CVC5_KIND_APPLY_UF, f, cargs))
+                Ok(self.mk_applied(Kind::ApplyUf, f, cargs))
             }
         } else {
             Err(format!("unknown function: {name}"))
         }
     }
 
-    fn translate_indexed_app(&self, ik: &IdentifierKind, cargs: Vec<CTerm>) -> Res<CTerm> {
+    fn translate_indexed_app(&self, ik: &IdentifierKind, cargs: Vec<CTerm<'tm>>) -> Res<CTerm<'tm>> {
         use alg::IdentifierKind::*;
         let mk = |kind, indices: &[u32]| {
             let op = self.tm.mk_op(kind, indices);
@@ -745,19 +744,19 @@ impl Cvc5Env {
         };
         match ik {
             Extract(hi, lo) => mk(
-                Kind::CVC5_KIND_BITVECTOR_EXTRACT,
+                Kind::BitvectorExtract,
                 &[to_u32(hi)?, to_u32(lo)?],
             ),
-            Repeat(n) => mk(Kind::CVC5_KIND_BITVECTOR_REPEAT, &[to_u32(n)?]),
-            ZeroExtend(n) => mk(Kind::CVC5_KIND_BITVECTOR_ZERO_EXTEND, &[to_u32(n)?]),
-            SignExtend(n) => mk(Kind::CVC5_KIND_BITVECTOR_SIGN_EXTEND, &[to_u32(n)?]),
-            RotateLeft(n) => mk(Kind::CVC5_KIND_BITVECTOR_ROTATE_LEFT, &[to_u32(n)?]),
-            RotateRight(n) => mk(Kind::CVC5_KIND_BITVECTOR_ROTATE_RIGHT, &[to_u32(n)?]),
+            Repeat(n) => mk(Kind::BitvectorRepeat, &[to_u32(n)?]),
+            ZeroExtend(n) => mk(Kind::BitvectorZeroExtend, &[to_u32(n)?]),
+            SignExtend(n) => mk(Kind::BitvectorSignExtend, &[to_u32(n)?]),
+            RotateLeft(n) => mk(Kind::BitvectorRotateLeft, &[to_u32(n)?]),
+            RotateRight(n) => mk(Kind::BitvectorRotateRight, &[to_u32(n)?]),
             IntToBv(n) | Int2Bv(n) | Nat2Bv(n) => {
-                mk(Kind::CVC5_KIND_INT_TO_BITVECTOR, &[to_u32(n)?])
+                mk(Kind::IntToBitvector, &[to_u32(n)?])
             }
-            RePower(n) => mk(Kind::CVC5_KIND_REGEXP_REPEAT, &[to_u32(n)?]),
-            ReLoop(lo, hi) => mk(Kind::CVC5_KIND_REGEXP_LOOP, &[to_u32(lo)?, to_u32(hi)?]),
+            RePower(n) => mk(Kind::RegexpRepeat, &[to_u32(n)?]),
+            ReLoop(lo, hi) => mk(Kind::RegexpLoop, &[to_u32(lo)?, to_u32(hi)?]),
             Is(cname) => {
                 // Resolve tester via the argument's sort (works for both mono and parametric)
                 if let Some(arg) = cargs.first() {
@@ -766,7 +765,7 @@ impl Cvc5Env {
                         let ctor = dt.constructor(i);
                         if ctor.name() == cname.inner().as_str() {
                             return Ok(self.mk_applied(
-                                Kind::CVC5_KIND_APPLY_TESTER,
+                                Kind::ApplyTester,
                                 ctor.tester_term(),
                                 cargs,
                             ));
@@ -781,10 +780,10 @@ impl Cvc5Env {
 }
 
 // ── Command translation ──────────────────────────────────────
-impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
-    type Output = CommandResult;
+impl<'tm, A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm>, A> for Command {
+    type Output = CommandResult<'tm>;
 
-    fn to_cvc5(&self, es: &mut Cvc5EnvSolver, arena: &mut A) -> Res<CommandResult> {
+    fn to_cvc5(&self, es: &mut Cvc5EnvSolver<'_, 'tm>, arena: &mut A) -> Res<CommandResult<'tm>> {
         use alg::Command as AC;
         let env = &mut *es.env;
         let solver = &mut *es.solver;
@@ -928,7 +927,7 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
             }
             AC::Echo(_) | AC::Exit | AC::GetAssignment => Ok(CommandResult::None),
             AC::GetProof => {
-                let proofs = solver.get_proof(ProofComponent::CVC5_PROOF_COMPONENT_FULL);
+                let proofs = solver.get_proof(ProofComponent::Full);
                 Ok(CommandResult::GetProof(proofs))
             }
         }
@@ -936,13 +935,13 @@ impl<A: HasArenaAlt> ConvertToCvc5<Cvc5EnvSolver<'_>, A> for Command {
 }
 
 // ── Command helper methods ───────────────────────────────────
-impl Cvc5EnvSolver<'_> {
+impl<'tm> Cvc5EnvSolver<'_, 'tm> {
     fn translate_define_fun<A: HasArenaAlt>(
         &mut self,
         fd: &alg::FunctionDef<Str, Sort, Term>,
         recursive: bool,
         arena: &mut A,
-    ) -> Res<CommandResult> {
+    ) -> Res<CommandResult<'tm>> {
         let env = &mut *self.env;
         let out = fd.out_sort.to_cvc5(env, arena)?;
         let vars = env.bind_vars(&fd.vars, arena)?;
@@ -962,7 +961,7 @@ impl Cvc5EnvSolver<'_> {
         &mut self,
         fds: &[alg::FunctionDef<Str, Sort, Term>],
         arena: &mut A,
-    ) -> Res<CommandResult> {
+    ) -> Res<CommandResult<'tm>> {
         let env = &mut *self.env;
         // First pass: declare all function constants so they can reference each other
         let mut funs = Vec::with_capacity(fds.len());
@@ -993,7 +992,7 @@ impl Cvc5EnvSolver<'_> {
             all_vars.push(vars);
             bodies.push(body?);
         }
-        let var_refs: Vec<&[CTerm]> = all_vars.iter().map(|v| v.as_slice()).collect();
+        let var_refs: Vec<&[CTerm<'tm>]> = all_vars.iter().map(|v| v.as_slice()).collect();
         self.solver.define_funs_rec(&funs, &var_refs, &bodies, true);
         Ok(CommandResult::None)
     }
@@ -1002,7 +1001,7 @@ impl Cvc5EnvSolver<'_> {
         &mut self,
         defs: &[alg::DatatypeDef<Str, Sort>],
         arena: &mut A,
-    ) -> Res<CommandResult> {
+    ) -> Res<CommandResult<'tm>> {
         let env = &mut *self.env;
         // Pre-register unresolved sorts so self/mutual references resolve
         for def in defs {
@@ -1028,14 +1027,14 @@ impl Cvc5EnvSolver<'_> {
     }
 
     fn build_dt_decls<A: HasArenaAlt>(
-        env: &mut Cvc5Env,
+        env: &mut Cvc5Env<'tm>,
         defs: &[alg::DatatypeDef<Str, Sort>],
         arena: &mut A,
-    ) -> Res<Vec<cvc5_rs::DatatypeDecl>> {
+    ) -> Res<Vec<cvc5::DatatypeDecl<'tm>>> {
         let mut decls = Vec::with_capacity(defs.len());
         for def in defs {
             let params = &def.dec.params;
-            let cvc5_params: Vec<CSort> = params.iter().map(|p| env.tm.mk_param_sort(p)).collect();
+            let cvc5_params: Vec<CSort<'tm>> = params.iter().map(|p| env.tm.mk_param_sort(p)).collect();
             for (p, cs) in params.iter().zip(&cvc5_params) {
                 env.dt_sorts.insert(p.clone(), cs.clone());
             }
@@ -1062,8 +1061,8 @@ impl Cvc5EnvSolver<'_> {
     }
 
     fn register_dt_functions<A: HasArenaAlt>(
-        env: &mut Cvc5Env,
-        sort: CSort,
+        env: &mut Cvc5Env<'tm>,
+        sort: CSort<'tm>,
         dec: &DatatypeDec,
         arena: &mut A,
     ) {

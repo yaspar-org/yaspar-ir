@@ -59,7 +59,7 @@
 //! | [`untyped`] | Untyped ASTs with location information, and the parser entry point [`UntypedAst`](untyped::UntypedAst) |
 //! | [`traits`] | Core abstraction traits ([`Contains`](traits::Contains), [`Repr`](traits::Repr), [`AllocatableString`](traits::AllocatableString)) |
 //! | [`statics`] | Static constants (sort name strings, regex patterns) |
-//! | [`cvc5`] | Translation to cvc5-rs objects (`Sort`, `Term`, `Command`). Requires the `cvc5` feature. |
+//! | [`cvc5`] | Translation to cvc5 objects (`Sort`, `Term`, `Command`). Requires the `cvc5` feature. |
 
 mod allocator;
 pub mod ast;
