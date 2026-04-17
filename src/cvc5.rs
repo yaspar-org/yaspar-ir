@@ -389,159 +389,6 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
         )
     }
 
-    fn on_annotated(
-        &mut self,
-        current: &Term,
-        t: &Term,
-        anns: &[Attribute],
-        t_rec: WithPattern<'tm>,
-        anns_rec: Vec<Vec<CTerm<'tm>>>,
-    ) -> Res<WithPattern<'tm>> {
-        // do not handle other annotations
-        let mut pats = t_rec.patterns;
-        anns_rec.into_iter().for_each(|ps| pats.extend(ps));
-        Ok(WithPattern {
-            term: t_rec.term,
-            patterns: pats,
-        })
-    }
-    fn on_eq(
-        &mut self,
-        current: &Term,
-        a: &Term,
-        b: &Term,
-        a_rec: WithPattern<'tm>,
-        b_rec: WithPattern<'tm>,
-    ) -> Res<WithPattern<'tm>> {
-        Ok(self
-            .tm
-            .mk_term(Kind::Equal, &[a_rec.into(), b_rec.into()])
-            .into())
-    }
-    fn on_distinct(
-        &mut self,
-        current: &Term,
-        ts: &[Term],
-        ts_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<WithPattern<'tm>> {
-        Ok(self.tm.mk_term(Kind::Distinct, &to_term_vec(ts_rec)).into())
-    }
-    fn on_and(
-        &mut self,
-        current: &Term,
-        ts: &[Term],
-        ts_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<WithPattern<'tm>> {
-        Ok(self.tm.mk_term(Kind::And, &to_term_vec(ts_rec)).into())
-    }
-    fn on_or(
-        &mut self,
-        current: &Term,
-        ts: &[Term],
-        ts_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<WithPattern<'tm>> {
-        Ok(self.tm.mk_term(Kind::Or, &&to_term_vec(ts_rec)).into())
-    }
-    fn on_xor(
-        &mut self,
-        current: &Term,
-        ts: &[Term],
-        ts_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<WithPattern<'tm>> {
-        Ok(self.tm.mk_term(Kind::Xor, &to_term_vec(ts_rec)).into())
-    }
-    fn on_not(
-        &mut self,
-        current: &Term,
-        t: &Term,
-        t_rec: WithPattern<'tm>,
-    ) -> Res<WithPattern<'tm>> {
-        Ok(self.tm.mk_term(Kind::Not, &[t_rec.into()]).into())
-    }
-    fn on_implies(
-        &mut self,
-        current: &Term,
-        ts: &[Term],
-        t: &Term,
-        ts_rec: Vec<WithPattern<'tm>>,
-        t_rec: WithPattern<'tm>,
-    ) -> Res<WithPattern<'tm>> {
-        let mut all = ts_rec;
-        all.push(t_rec);
-        Ok(self.tm.mk_term(Kind::Implies, &to_term_vec(all)).into())
-    }
-    fn on_ite(
-        &mut self,
-        current: &Term,
-        b: &Term,
-        t: &Term,
-        e: &Term,
-        b_rec: WithPattern<'tm>,
-        t_rec: WithPattern<'tm>,
-        e_rec: WithPattern<'tm>,
-    ) -> Res<WithPattern<'tm>> {
-        Ok(self
-            .tm
-            .mk_term(Kind::Ite, &[b_rec.into(), t_rec.into(), e_rec.into()])
-            .into())
-    }
-
-    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Res<Vec<CTerm<'tm>>> {
-        Ok(vec![])
-    }
-    fn on_attribute_constant(
-        &mut self,
-        keyword: &Keyword,
-        constant: &Constant,
-    ) -> Res<Vec<CTerm<'tm>>> {
-        Ok(vec![])
-    }
-    fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Res<Vec<CTerm<'tm>>> {
-        Ok(vec![])
-    }
-    fn on_attribute_named(&mut self, name: &Str) -> Res<Vec<CTerm<'tm>>> {
-        Ok(vec![])
-    }
-    fn on_attribute_pattern(
-        &mut self,
-        patterns: &[Term],
-        patterns_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<Vec<CTerm<'tm>>> {
-        Ok(to_term_vec(patterns_rec))
-    }
-
-    fn setup_quantifier_scope(
-        &mut self,
-        current: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        t: &Term,
-        is_forall: bool,
-    ) -> Res<()> {
-        self.bind_vars(vs)
-    }
-
-    fn on_exists(
-        &mut self,
-        current: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        t: &Term,
-        t_rec: WithPattern<'tm>,
-    ) -> Res<WithPattern<'tm>> {
-        let bound = self.unbind_vars(vs)?;
-        self.translate_quantifier_body(Kind::Exists, bound, t_rec)
-    }
-
-    fn on_forall(
-        &mut self,
-        current: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        t: &Term,
-        t_rec: Self::Out,
-    ) -> Res<WithPattern<'tm>> {
-        let bound = self.unbind_vars(vs)?;
-        self.translate_quantifier_body(Kind::Forall, bound, t_rec)
-    }
-
     fn on_let_binding(
         &mut self,
         current: &Term,
@@ -553,7 +400,6 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
         let idx = vs[binding_idx].1;
         Ok((idx, binding_rec))
     }
-
     fn setup_let_scope(
         &mut self,
         current: &Term,
@@ -566,7 +412,6 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
         }
         Ok(())
     }
-
     fn on_let(
         &mut self,
         current: &Term,
@@ -580,7 +425,35 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
         }
         Ok(body_rec)
     }
-
+    fn setup_quantifier_scope(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        t: &Term,
+        is_forall: bool,
+    ) -> Res<()> {
+        self.bind_vars(vs)
+    }
+    fn on_exists(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        t: &Term,
+        t_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        let bound = self.unbind_vars(vs, |v| &v.1)?;
+        self.translate_quantifier_body(Kind::Exists, bound, t_rec)
+    }
+    fn on_forall(
+        &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        t: &Term,
+        t_rec: Self::Out,
+    ) -> Res<WithPattern<'tm>> {
+        let bound = self.unbind_vars(vs, |v| &v.1)?;
+        self.translate_quantifier_body(Kind::Forall, bound, t_rec)
+    }
     fn setup_match_case_scope(
         &mut self,
         current: &Term,
@@ -643,7 +516,6 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
 
         Ok(())
     }
-
     fn on_match_arm(
         &mut self,
         current: &Term,
@@ -656,9 +528,41 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
     ) -> Res<Self::Arm> {
         let scr_sort = scrutinee_rec.term.sort();
         let dt = scr_sort.datatype();
-        todo!()
+        let mut args = self.unbind_vars(&cases[case_idx].pattern.variables_and_ids(), |v| &v.1)?;
+        let subst = self.sort_subst_map.get(scrutinee).unwrap();
+        match &cases[case_idx].pattern {
+            Pattern::Wildcard(_) => {
+                // we know there is only one variable
+                let pv = args.remove(0);
+                let vlist = self
+                    .tm
+                    .mk_term(Kind::VariableList, std::slice::from_ref(&pv));
+                Ok(self
+                    .tm
+                    .mk_term(Kind::MatchBindCase, &[vlist, pv, arm.into()]))
+            }
+            Pattern::Ctor(name) => {
+                let ctor = dt.constructor_by_name(name);
+                let ctor_term = if dt.is_parametric() {
+                    ctor.instantiated_term(scr_sort.clone())
+                } else {
+                    ctor.term()
+                };
+                let ctor_app = self.tm.mk_term(Kind::ApplyConstructor, &[ctor_term]);
+                Ok(self.tm.mk_term(Kind::MatchCase, &[ctor_app, arm.into()]))
+            }
+            Pattern::Applied { ctor, .. } => {
+                let ctor = dt.constructor_by_name(ctor);
+                let mut pat_children = vec![ctor.term()];
+                pat_children.extend(args.clone());
+                let pattern = self.tm.mk_term(Kind::ApplyConstructor, &pat_children);
+                let vlist = self.tm.mk_term(Kind::VariableList, &args);
+                Ok(self
+                    .tm
+                    .mk_term(Kind::MatchBindCase, &[vlist, pattern, arm.into()]))
+            }
+        }
     }
-
     fn on_match(
         &mut self,
         current: &Term,
@@ -667,7 +571,138 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm> {
         scrutinee_rec: Self::Out,
         cases_rec: Vec<Self::Arm>,
     ) -> Res<WithPattern<'tm>> {
-        todo!()
+        let mut match_children = vec![scrutinee_rec.into()];
+        match_children.extend(cases_rec);
+        Ok(self.tm.mk_term(Kind::Match, &match_children).into())
+    }
+
+    fn on_annotated(
+        &mut self,
+        current: &Term,
+        t: &Term,
+        anns: &[Attribute],
+        t_rec: WithPattern<'tm>,
+        anns_rec: Vec<Vec<CTerm<'tm>>>,
+    ) -> Res<WithPattern<'tm>> {
+        // do not handle other annotations
+        let mut pats = t_rec.patterns;
+        anns_rec.into_iter().for_each(|ps| pats.extend(ps));
+        Ok(WithPattern {
+            term: t_rec.term,
+            patterns: pats,
+        })
+    }
+    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+    fn on_attribute_constant(
+        &mut self,
+        keyword: &Keyword,
+        constant: &Constant,
+    ) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+    fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+    fn on_attribute_named(&mut self, name: &Str) -> Res<Vec<CTerm<'tm>>> {
+        Ok(vec![])
+    }
+
+    fn on_attribute_pattern(
+        &mut self,
+        patterns: &[Term],
+        patterns_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<Vec<CTerm<'tm>>> {
+        Ok(to_term_vec(patterns_rec))
+    }
+
+    fn on_eq(
+        &mut self,
+        current: &Term,
+        a: &Term,
+        b: &Term,
+        a_rec: WithPattern<'tm>,
+        b_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self
+            .tm
+            .mk_term(Kind::Equal, &[a_rec.into(), b_rec.into()])
+            .into())
+    }
+
+    fn on_distinct(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Distinct, &to_term_vec(ts_rec)).into())
+    }
+
+    fn on_and(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::And, &to_term_vec(ts_rec)).into())
+    }
+
+    fn on_or(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Or, &&to_term_vec(ts_rec)).into())
+    }
+
+    fn on_xor(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        ts_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Xor, &to_term_vec(ts_rec)).into())
+    }
+
+    fn on_not(
+        &mut self,
+        current: &Term,
+        t: &Term,
+        t_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self.tm.mk_term(Kind::Not, &[t_rec.into()]).into())
+    }
+
+    fn on_implies(
+        &mut self,
+        current: &Term,
+        ts: &[Term],
+        t: &Term,
+        ts_rec: Vec<WithPattern<'tm>>,
+        t_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        let mut all = ts_rec;
+        all.push(t_rec);
+        Ok(self.tm.mk_term(Kind::Implies, &to_term_vec(all)).into())
+    }
+
+    fn on_ite(
+        &mut self,
+        current: &Term,
+        b: &Term,
+        t: &Term,
+        e: &Term,
+        b_rec: WithPattern<'tm>,
+        t_rec: WithPattern<'tm>,
+        e_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        Ok(self
+            .tm
+            .mk_term(Kind::Ite, &[b_rec.into(), t_rec.into(), e_rec.into()])
+            .into())
     }
 }
 
@@ -718,9 +753,14 @@ impl<'tm> Cvc5Env<'tm> {
     }
 
     /// Build `(kind head args...)`.
-    fn mk_applied(&self, kind: Kind, head: CTerm<'tm>, mut args: Vec<CTerm<'tm>>) -> CTerm<'tm> {
+    fn mk_applied(
+        &self,
+        kind: Kind,
+        head: CTerm<'tm>,
+        mut args: Vec<CTerm<'tm>>,
+    ) -> WithPattern<'tm> {
         args.insert(0, head);
-        self.tm.mk_term(kind, &args)
+        self.tm.mk_term(kind, &args).into()
     }
 
     /// Look up a constructor by name in the datatype behind `sort`, returning its
@@ -796,9 +836,12 @@ impl<'tm> Cvc5Env<'tm> {
     }
 
     /// Remove variable bindings from `locals`.
-    fn unbind_vars(&mut self, vars: &[VarBinding<Str, Sort>]) -> Res<Vec<CTerm<'tm>>> {
+    fn unbind_vars<T, F>(&mut self, vars: &[T], f: F) -> Res<Vec<CTerm<'tm>>>
+    where
+        F: Fn(&T) -> &usize,
+    {
         for v in vars {
-            self.locals.remove(&v.1);
+            self.locals.remove(f(v));
         }
         self.scope_stack
             .pop()
@@ -827,98 +870,6 @@ impl<'tm> Cvc5Env<'tm> {
         Ok(self.tm.mk_term(kind, &[bvl, cbody]).into())
     }
 
-    fn translate_matching(
-        &mut self,
-        cscrutinee: &CTerm<'tm>,
-        arms: &[alg::PatternArm<Str, Term>],
-    ) -> Res<CTerm<'tm>> {
-        let scr_sort = cscrutinee.sort();
-        let dt = scr_sort.datatype();
-        // For parametric datatypes, selector codomain sorts are uninstantiated (e.g. X).
-        // We need to substitute the sort parameters with the actual instantiated parameters.
-        let subst: Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)> = if dt.is_parametric() {
-            let params = dt.parameters();
-            let inst_params = scr_sort.instantiated_parameters();
-            Some((params, inst_params))
-        } else {
-            None
-        };
-
-        let mut cases = Vec::with_capacity(arms.len());
-        for arm in arms {
-            let case = match &arm.pattern {
-                alg::Pattern::Ctor(name) => {
-                    let ctor = dt.constructor_by_name(name);
-                    let ctor_term = if dt.is_parametric() {
-                        ctor.instantiated_term(scr_sort.clone())
-                    } else {
-                        ctor.term()
-                    };
-                    let ctor_app = self.tm.mk_term(Kind::ApplyConstructor, &[ctor_term]);
-                    let cbody = arm.body.to_cvc5(self, arena)?;
-                    self.tm.mk_term(Kind::MatchCase, &[ctor_app, cbody])
-                }
-                alg::Pattern::Applied {
-                    ctor: name,
-                    arguments,
-                } => {
-                    // Use the scrutinee's (instantiated) datatype for pattern constructors
-                    // and selector sorts.
-                    let ctor = dt.constructor_by_name(name);
-                    let mut vars = Vec::with_capacity(arguments.len());
-                    let mut pattern_args = Vec::new();
-                    for (i, arg) in arguments.iter().enumerate() {
-                        let mut sel_sort = ctor.selector(i).codomain_sort();
-                        if let Some((ref params, ref inst)) = subst {
-                            sel_sort = sel_sort.substitute_sorts(params, inst);
-                        }
-                        let pv = match arg {
-                            Some((_, id)) => {
-                                let bv = self.tm.mk_anonymous_var(sel_sort);
-                                self.locals.insert(*id, bv.clone());
-                                bv
-                            }
-                            None => self.tm.mk_anonymous_var(sel_sort),
-                        };
-                        vars.push(pv.clone());
-                        pattern_args.push(pv);
-                    }
-                    let mut pat_children = vec![ctor.term()];
-                    pat_children.extend(pattern_args);
-                    let pattern = self.tm.mk_term(Kind::ApplyConstructor, &pat_children);
-                    let vlist = self.tm.mk_term(Kind::VariableList, &vars);
-                    let cbody = arm.body.to_cvc5(self, &mut ());
-                    for (_, id) in arguments.iter().flatten() {
-                        self.locals.remove(id);
-                    }
-                    let cbody = cbody?;
-                    self.tm
-                        .mk_term(Kind::MatchBindCase, &[vlist, pattern, cbody])
-                }
-                alg::Pattern::Wildcard(binding) => {
-                    let pv = self.tm.mk_anonymous_var(scr_sort.clone());
-                    if let Some((_, id)) = binding {
-                        self.locals.insert(*id, pv.clone());
-                    }
-                    let vlist = self
-                        .tm
-                        .mk_term(Kind::VariableList, std::slice::from_ref(&pv));
-                    let cbody = arm.body.to_cvc5(self, arena);
-                    if let Some((_, id)) = binding {
-                        self.locals.remove(id);
-                    }
-                    let cbody = cbody?;
-                    self.tm.mk_term(Kind::MatchBindCase, &[vlist, pv, cbody])
-                }
-            };
-            cases.push(case);
-        }
-
-        let mut match_children = vec![cscrutinee];
-        match_children.extend(cases);
-        Ok(self.tm.mk_term(Kind::Match, &match_children))
-    }
-
     fn translate_app(
         &mut self,
         qid: &QualifiedIdentifier,
@@ -931,10 +882,10 @@ impl<'tm> Cvc5Env<'tm> {
         if let Some(IdentifierKind::Sub) = kind
             && cargs.len() == 1
         {
-            return Ok(self.tm.mk_term(Kind::Neg, &cargs));
+            return Ok(self.tm.mk_term(Kind::Neg, &cargs).into());
         }
         if let Some(kind) = kind.as_ref().and_then(ident_kind_to_cvc5) {
-            return Ok(self.tm.mk_term(kind, &cargs));
+            return Ok(self.tm.mk_term(kind, &cargs).into());
         }
         if let Some(ref ik) = kind {
             return self.translate_indexed_app(ik, cargs);
@@ -964,11 +915,11 @@ impl<'tm> Cvc5Env<'tm> {
         &self,
         ik: &IdentifierKind,
         cargs: Vec<CTerm<'tm>>,
-    ) -> Res<CTerm<'tm>> {
+    ) -> Res<WithPattern<'tm>> {
         use alg::IdentifierKind::*;
         let mk = |kind, indices: &[u32]| {
             let op = self.tm.mk_op(kind, indices);
-            Ok(self.tm.mk_term_from_op(op, &cargs))
+            Ok(self.tm.mk_term_from_op(op, &cargs).into())
         };
         let to_u32 = |n: &dashu::integer::UBig| -> Res<u32> {
             n.try_into().map_err(|_| format!("index too large: {n}"))
