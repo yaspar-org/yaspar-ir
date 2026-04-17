@@ -102,7 +102,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
             fn on_match(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: Self::Out, cases_rec: Vec<Self::Arm>) -> Result<Term, Bottom>;
             fn on_annotated(&mut self, current: &Term, t: &Term, anns: &[Attribute], t_rec: Term, anns_rec: Vec<Attribute>) -> Result<Term, Bottom>;
             fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Attribute, Bottom>;
-            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &crate::ast::alg::Constant<Str>) -> Result<Attribute, Bottom>;
+            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &Constant) -> Result<Attribute, Bottom>;
             fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;

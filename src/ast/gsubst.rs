@@ -8,15 +8,20 @@
 //! `.gsubst(names, context)`, which expands the specified global definitions on the fly.
 
 use crate::allocator::{SortAllocator, TermAllocator};
-use crate::ast::alg::{PatternArm, VarBinding};
+use crate::ast::alg::VarBinding;
 use crate::ast::subst::{Substitute, Substitution};
 use crate::ast::{
-    ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, HasArena, Monomorphization, Sort,
-    Str, Term,
+    ATerm, Arena, Attribute, Constant, Context, FetchSort, FunctionDef, HasArena, Local,
+    Monomorphization, PatternArm, QualifiedIdentifier, Sort, Str, Term, TypedBuilder,
 };
+use crate::ast::{TermRecursor, TypedTermRecursor};
+use crate::raw::alg::rec::Bottom;
+use crate::raw::instance;
 use crate::raw::tc::unif::{empty_subst, instantiate_subst};
 use crate::traits::{AllocatableString, Repr};
+use delegate::delegate;
 use std::collections::{HashMap, HashSet};
+use yaspar::ast::Keyword;
 
 /// Expand global names with their definitions in `Self`.
 ///
@@ -279,19 +284,13 @@ impl GlobalSubstImpl<Context> for Term {
     }
 }
 
-use crate::ast::{TermRecursor, TypedTermRecursor};
-use crate::raw::alg::rec::Bottom;
-use crate::raw::alg::{Constant, Local, QualifiedIdentifier};
-use crate::raw::instance;
-use yaspar::ast::Keyword;
-
 /// Stack-safe global definition expansion using [`TermRecursor`].
 ///
 /// Expands global definitions (from `define-fun`, `define-const`, etc.) by inlining their
 /// bodies. For parametric definitions, applies monomorphization. Uses a cache to avoid
 /// re-expanding the same definition multiple times.
 pub struct GlobalSubstituter<'a> {
-    ctx: &'a mut Context,
+    inner: TypedBuilder<'a, Context>,
     global_names: &'a HashSet<Str>,
     cache: HashMap<Str, FunctionDef>,
 }
@@ -299,7 +298,7 @@ pub struct GlobalSubstituter<'a> {
 impl<'a> GlobalSubstituter<'a> {
     pub fn new(ctx: &'a mut Context, global_names: &'a HashSet<Str>) -> Self {
         Self {
-            ctx,
+            inner: TypedBuilder::new(ctx),
             global_names,
             cache: HashMap::new(),
         }
@@ -308,8 +307,30 @@ impl<'a> GlobalSubstituter<'a> {
     /// Populate the cache for a symbol if not already present. Returns true if the definition
     /// exists and was cached (or was already cached).
     fn populate_cache(&mut self, sym: &Str) -> bool {
-        populate_cache(sym, self.global_names, self.ctx, &mut self.cache)
-    }
+        if !self.cache.contains_key(sym) {
+            if let Some(def) = self.inner.arena.get_definition(sym).cloned() {
+                let ret = self.recurse_on_term_no_err()
+
+                let ret = def
+                    .def
+                    .body
+                    .gsubst_impl(global_names, &def.rec_deps, env, cache);
+                // the only possible case is a parametric function
+
+                cache.insert(
+                    def.def.name.clone(),
+                    FunctionDef {
+                        body: ret.clone(),
+                        ..def.def
+                    },
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        }    }
 
     fn arena(&mut self) -> &mut Arena {
         &mut self.ctx.arena
@@ -318,26 +339,47 @@ impl<'a> GlobalSubstituter<'a> {
 
 impl TermRecursor<Str, Sort, Term> for GlobalSubstituter<'_> {
     type Out = Term;
-    type Attr = instance::Attribute;
-    type Binding = Term;
+    type Attr = Attribute;
+    type Binding = VarBinding<Str, Term>;
     type Pattern = ();
-    type Arm = instance::PatternArm;
+    type Arm = PatternArm;
     type Err = Bottom;
 
-    fn on_constant(
-        &mut self,
-        current: &Term,
-        _: &Constant<Str>,
-        _: &Option<Sort>,
-    ) -> Result<Term, Bottom> {
-        Ok(current.clone())
+    delegate! {
+        to self.inner {
+            fn on_constant(&mut self, current: &Term, constant: &Constant, sort: &Option<Sort>) -> Result<Term, Bottom>;
+            fn on_local(&mut self, current: &Term, local: &Local) -> Result<Term, Bottom>;
+            fn on_let_binding(&mut self, current: &Term, vs: &[VarBinding<Str, Term>], body: &Term, binding_idx: usize, binding_rec: Term) -> Result<Self::Binding, Bottom>;
+            fn setup_let_scope(&mut self, current: &Term, vs: &[VarBinding<Str, Term>], body: &Term, vs_rec: &[Self::Binding]) -> Result<(), Bottom>;
+            fn on_let(&mut self, current: &Term, vs: &[VarBinding<Str, Term>], body: &Term, vs_rec: Vec<Self::Binding>, body_rec: Term) -> Result<Term, Bottom>;
+            fn setup_quantifier_scope(&mut self, current: &Term, vs: &[VarBinding<Str, Sort>], t: &Term, is_forall: bool) -> Result<(), Bottom>;
+            fn on_exists(&mut self, current: &Term, vs: &[VarBinding<Str, Sort>], t: &Term, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_forall(&mut self, current: &Term, vs: &[VarBinding<Str, Sort>], t: &Term, t_rec: Term) -> Result<Term, Bottom>;
+            fn setup_match_case_scope(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: &Self::Out, case_idx: usize) -> Result<(), Bottom>;
+            fn on_match_arm(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], case_idx: usize, current_pattern: (), arm: Term) -> Result<PatternArm, Bottom>;
+            fn on_match(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: Self::Out, cases_rec: Vec<Self::Arm>) -> Result<Term, Bottom>;
+            fn on_annotated(&mut self, current: &Term, t: &Term, anns: &[Attribute], t_rec: Term, anns_rec: Vec<Attribute>) -> Result<Term, Bottom>;
+            fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Attribute, Bottom>;
+            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &Constant) -> Result<Attribute, Bottom>;
+            fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
+            fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
+            fn on_distinct(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_and(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_or(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_xor(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_not(&mut self, current: &Term, t: &Term, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_implies(&mut self, current: &Term, ts: &[Term], t: &Term, ts_rec: Vec<Term>, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_ite(&mut self, current: &Term, b: &Term, t: &Term, e: &Term, b_rec: Term, t_rec: Term, e_rec: Term) -> Result<Term, Bottom>;
+        }
     }
 
     /// Expand a global symbol if it's in the expansion set and has a nullary definition.
     fn on_global(
         &mut self,
         current: &Term,
-        qid: &QualifiedIdentifier<Str, Sort>,
+        qid: &QualifiedIdentifier,
         sort: &Option<Sort>,
     ) -> Result<Term, Bottom> {
         let sort = sort.as_ref().expect("type invariant violation!").clone();
@@ -359,15 +401,11 @@ impl TermRecursor<Str, Sort, Term> for GlobalSubstituter<'_> {
         }
     }
 
-    fn on_local(&mut self, current: &Term, _: &Local<Str, Sort>) -> Result<Term, Bottom> {
-        Ok(current.clone())
-    }
-
     /// Expand a function application if the head symbol is in the expansion set.
     fn on_app(
         &mut self,
         _current: &Term,
-        f: &QualifiedIdentifier<Str, Sort>,
+        f: &QualifiedIdentifier,
         _: &[Term],
         sort: &Option<Sort>,
         recs: Vec<Term>,
@@ -406,209 +444,6 @@ impl TermRecursor<Str, Sort, Term> for GlobalSubstituter<'_> {
         } else {
             Ok(self.arena().app(f.clone(), recs, Some(sort)))
         }
-    }
-
-    fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {
-        Ok(self.arena().eq(a, b))
-    }
-
-    fn on_distinct(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena().distinct(recs))
-    }
-
-    fn on_and(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena().and(recs))
-    }
-
-    fn on_or(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena().or(recs))
-    }
-
-    fn on_xor(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena().xor(recs))
-    }
-
-    fn on_not(&mut self, _: &Term, _: &Term, r: Term) -> Result<Term, Bottom> {
-        Ok(self.arena().not(r))
-    }
-
-    fn on_implies(
-        &mut self,
-        _: &Term,
-        _: &[Term],
-        _: &Term,
-        ps: Vec<Term>,
-        c: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena().implies(ps, c))
-    }
-
-    fn on_ite(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        b: Term,
-        t: Term,
-        e: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena().ite(b, t, e))
-    }
-
-    // --- Let ---
-
-    fn on_let_binding(
-        &mut self,
-        _: &Term,
-        _: &[VarBinding<Str, Term>],
-        _: &Term,
-        _: usize,
-        rec: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(rec)
-    }
-
-    fn setup_let_scope(
-        &mut self,
-        _: &Term,
-        _: &[VarBinding<Str, Term>],
-        _: &Term,
-        _: &[Term],
-    ) -> Result<(), Bottom> {
-        Ok(())
-    }
-
-    fn on_let(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Term>],
-        _: &Term,
-        vs_rec: Vec<Term>,
-        body: Term,
-    ) -> Result<Term, Bottom> {
-        let nbindings = vs
-            .iter()
-            .zip(vs_rec)
-            .map(|(v, r)| VarBinding(v.0.clone(), v.1, r))
-            .collect();
-        Ok(self.arena().let_term(nbindings, body))
-    }
-
-    // --- Quantifiers ---
-
-    fn setup_quantifier_scope(
-        &mut self,
-        _: &Term,
-        _: &[VarBinding<Str, Sort>],
-        _: &Term,
-        _: bool,
-    ) -> Result<(), Bottom> {
-        Ok(())
-    }
-
-    fn on_forall(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena().forall(vs.to_vec(), body))
-    }
-
-    fn on_exists(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena().exists(vs.to_vec(), body))
-    }
-
-    // --- Match ---
-
-    fn setup_match_case_scope(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[instance::PatternArm],
-        _: &Term,
-        _: usize,
-    ) -> Result<(), Bottom> {
-        Ok(())
-    }
-
-    fn on_match_arm(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        cases: &[instance::PatternArm],
-        idx: usize,
-        _: (),
-        body: Term,
-    ) -> Result<instance::PatternArm, Bottom> {
-        Ok(instance::PatternArm {
-            pattern: cases[idx].pattern.clone(),
-            body,
-        })
-    }
-
-    fn on_match(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[instance::PatternArm],
-        scrutinee: Term,
-        arms: Vec<instance::PatternArm>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena().matching(scrutinee, arms))
-    }
-
-    // --- Annotated ---
-
-    fn on_annotated(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[instance::Attribute],
-        r: Term,
-        anns: Vec<instance::Attribute>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena().annotated(r, anns))
-    }
-
-    fn on_attribute_keyword(&mut self, kw: &Keyword) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Keyword(kw.clone()))
-    }
-
-    fn on_attribute_constant(
-        &mut self,
-        kw: &Keyword,
-        c: &Constant<Str>,
-    ) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Constant(kw.clone(), c.clone()))
-    }
-
-    fn on_attribute_symbol(
-        &mut self,
-        kw: &Keyword,
-        s: &Str,
-    ) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Symbol(kw.clone(), s.clone()))
-    }
-
-    fn on_attribute_named(&mut self, name: &Str) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Named(name.clone()))
-    }
-
-    fn on_attribute_pattern(
-        &mut self,
-        _: &[Term],
-        recs: Vec<Term>,
-    ) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Pattern(recs))
     }
 }
 
