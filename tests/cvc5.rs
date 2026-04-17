@@ -21,7 +21,7 @@ fn run_script(script: &str) {
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        cmd.to_cvc5(&mut es, &mut ctx).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
 }
 
@@ -39,7 +39,7 @@ fn check_sat(script: &str) -> bool {
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        cmd.to_cvc5(&mut es, &mut ctx).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
     es.solver.check_sat().is_sat()
 }
@@ -279,7 +279,7 @@ fn translate_term_standalone() {
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
-        cmd.to_cvc5(&mut es, &mut ctx).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
     // All commands translated without error
 }
@@ -295,7 +295,7 @@ fn error_unknown_global() {
     let x = ctx.simple_sorted_symbol("x", int_sort);
     let tm = TermManager::new();
     let mut env = Cvc5Env::create(&tm);
-    assert!(x.to_cvc5(&mut env, &mut ctx).is_err());
+    assert!(x.to_cvc5(&mut env).is_err());
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn error_unsupported_sort() {
     let custom = ctx.simple_sort("MyCustomSort");
     let tm = TermManager::new();
     let mut env = Cvc5Env::create(&tm);
-    assert!(custom.to_cvc5(&mut env, &mut ctx).is_err());
+    assert!(custom.to_cvc5(&mut env).is_err());
 }
 
 // ── Locals cleanup tests ─────────────────────────────────────
@@ -332,7 +332,7 @@ fn locals_cleaned_up_after_quantifier_error() {
 
     // Translate set-logic only — skip declare-const y
     cmds[0]
-        .to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver), &mut ctx)
+        .to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver))
         .unwrap();
 
     // Extract the forall term from the assert command and translate it directly
@@ -343,13 +343,13 @@ fn locals_cleaned_up_after_quantifier_error() {
     };
 
     // Should fail because y is not registered
-    assert!(forall.to_cvc5(&mut env, &mut ctx).is_err());
+    assert!(forall.to_cvc5(&mut env).is_err());
 
     // Now register y and retry — env should be clean (no stale locals from x)
     cmds[1]
-        .to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver), &mut ctx)
+        .to_cvc5(&mut Cvc5EnvSolver::new(&mut env, &mut solver))
         .unwrap();
-    assert!(forall.to_cvc5(&mut env, &mut ctx).is_ok());
+    assert!(forall.to_cvc5(&mut env).is_ok());
 }
 
 /// After a failed translation inside a let body, the env should recover.
@@ -370,15 +370,15 @@ fn locals_cleaned_up_after_let_error() {
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    cmds[0].to_cvc5(&mut es, &mut ctx).unwrap();
+    cmds[0].to_cvc5(&mut es).unwrap();
     // Skip declare-const y
 
     // assert with let should fail because y is not registered
-    assert!(cmds[2].to_cvc5(&mut es, &mut ctx).is_err());
+    assert!(cmds[2].to_cvc5(&mut es).is_err());
 
     // Register y and retry
-    cmds[1].to_cvc5(&mut es, &mut ctx).unwrap();
-    assert!(cmds[2].to_cvc5(&mut es, &mut ctx).is_ok());
+    cmds[1].to_cvc5(&mut es).unwrap();
+    assert!(cmds[2].to_cvc5(&mut es).is_ok());
 }
 
 /// After a failed define-fun translation, the env should recover.
@@ -399,15 +399,15 @@ fn locals_cleaned_up_after_define_fun_error() {
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    cmds[0].to_cvc5(&mut es, &mut ctx).unwrap();
+    cmds[0].to_cvc5(&mut es).unwrap();
     // Skip declare-const y
 
     // define-fun should fail because y is not registered
-    assert!(cmds[2].to_cvc5(&mut es, &mut ctx).is_err());
+    assert!(cmds[2].to_cvc5(&mut es).is_err());
 
     // Register y and retry
-    cmds[1].to_cvc5(&mut es, &mut ctx).unwrap();
-    assert!(cmds[2].to_cvc5(&mut es, &mut ctx).is_ok());
+    cmds[1].to_cvc5(&mut es).unwrap();
+    assert!(cmds[2].to_cvc5(&mut es).is_ok());
 }
 
 /// :named annotations in assert should register the term as a global,
@@ -432,7 +432,7 @@ fn named_annotation_registers_global() {
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     // All commands should succeed — "pos" from :named must be usable in the second assert
     for cmd in &cmds {
-        cmd.to_cvc5(&mut es, &mut ctx).unwrap();
+        cmd.to_cvc5(&mut es).unwrap();
     }
 }
 
@@ -638,7 +638,7 @@ fn with_script_results(script: &str, options: &[(&str, &str)], f: impl FnOnce(&[
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     let results: Vec<_> = cmds
         .iter()
-        .map(|cmd| cmd.to_cvc5(&mut es, &mut ctx).unwrap())
+        .map(|cmd| cmd.to_cvc5(&mut es).unwrap())
         .collect();
     f(&results);
 }
