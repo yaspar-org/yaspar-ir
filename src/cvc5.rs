@@ -59,9 +59,13 @@ use std::collections::HashMap;
 use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
 
+/// A cvc5 sort, tied to the lifetime of the [`TermManager`] that created it.
 pub type CSort<'tm> = cvc5::Sort<'tm>;
+/// A cvc5 term, tied to the lifetime of the [`TermManager`] that created it.
 pub type CTerm<'tm> = cvc5::Term<'tm>;
+/// A cvc5 satisfiability result, tied to the lifetime of the [`TermManager`].
 pub type CResult<'tm> = cvc5::Result<'tm>;
+/// A cvc5 proof object, tied to the lifetime of the [`TermManager`].
 pub type CProof<'tm> = cvc5::Proof<'tm>;
 type Res<T> = std::result::Result<T, String>;
 
@@ -86,14 +90,31 @@ pub enum CommandResult<'tm> {
 }
 
 /// Convert a yaspar-ir typed AST node to its cvc5 counterpart.
+///
+/// This trait is implemented for [`Sort`], [`Term`], and [`Command`], each with a
+/// different environment type:
+///
+/// | AST node    | Environment          | Output             |
+/// |-------------|----------------------|--------------------|
+/// | [`Sort`]    | [`Cvc5Env`]          | [`CSort`]          |
+/// | [`Term`]    | [`Cvc5Env`]          | [`CTerm`]          |
+/// | [`Command`] | [`Cvc5EnvSolver`]    | [`CommandResult`]  |
+///
+/// Translation may fail if the AST references symbols or sorts not yet registered
+/// in the environment (e.g. an undeclared global variable).
 pub trait ConvertToCvc5<Env> {
+    /// The cvc5 type produced by the translation.
     type Output;
+    /// Translate `self` into a cvc5 object, using `env` for symbol/sort lookup and caching.
     fn to_cvc5(&self, env: &mut Env) -> Res<Self::Output>;
 }
 
+/// A translated cvc5 term together with any `:pattern` annotations collected during traversal.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct WithPattern<'tm> {
+    /// The translated cvc5 term.
     term: CTerm<'tm>,
+    /// Pattern terms collected from `:pattern` annotations (empty when none are present).
     patterns: Vec<CTerm<'tm>>,
 }
 
@@ -112,21 +133,43 @@ impl<'tm> From<CTerm<'tm>> for WithPattern<'tm> {
     }
 }
 
+/// Cached sort-parameter substitution for parametric datatypes.
+///
+/// When translating `match` expressions over parametric datatypes, selector codomain sorts
+/// are uninstantiated (e.g. the sort parameter `X`). This substitution maps sort parameters
+/// to their concrete instantiations so that bound variables receive the correct sorts.
+/// `None` for monomorphic datatypes.
 type SortSubst<'tm> = Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>;
 
-/// Environment for translating yaspar-ir ASTs to cvc5 objects.
+/// Inner environment for translating yaspar-ir ASTs to cvc5 objects.
+///
+/// This struct holds the [`TermManager`] reference and all translation state: sort/term
+/// caches, global and local symbol tables, and datatype bookkeeping. It implements
+/// [`TermRecursor`] for stack-safe, memoized term translation.
+///
+/// Users should not construct this directly — use [`Cvc5Env::create`] instead, which
+/// wraps this in a [`Memoize`] layer for automatic term-level caching.
 pub struct Cvc5EnvInner<'tm> {
+    /// The cvc5 term manager that owns all created sorts and terms.
     tm: &'tm TermManager,
+    /// Named sorts registered by `declare-sort` or datatype declarations.
     sort: HashMap<String, CSort<'tm>>,
+    /// Global symbols (constants, functions, constructors, selectors, testers).
     globals: HashMap<String, CTerm<'tm>>,
+    /// Local (bound) variables, keyed by their uniquely assigned id.
     locals: HashMap<usize, WithPattern<'tm>>,
+    /// Cache from yaspar-ir [`Sort`] to translated [`CSort`], avoiding redundant work.
     sort_cache: HashMap<Sort, CSort<'tm>>,
+    /// datatype sorts mapping from names to their corresponding potentially polymorphic representations.
     dt_sorts: HashMap<String, CSort<'tm>>,
+    /// Stack of bound-variable lists for scope management in quantifiers and match arms.
     scope_stack: Vec<Vec<CTerm<'tm>>>,
+    /// Cached sort-parameter substitutions for parametric datatype match translation.
     sort_subst_map: HashMap<Term, SortSubst<'tm>>,
 }
 
 impl<'tm> Cvc5EnvInner<'tm> {
+    /// Create a new inner environment backed by the given [`TermManager`].
     pub fn new(tm: &'tm TermManager) -> Self {
         Self {
             tm,
@@ -140,21 +183,58 @@ impl<'tm> Cvc5EnvInner<'tm> {
         }
     }
 }
+/// The main translation environment for sorts and terms.
+///
+/// This is a [`Memoize`]-wrapped [`Cvc5EnvInner`] that automatically caches translated
+/// terms by their hashconsed identity. Because yaspar-ir terms are hashconsed,
+/// structurally identical sub-terms share the same pointer — the memoization layer
+/// ensures each unique sub-term is translated at most once.
+///
+/// # Construction
+///
+/// ```rust
+/// use cvc5::TermManager;
+/// use yaspar_ir::cvc5::Cvc5Env;
+///
+/// let tm = TermManager::new();
+/// let mut env = Cvc5Env::create(&tm);
+/// ```
 pub type Cvc5Env<'tm> = Memoize<Cvc5EnvInner<'tm>, HashMap<Term, WithPattern<'tm>>>;
 
 impl<'tm> Cvc5Env<'tm> {
+    /// Create a new translation environment backed by the given [`TermManager`].
     pub fn create(tm: &'tm TermManager) -> Self {
         Self::new(Cvc5EnvInner::new(tm))
     }
 }
 
-/// Environment combining a [`Cvc5EnvInner`] with a [`Solver`] for translating commands.
+/// Environment combining a [`Cvc5Env`] with a [`Solver`] for translating commands.
+///
+/// Commands like `assert`, `check-sat`, `define-fun`, and `declare-datatypes` need
+/// access to both the translation environment (for sort/term translation) and the
+/// solver (for issuing solver calls). This struct bundles the two together.
+///
+/// # Example
+///
+/// ```rust
+/// use cvc5::{Solver, TermManager};
+/// use yaspar_ir::cvc5::{Cvc5Env, Cvc5EnvSolver};
+///
+/// let tm = TermManager::new();
+/// let mut solver = Solver::new(&tm);
+/// let mut env = Cvc5Env::create(&tm);
+/// let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+/// // now use es.to_cvc5() on Command values
+/// ```
 pub struct Cvc5EnvSolver<'a, 'tm> {
+    /// The translation environment for sorts and terms.
     pub env: &'a mut Cvc5Env<'tm>,
+    /// The cvc5 solver instance.
     pub solver: &'a mut Solver<'tm>,
 }
 
 impl<'a, 'tm> Cvc5EnvSolver<'a, 'tm> {
+    /// Create a new command-translation environment from a [`Cvc5Env`] and a [`Solver`].
     pub fn new(env: &'a mut Cvc5Env<'tm>, solver: &'a mut Solver<'tm>) -> Self {
         Self { env, solver }
     }
@@ -187,7 +267,6 @@ fn translate_sort_inner<'tm>(sort: &Sort, env: &mut Cvc5EnvInner<'tm>) -> Res<CS
     if !s.0.indices.is_empty() {
         return Err(format!("unknown sort with indices: {s}"));
     }
-    // Check temporary datatype sorts (params and unresolved self-references)
     if let Some(cs) = env.dt_sorts.get(name).cloned() {
         if s.1.is_empty() {
             return Ok(cs);
