@@ -170,6 +170,15 @@ pub trait TermRecursor<Str, So, T> {
         vs_rec: &[Self::Binding],
     ) -> Result<(), Self::Err>;
 
+    fn cleanup_let_scope_on_error(
+        &mut self,
+        _current: &T,
+        _vs: &[VarBinding<Str, T>],
+        _body: &T,
+        _vs_rec: Vec<Self::Binding>,
+    ) {
+    }
+
     /// Called after all let-binding RHS and the body have been recursed.
     fn on_let(
         &mut self,
@@ -188,6 +197,16 @@ pub trait TermRecursor<Str, So, T> {
         t: &T,
         is_forall: bool,
     ) -> Result<(), Self::Err>;
+
+    fn cleanup_quantifier_scope_on_error(
+        &mut self,
+        _current: &T,
+        _vs: &[VarBinding<Str, So>],
+        _t: &T,
+        _is_forall: bool,
+    ) {
+    }
+
     /// Called for `exists` after the body has been recursed.
     fn on_exists(
         &mut self,
@@ -214,6 +233,17 @@ pub trait TermRecursor<Str, So, T> {
         scrutinee_rec: &Self::Out,
         case_idx: usize,
     ) -> Result<Self::Pattern, Self::Err>;
+
+    fn cleanup_match_case_scope_on_error(
+        &mut self,
+        _current: &T,
+        _scrutinee: &T,
+        _cases: &[PatternArm<Str, T>],
+        _scrutinee_rec: Self::Out,
+        _case_idx: usize,
+    ) {
+    }
+
     /// Called after each match arm body has been recursed.
     fn on_match_arm(
         &mut self,
@@ -1094,21 +1124,82 @@ where
     }
 }
 
+pub(crate) fn rewind_stack_for_error<R, Str, So, T>(
+    recursor: &mut R,
+    stack: &mut RStack<'_, R, Str, So, T>,
+) where
+    R: TermRecursor<Str, So, T>,
+{
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::LetBody {
+                current,
+                vs,
+                body,
+                vs_rec,
+            } => {
+                recursor.cleanup_let_scope_on_error(current, vs, body, vs_rec);
+            }
+            Frame::Quantifier {
+                current,
+                vs,
+                body,
+                is_forall,
+            } => {
+                recursor.cleanup_quantifier_scope_on_error(current, vs, body, is_forall);
+            }
+            Frame::MatchCases {
+                current,
+                scrutinee,
+                cases,
+                scrutinee_rec,
+                case_rec,
+                current_pattern: _,
+            } => {
+                recursor.cleanup_match_case_scope_on_error(
+                    current,
+                    scrutinee,
+                    scrutinee_rec,
+                    cases,
+                    case_rec.len(),
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn term_recursion_inner<R, Str, So, T>(
+    recursor: &mut R,
+    term: &T,
+    stack: &mut RStack<'_, R, Str, So, T>,
+) -> Result<R::Out, R::Err>
+where
+    R: TermRecursor<Str, So, T>,
+    T: Contains<T: Repr<T = Term<Str, So, T>>>,
+{
+    let mut result = expand_and_resolve(recursor, stack, term)?;
+    loop {
+        match push_result(recursor, stack, result)? {
+            Either::Left(final_result) => return Ok(final_result),
+            Either::Right(mut frame) => {
+                let child = next_child(recursor, &mut frame)?;
+                stack.push(frame);
+                result = expand_and_resolve(recursor, stack, child)?;
+            }
+        }
+    }
+}
+
 pub(crate) fn term_recursion<R, Str, So, T>(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
 where
     R: TermRecursor<Str, So, T>,
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     let mut stack: RStack<'_, R, Str, So, T> = Vec::new();
-    let mut result = expand_and_resolve(recursor, &mut stack, term)?;
-    loop {
-        match push_result(recursor, &mut stack, result)? {
-            Either::Left(final_result) => return Ok(final_result),
-            Either::Right(mut frame) => {
-                let child = next_child(recursor, &mut frame)?;
-                stack.push(frame);
-                result = expand_and_resolve(recursor, &mut stack, child)?;
-            }
-        }
+    let result = term_recursion_inner(recursor, term, &mut stack);
+    if result.is_err() {
+        rewind_stack_for_error(recursor, &mut stack);
     }
+    result
 }
