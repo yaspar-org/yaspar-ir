@@ -115,7 +115,9 @@ pub struct WithPattern<'tm> {
     /// The translated cvc5 term.
     term: CTerm<'tm>,
     /// Pattern terms collected from `:pattern` annotations (empty when none are present).
-    patterns: Vec<CTerm<'tm>>,
+    ///
+    /// Multiple `:pattern`s are maintained.
+    patterns: Vec<Vec<CTerm<'tm>>>,
 }
 
 impl<'tm> From<WithPattern<'tm>> for CTerm<'tm> {
@@ -428,7 +430,7 @@ fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
 
 impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     type Out = WithPattern<'tm>;
-    type Attr = Vec<CTerm<'tm>>;
+    type Attr = Vec<Vec<CTerm<'tm>>>;
     type Binding = (usize, WithPattern<'tm>);
     type Pattern = ();
     type Arm = CTerm<'tm>;
@@ -668,7 +670,7 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
         _t: &Term,
         _anns: &[Attribute],
         t_rec: WithPattern<'tm>,
-        anns_rec: Vec<Vec<CTerm<'tm>>>,
+        anns_rec: Vec<Vec<Vec<CTerm<'tm>>>>,
     ) -> Res<WithPattern<'tm>> {
         // do not handle other annotations
         let mut pats = t_rec.patterns;
@@ -678,20 +680,24 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
             patterns: pats,
         })
     }
-    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<Vec<CTerm<'tm>>> {
+    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<Vec<Vec<CTerm<'tm>>>> {
         Ok(vec![])
     }
     fn on_attribute_constant(
         &mut self,
         _keyword: &Keyword,
         _constant: &Constant,
-    ) -> Res<Vec<CTerm<'tm>>> {
+    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
         Ok(vec![])
     }
-    fn on_attribute_symbol(&mut self, _keyword: &Keyword, _symbol: &Str) -> Res<Vec<CTerm<'tm>>> {
+    fn on_attribute_symbol(
+        &mut self,
+        _keyword: &Keyword,
+        _symbol: &Str,
+    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
         Ok(vec![])
     }
-    fn on_attribute_named(&mut self, _name: &Str) -> Res<Vec<CTerm<'tm>>> {
+    fn on_attribute_named(&mut self, _name: &Str) -> Res<Vec<Vec<CTerm<'tm>>>> {
         Ok(vec![])
     }
 
@@ -699,8 +705,8 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
         &mut self,
         _patterns: &[Term],
         patterns_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<Vec<CTerm<'tm>>> {
-        Ok(to_term_vec(patterns_rec))
+    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
+        Ok(vec![to_term_vec(patterns_rec)])
     }
 
     fn on_eq(
@@ -947,10 +953,18 @@ impl<'tm> Cvc5EnvInner<'tm> {
 
         // Build INST_PATTERN_LIST from :pattern annotations
         if !t_rec.patterns.is_empty() {
-            let pats = self.tm.mk_term(Kind::InstPattern, &t_rec.patterns);
-            let plist = self
-                .tm
-                .mk_term(Kind::InstPatternList, std::slice::from_ref(&pats));
+            let pats = t_rec
+                .patterns
+                .iter()
+                .filter_map(|ts| {
+                    if ts.is_empty() {
+                        None
+                    } else {
+                        Some(self.tm.mk_term(Kind::InstPattern, ts))
+                    }
+                })
+                .collect::<Vec<_>>();
+            let plist = self.tm.mk_term(Kind::InstPatternList, &pats);
             return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]).into());
         }
         Ok(self.tm.mk_term(kind, &[bvl, cbody]).into())
