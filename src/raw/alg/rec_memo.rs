@@ -348,6 +348,11 @@ where
     }
 }
 
+/// A caching traversal scheme for [`Memoize`]-wrapped recursors.
+///
+/// Overrides [`expand_and_resolve`](TermRecursionScheme::expand_and_resolve) to check
+/// the cache before descending into a term. On a cache hit, the entire sub-tree is
+/// skipped and the cached result is returned immediately.
 pub(crate) struct MemoizedScheme;
 
 impl<R, M, Str, So, T> TermRecursionScheme<Memoize<R, M>, Str, So, T> for MemoizedScheme

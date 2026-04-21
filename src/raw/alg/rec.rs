@@ -77,6 +77,17 @@ impl IsBottom for Bottom {
 ///   entering the body of a `Forall` or `Exists`.
 /// - [`setup_match_case_scope`](TermRecursor::setup_match_case_scope) – called before
 ///   entering each match arm body.
+///
+/// Each `setup_*` hook has a corresponding `cleanup_*_on_error` hook that is called
+/// during stack unwinding when a callback returns `Err`. These allow the implementor
+/// to undo any environment modifications made by the `setup_*` hook:
+///
+/// - [`cleanup_let_scope_on_error`](TermRecursor::cleanup_let_scope_on_error)
+/// - [`cleanup_quantifier_scope_on_error`](TermRecursor::cleanup_quantifier_scope_on_error)
+/// - [`cleanup_match_case_scope_on_error`](TermRecursor::cleanup_match_case_scope_on_error)
+///
+/// All cleanup hooks have default no-op implementations, so infallible recursors
+/// (`Err = Bottom`) need not provide them.
 #[allow(clippy::too_many_arguments)]
 pub trait TermRecursor<Str, So, T> {
     /// The type produced by each recursive step.
@@ -170,6 +181,10 @@ pub trait TermRecursor<Str, So, T> {
         vs_rec: &[Self::Binding],
     ) -> Result<(), Self::Err>;
 
+    /// Called during error rewind for each `let` scope that was entered (via
+    /// [`setup_let_scope`](Self::setup_let_scope)) but not yet completed. Override this
+    /// to undo any environment modifications made in `setup_let_scope`. The default
+    /// implementation is a no-op.
     fn cleanup_let_scope_on_error(
         &mut self,
         _current: &T,
@@ -198,6 +213,10 @@ pub trait TermRecursor<Str, So, T> {
         is_forall: bool,
     ) -> Result<(), Self::Err>;
 
+    /// Called during error rewind for each quantifier scope that was entered (via
+    /// [`setup_quantifier_scope`](Self::setup_quantifier_scope)) but not yet completed.
+    /// Override this to undo any environment modifications made in
+    /// `setup_quantifier_scope`. The default implementation is a no-op.
     fn cleanup_quantifier_scope_on_error(
         &mut self,
         _current: &T,
@@ -234,6 +253,10 @@ pub trait TermRecursor<Str, So, T> {
         case_idx: usize,
     ) -> Result<Self::Pattern, Self::Err>;
 
+    /// Called during error rewind for each match arm scope that was entered (via
+    /// [`setup_match_case_scope`](Self::setup_match_case_scope)) but not yet completed.
+    /// Override this to undo any environment modifications made in
+    /// `setup_match_case_scope`. The default implementation is a no-op.
     fn cleanup_match_case_scope_on_error(
         &mut self,
         _current: &T,
@@ -508,6 +531,21 @@ type PushResult<'a, R, Str, So, T> = Result<
     <R as TermRecursor<Str, So, T>>::Err,
 >;
 
+/// The traversal engine that drives a [`TermRecursor`] over a term tree.
+///
+/// This trait encapsulates the stack-based traversal algorithm: expanding nodes,
+/// propagating results upward, and handling error cleanup. It is parameterized over
+/// the recursor `R` so that different schemes can customize the traversal — for
+/// example, [`MemoizedScheme`](super::rec_memo::MemoizedScheme) overrides
+/// [`expand_and_resolve`](Self::expand_and_resolve) to check a cache before descending.
+///
+/// The default implementations of all methods form a complete traversal. Implementors
+/// typically only need to override [`expand_and_resolve`](Self::expand_and_resolve) to
+/// inject custom behavior (e.g. caching) at the point where a term is first visited.
+///
+/// End users do not interact with this trait directly; instead they implement
+/// [`TermRecursor`] and call [`recurse_on_term`](TermRecursor::recurse_on_term), which
+/// delegates to [`BasicScheme`].
 pub(crate) trait TermRecursionScheme<R, Str, So, T>
 where
     R: TermRecursor<Str, So, T>,
@@ -1137,8 +1175,10 @@ where
         }
     }
 
-    /// Only when the recursion fails, this function is called to rewind the recursion stack
-    /// and `cleanup_*` callbacks are invoked to clean up the recursor state, if necessary.
+    /// Unwind the traversal stack after an error, calling `cleanup_*_on_error` hooks
+    /// for each scoped frame (`LetBody`, `Quantifier`, `MatchCases`) that was entered
+    /// but not yet completed. Frames are popped innermost-first, mirroring the reverse
+    /// of the `setup_*` call sequence. Non-scoped frames are silently discarded.
     fn rewind_stack_for_error(recursor: &mut R, stack: &mut RStack<'_, R, Str, So, T>) {
         while let Some(frame) = stack.pop() {
             match frame {
@@ -1179,6 +1219,11 @@ where
         }
     }
 
+    /// Core traversal loop operating on a caller-provided stack.
+    ///
+    /// Alternates between expanding the next child and pushing results upward until
+    /// the stack is empty. Separated from [`term_recursion`](Self::term_recursion) so
+    /// that the caller can perform cleanup on the stack if an error occurs.
     fn term_recursion_inner<'a>(
         recursor: &mut R,
         term: &'a T,
@@ -1200,6 +1245,11 @@ where
         }
     }
 
+    /// Top-level entry point for the traversal.
+    ///
+    /// Creates the stack, runs [`term_recursion_inner`](Self::term_recursion_inner),
+    /// and calls [`rewind_stack_for_error`](Self::rewind_stack_for_error) if the
+    /// traversal fails, ensuring that all `setup_*` side effects are cleaned up.
     fn term_recursion(recursor: &mut R, term: &T) -> Result<R::Out, R::Err>
     where
         T: Contains<T: Repr<T = Term<Str, So, T>>>,
@@ -1213,6 +1263,11 @@ where
     }
 }
 
+/// The default (non-memoized) traversal scheme.
+///
+/// Uses all default method implementations from [`TermRecursionScheme`], performing a
+/// straightforward depth-first walk without caching. This is the scheme used by
+/// [`TermRecursor::recurse_on_term`].
 pub(crate) struct BasicScheme;
 
 impl<R, Str, So, T> TermRecursionScheme<R, Str, So, T> for BasicScheme where

@@ -486,7 +486,7 @@ impl TermRecursor<Str, Sort, Term> for TermDepth {
     fn on_forall(&mut self, _: &Term, _: &[VarBinding<Str, Sort>], _: &Term, r: usize) -> Result<usize, Bottom> { Ok(1 + r) }
     fn on_exists(&mut self, _: &Term, _: &[VarBinding<Str, Sort>], _: &Term, r: usize) -> Result<usize, Bottom> { Ok(1 + r) }
     fn setup_match_case_scope(&mut self, _: &Term, _: &Term, _: &[PatternArm<Str, Term>], _: &usize, _: usize) -> Result<(), Bottom> { Ok(()) }
-    fn on_match_arm(&mut self, _: &Term, _: &Term, _: &[PatternArm<Str, Term>], _: usize, r: usize) -> Result<usize, Bottom> { Ok(r) }
+    fn on_match_arm(&mut self, _: &Term, _: &Term, _: &[PatternArm<Str, Term>], _: usize, _: (), r: usize) -> Result<usize, Bottom> { Ok(r) }
     fn on_match(&mut self, _: &Term, _: &Term, _: &[PatternArm<Str, Term>], s: usize, arms: Vec<usize>) -> Result<usize, Bottom> {
         Ok(1 + arms.into_iter().chain([s]).max().unwrap())
     }
@@ -516,6 +516,104 @@ It returns the output directly without wrapping in `Result`.
 
 The convenience trait `TypedTermRecursor` is a marker for recursors specialized to the typed AST
 (`Str`, `Sort`, `Term`). An analogous `UntypedTermRecursor` exists for untyped ASTs.
+
+### Error handling and cleanup hooks
+
+When a `TermRecursor` callback returns `Err`, the traversal aborts immediately. However,
+scoped constructs (`let`, `forall`/`exists`, `match`) may have already called their
+`setup_*` hooks to extend the recursor's environment. If the error occurs inside such a
+scope, the environment modifications from those hooks would be left behind — potentially
+corrupting the recursor's state for future use.
+
+To address this, the traversal engine automatically **rewinds the stack** on error, calling
+a corresponding `cleanup_*_on_error` hook for each scoped frame that was entered but not
+yet completed:
+
+| Setup hook                   | Cleanup hook                          | Frame type  |
+|------------------------------|---------------------------------------|-------------|
+| `setup_let_scope`            | `cleanup_let_scope_on_error`          | `let`       |
+| `setup_quantifier_scope`     | `cleanup_quantifier_scope_on_error`   | `forall` / `exists` |
+| `setup_match_case_scope`     | `cleanup_match_case_scope_on_error`   | `match` arm |
+
+All three cleanup hooks have **default no-op implementations**, so existing recursors that
+set `Err = Bottom` (infallible) are unaffected. Recursors that can fail and maintain mutable
+state across scopes should override the relevant hooks to undo their `setup_*` side effects.
+
+For example, a recursor that pushes a scope frame in `setup_quantifier_scope` should pop it
+in `cleanup_quantifier_scope_on_error`:
+
+```rust
+fn setup_quantifier_scope(
+    &mut self, _: &Term, vs: &[VarBinding<Str, Sort>], _: &Term, _: bool,
+) -> Result<(), MyError> {
+    self.env.push(/* new scope from vs */);
+    Ok(())
+}
+
+fn cleanup_quantifier_scope_on_error(
+    &mut self, _: &Term, _: &[VarBinding<Str, Sort>], _: &Term, _: bool,
+) {
+    self.env.pop();
+}
+```
+
+The cleanup hooks are called in stack order (innermost scope first) during the rewind,
+mirroring the reverse of the `setup_*` call sequence.
+
+### Reducing boilerplate with `TypedBuilder`
+
+Implementing `TermRecursor` requires defining callbacks for every term variant, even when
+most of them simply rebuild the term unchanged. The `TypedBuilder` struct provides a
+complete set of identity-rebuild callbacks for the typed AST (`Str`, `Sort`, `Term`),
+so custom recursors only need to override the callbacks with actual logic.
+
+`TypedBuilder` is designed to be embedded as a field and combined with the
+[`delegate`](https://crates.io/crates/delegate) crate to forward boilerplate callbacks:
+
+```rust
+use delegate::delegate;
+use yaspar_ir::ast::*;
+use yaspar_ir::ast::alg::*;
+use yaspar_ir::ast::boilerplates::TypedBuilder;
+
+pub struct MyRecursor<'a> {
+    inner: TypedBuilder<'a, Context>,
+    // ... custom state ...
+}
+
+impl TermRecursor<Str, Sort, Term> for MyRecursor<'_> {
+    type Out = Term;
+    type Attr = Attribute;
+    type Binding = VarBinding<Str, Term>;
+    type Pattern = ();
+    type Arm = PatternArm;
+    type Err = Bottom;
+
+    // Forward all rebuild-only callbacks to TypedBuilder
+    delegate! {
+        to self.inner {
+            fn on_constant(&mut self, current: &Term, c: &Constant, s: &Option<Sort>) -> Result<Term, Bottom>;
+            fn on_global(&mut self, current: &Term, id: &QualifiedIdentifier, s: &Option<Sort>) -> Result<Term, Bottom>;
+            fn on_app(&mut self, current: &Term, id: &QualifiedIdentifier, ts: &[Term], s: &Option<Sort>, recs: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
+            fn on_and(&mut self, current: &Term, ts: &[Term], recs: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_or(&mut self, current: &Term, ts: &[Term], recs: Vec<Term>) -> Result<Term, Bottom>;
+            // ... other callbacks that don't need custom logic ...
+        }
+    }
+
+    // Override only the callbacks with custom logic
+    fn on_local(&mut self, current: &Term, id: &Local) -> Result<Term, Bottom> {
+        // custom substitution, transformation, etc.
+        Ok(current.clone())
+    }
+
+    // ...
+}
+```
+
+See `LetEliminatorInner` in `ast::letelim` and `MonomorphizerInner` in `ast::mono` for
+complete real-world examples of this pattern.
 
 ### Memoized term recursion with `Memoize`
 
