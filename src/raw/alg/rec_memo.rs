@@ -112,7 +112,7 @@ where
     where
         T: Contains<T: Repr<T = Term<Str, So, T>>>,
     {
-        memo_term_recursion(self, t)
+        MemoizedScheme::term_recursion(self, t)
     }
 
     delegate! {
@@ -348,56 +348,40 @@ where
     }
 }
 
-/// Like [`expand_and_resolve`], but checks the cache before descending.
-///
-/// If `current` is already in the cache, the cached result is returned immediately
-/// without pushing any frames or invoking any callbacks.
-fn memo_expand_and_resolve<'a, R, M, Str: 'a, So: 'a, T>(
-    recursor: &mut Memoize<R, M>,
-    stack: &mut RStack<'a, Memoize<R, M>, Str, So, T>,
-    mut current: &'a T,
-) -> Result<R::Out, R::Err>
+pub(crate) struct MemoizedScheme;
+
+impl<R, M, Str, So, T> TermRecursionScheme<Memoize<R, M>, Str, So, T> for MemoizedScheme
 where
     R: TermRecursor<Str, So, T, Out: Clone>,
     M: InsertableMapping<Key = T, Value = R::Out>,
-    T: Contains<T: Repr<T = Term<Str, So, T>>> + Clone,
+    T: Clone,
 {
-    loop {
-        if let Some(r) = recursor.cache.lookup(current) {
-            return Ok(r);
-        }
-
-        match expand_and_resolve_once(recursor, stack, current)? {
-            Either::Left(l) => {
-                current = l;
-            }
-            Either::Right(r) => {
+    /// Like [`expand_and_resolve`], but checks the cache before descending.
+    ///
+    /// If `current` is already in the cache, the cached result is returned immediately
+    /// without pushing any frames or invoking any callbacks.
+    fn expand_and_resolve<'a>(
+        recursor: &mut Memoize<R, M>,
+        stack: &mut RStack<'a, Memoize<R, M>, Str, So, T>,
+        mut current: &'a T,
+    ) -> Result<R::Out, R::Err>
+    where
+        Str: 'a,
+        So: 'a,
+        T: Contains<T: Repr<T = Term<Str, So, T>>>,
+    {
+        loop {
+            if let Some(r) = recursor.cache.lookup(current) {
                 return Ok(r);
             }
-        }
-    }
-}
 
-/// Entry point for memoized traversal. Same structure as [`term_recursion`] but uses
-/// [`memo_expand_and_resolve`] to short-circuit cached sub-trees.
-fn memo_term_recursion<R, M, Str, So, T>(
-    recursor: &mut Memoize<R, M>,
-    term: &T,
-) -> Result<R::Out, R::Err>
-where
-    R: TermRecursor<Str, So, T, Out: Clone>,
-    M: InsertableMapping<Key = T, Value = R::Out>,
-    T: Contains<T: Repr<T = Term<Str, So, T>>> + Clone,
-{
-    let mut stack = vec![];
-    let mut result = memo_expand_and_resolve(recursor, &mut stack, term)?;
-    loop {
-        match push_result(recursor, &mut stack, result)? {
-            Either::Left(final_result) => return Ok(final_result),
-            Either::Right(mut frame) => {
-                let child = next_child(recursor, &mut frame)?;
-                stack.push(frame);
-                result = memo_expand_and_resolve(recursor, &mut stack, child)?;
+            match Self::expand_and_resolve_once(recursor, stack, current)? {
+                Either::Left(l) => {
+                    current = l;
+                }
+                Either::Right(r) => {
+                    return Ok(r);
+                }
             }
         }
     }
