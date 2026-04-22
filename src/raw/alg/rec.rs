@@ -86,8 +86,9 @@ impl IsBottom for Bottom {
 /// - [`cleanup_quantifier_scope_on_error`](TermRecursor::cleanup_quantifier_scope_on_error)
 /// - [`cleanup_match_case_scope_on_error`](TermRecursor::cleanup_match_case_scope_on_error)
 ///
+/// These cleanup functions take as arguments owned recursive values and must succeed as the last resorts.
 /// All cleanup hooks have default no-op implementations, so infallible recursors
-/// (`Err = Bottom`) need not provide them.
+/// (e.g. `Err = Bottom`) need not provide them.
 #[allow(clippy::too_many_arguments)]
 pub trait TermRecursor<Str, So, T> {
     /// The type produced by each recursive step.
@@ -677,7 +678,7 @@ where
                             scrutinee,
                             cases,
                             scrutinee_rec: result,
-                            case_rec: vec![],
+                            case_rec: Vec::with_capacity(cases.len()),
                             current_pattern: None,
                         }));
                     }
@@ -740,7 +741,7 @@ where
                     body,
                     anns,
                 } => {
-                    let mut anns_rec: Vec<R::Attr> = vec![];
+                    let mut anns_rec: Vec<R::Attr> = Vec::with_capacity(anns.len());
                     Self::advance_attributes_until_pattern(recursor, anns, &mut anns_rec)?;
                     if anns_rec.len() >= anns.len() {
                         result = recursor.on_annotated(current, body, anns, result, anns_rec)?;
@@ -1022,7 +1023,7 @@ where
                         id,
                         args,
                         sort,
-                        rec: vec![],
+                        rec: Vec::with_capacity(args.len()),
                     });
                     Ok(Either::Left(&args[0]))
                 }
@@ -1043,7 +1044,7 @@ where
                         current,
                         vs,
                         body,
-                        vs_rec: vec![],
+                        vs_rec: Vec::with_capacity(vs.len()),
                     });
                     Ok(Either::Left(&vs[0].2))
                 }
@@ -1096,7 +1097,7 @@ where
                         current,
                         kind: NaryKind::Distinct,
                         ts,
-                        rec: vec![],
+                        rec: Vec::with_capacity(ts.len()),
                     });
                     Ok(Either::Left(&ts[0]))
                 }
@@ -1109,7 +1110,7 @@ where
                         current,
                         kind: NaryKind::And,
                         ts,
-                        rec: vec![],
+                        rec: Vec::with_capacity(ts.len()),
                     });
                     Ok(Either::Left(&ts[0]))
                 }
@@ -1122,7 +1123,7 @@ where
                         current,
                         kind: NaryKind::Or,
                         ts,
-                        rec: vec![],
+                        rec: Vec::with_capacity(ts.len()),
                     });
                     Ok(Either::Left(&ts[0]))
                 }
@@ -1135,7 +1136,7 @@ where
                         current,
                         kind: NaryKind::Xor,
                         ts,
-                        rec: vec![],
+                        rec: Vec::with_capacity(ts.len()),
                     });
                     Ok(Either::Left(&ts[0]))
                 }
@@ -1154,7 +1155,7 @@ where
                         current,
                         ts,
                         t: concl,
-                        rec: vec![],
+                        rec: Vec::with_capacity(ts.len()),
                     });
                     Ok(Either::Left(&ts[0]))
                 }

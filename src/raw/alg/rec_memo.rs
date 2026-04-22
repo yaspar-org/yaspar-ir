@@ -124,8 +124,12 @@ where
             fn on_attribute_pattern(&mut self, patterns: &[T], patterns_rec: Vec<Self::Out>) -> Result<Self::Attr, Self::Err>;
             fn on_let_binding(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, binding_idx: usize, binding_rec: Self::Out) -> Result<Self::Binding, Self::Err>;
             fn setup_let_scope(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, vs_rec: &[Self::Binding]) -> Result<(), Self::Err>;
+            fn cleanup_let_scope_on_error(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, vs_rec: Vec<Self::Binding>);
             fn setup_quantifier_scope(&mut self, current: &T, vs: &[VarBinding<Str, So>], t: &T, is_forall: bool) -> Result<(), Self::Err>;
+            fn cleanup_quantifier_scope_on_error(&mut self, current: &T, vs: &[VarBinding<Str, So>], t: &T, is_forall: bool);
             fn setup_match_case_scope(&mut self, current: &T, scrutinee: &T, cases: &[PatternArm<Str, T>], scrutinee_rec: &Self::Out, case_idx: usize) -> Result<Self::Pattern, Self::Err>;
+            fn cleanup_match_case_scope_on_error(&mut self, current: &T, scrutinee: &T, cases: &[PatternArm<Str, T>], scrutinee_rec: Self::Out, case_idx: usize);
+            fn on_match_arm(&mut self, current: &T, scrutinee: &T, cases: &[PatternArm<Str, T>], scrutinee_rec: &Self::Out, case_idx: usize, current_pattern: Self::Pattern, arm: Self::Out) -> Result<Self::Arm, Self::Err>;
         }
     }
 
@@ -205,27 +209,6 @@ where
         let r = self.inner.on_forall(current, vs, t, t_rec)?;
         self.cache.insert(current.clone(), r.clone());
         Ok(r)
-    }
-
-    fn on_match_arm(
-        &mut self,
-        current: &T,
-        scrutinee: &T,
-        cases: &[PatternArm<Str, T>],
-        scrutinee_rec: &Self::Out,
-        case_idx: usize,
-        current_pattern: Self::Pattern,
-        arm: Self::Out,
-    ) -> Result<Self::Arm, Self::Err> {
-        self.inner.on_match_arm(
-            current,
-            scrutinee,
-            cases,
-            scrutinee_rec,
-            case_idx,
-            current_pattern,
-            arm,
-        )
     }
 
     fn on_match(
