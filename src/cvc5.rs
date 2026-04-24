@@ -1164,8 +1164,26 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm>> for Command {
                 Ok(CommandResult::GetValue(vals))
             }
             AC::GetModel => {
-                // get_model requires sorts and consts; just call with empty for now
-                let m = solver.get_model(&[], &[]);
+                let sorts = env
+                    .sort
+                    .values()
+                    .filter(|s| s.is_uninterpreted_sort())
+                    .cloned()
+                    .chain(
+                        env.sort_cache
+                            .values()
+                            .filter(|s| s.is_uninterpreted_sort())
+                            .cloned(),
+                    )
+                    .collect::<Vec<CSort>>();
+                let consts = env
+                    .globals
+                    .values()
+                    .filter(|t| t.kind() == Kind::Constant)
+                    .cloned()
+                    .collect::<Vec<CTerm>>();
+
+                let m = solver.get_model(&sorts, &consts);
                 Ok(CommandResult::GetModel(m))
             }
             AC::GetAssertions => {
