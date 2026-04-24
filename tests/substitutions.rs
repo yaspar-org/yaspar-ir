@@ -131,7 +131,7 @@ fn test_global_substitutions() {
         nz.to_string(),
         "(ite (> (* x (/ x 100.1)) (/ x 100.1)) (* x (/ x 100.1)) (/ x 100.1))"
     );
-    let all = context.all_defined_symbols();
+    let all = context.defined_symbols();
     let nz = z.gsubst(&all, &mut context);
     assert_eq!(
         nz.to_string(),

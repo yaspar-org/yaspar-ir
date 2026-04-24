@@ -135,6 +135,7 @@ lazy_static! {
 
 #[cfg(feature = "cache")]
 pub struct Caches {
+    pub(crate) global_def_cache: HashMap<Str, FunctionDef>,
     #[cfg(feature = "cnf")]
     pub cnf_cache: CNFCache,
 }
@@ -560,7 +561,10 @@ impl Context {
     }
 
     /// Get all the symbols with a definition body
-    pub fn all_defined_symbols(&self) -> HashSet<Str> {
+    ///
+    /// This function is different from [Self::user_defined_symbols] in that it only returns the symbols
+    /// defined through `define-const` or `define-fun`.
+    pub fn defined_symbols(&self) -> HashSet<Str> {
         self.frame
             .symbol_table
             .iter()
@@ -595,6 +599,9 @@ impl Context {
     }
 
     /// Returns the set of all user defined symbols in the current context
+    ///
+    /// This function returns all from [Self::defined_symbols], and also symbols with a defined body
+    /// due to user commands, e.g. `is-X` testers due to `declare-datatype`.
     pub fn user_defined_symbols(&self) -> HashSet<Str> {
         self.frame
             .symbol_table

@@ -315,8 +315,7 @@ impl<'a, E: HasArena> Substituter<'a, E> {
     }
 
     fn push_shadow<T>(&mut self, names: impl Iterator<Item = T>, f: impl Fn(&T) -> Str) {
-        self.shadows
-            .push(names.map(|n| (f(&n), ())).collect());
+        self.shadows.push(names.map(|n| (f(&n), ())).collect());
     }
 }
 
@@ -506,6 +505,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for Substituter<'_, E> {
         _: &Term,
         _: &Term,
         cases: &[instance::PatternArm],
+        scrutinee_rec: &Self::Out,
         idx: usize,
         _: (),
         body: Term,
