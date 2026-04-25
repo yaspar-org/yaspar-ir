@@ -289,18 +289,67 @@ where
 /// Apply to a term via the [`SubstituteV2`] trait.
 pub struct SubstitutionV2(HashMap<usize, Term>);
 
+impl Default for SubstitutionV2 {
+    fn default() -> Self {
+        SubstitutionV2::empty()
+    }
+}
+
+impl SubstitutionV2 {
+    pub fn empty() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn new(bindings: impl IntoIterator<Item = (Local, Term)>) -> Self {
+        let map = bindings.into_iter().map(|(l, t)| (l.id, t)).collect();
+        SubstitutionV2(map)
+    }
+
+    /// Push one more binding to the substitution
+    ///
+    /// c.f. [Self::extend]
+    pub fn push(&mut self, loc: Local, term: Term) {
+        self.0.insert(loc.id, term);
+    }
+
+    /// Push multiple bindings to the substitution
+    ///
+    /// c.f. [Self::push]
+    pub fn extend(&mut self, bindings: impl IntoIterator<Item = (Local, Term)>) {
+        for (loc, term) in bindings {
+            self.0.insert(loc.id, term);
+        }
+    }
+}
+
 /// Apply a substitution to `Self`.
 ///
 /// Note that it is the caller's responsibility to maintain well-sortedness invariance.
 pub trait SubstituteV2<E> {
-    fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self;
+    type Out;
+
+    fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self::Out;
+}
+
+impl<E> SubstituteV2<E> for [Term]
+where
+    E: HasArena,
+{
+    type Out = Vec<Term>;
+
+    fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self::Out {
+        let mut s = Substituter::create(env, subst);
+        self.iter().map(|t| s.recurse_on_term_no_err(t)).collect()
+    }
 }
 
 impl<E> SubstituteV2<E> for Term
 where
     E: HasArena,
 {
-    fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self {
+    type Out = Self;
+
+    fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self::Out {
         Substituter::create(env, subst).recurse_on_term_no_err(self)
     }
 }

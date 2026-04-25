@@ -9,10 +9,11 @@
 
 use crate::allocator::{SortAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
-use crate::ast::subst::{Substitute, Substitution};
+use crate::ast::subst::SubstituteV2;
 use crate::ast::{
     Arena, Attribute, Constant, Context, FetchSort, FunctionDef, HasArena, Local, Memoize,
-    Monomorphization, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, Term, TypedBuilder,
+    Monomorphization, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, SubstitutionV2, Term,
+    TypedBuilder,
 };
 use crate::ast::{TermRecursor, TypedTermRecursor};
 use crate::raw::alg::rec::Bottom;
@@ -26,46 +27,53 @@ use yaspar::ast::Keyword;
 ///
 /// This trait implements substitutions by expanding the bodies of names during substitutions.
 pub trait GlobalSubst<E> {
+    type Out;
+
     /// Apply global substitutions with an iterable of specific names of global definitions to expand.
-    fn gsubst<S>(&self, global_names: impl IntoIterator<Item = S>, env: &mut E) -> Self
+    fn gsubst<S>(&self, global_names: impl IntoIterator<Item = S>, env: &mut E) -> Self::Out
     where
         S: AllocatableString<Arena>;
 
-    fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut E) -> Self;
+    fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut E) -> Self::Out;
 
     /// Apply global substitutions to all global definitions
-    fn gsubst_all(&self, env: &mut E) -> Self;
+    fn gsubst_all(&self, env: &mut E) -> Self::Out;
 }
 
-impl GlobalSubst<Context> for Term {
-    fn gsubst<S>(&self, global_names: impl IntoIterator<Item = S>, env: &mut Context) -> Self
+impl GlobalSubst<Context> for [Term] {
+    type Out = Vec<Term>;
+
+    fn gsubst<S>(&self, global_names: impl IntoIterator<Item = S>, env: &mut Context) -> Self::Out
     where
         S: AllocatableString<Arena>,
     {
-        {
-            let global_names = global_names
-                .into_iter()
-                .map(|s| s.allocate(env.arena()))
-                .collect::<HashSet<_>>();
-            self.gsubst_with_names(&global_names, env)
-        }
+        let global_names = global_names
+            .into_iter()
+            .map(|s| s.allocate(env.arena()))
+            .collect::<HashSet<_>>();
+        self.gsubst_with_names(&global_names, env)
     }
 
-    fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut Context) -> Self {
+    fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut Context) -> Self::Out {
         let mut cache = HashMap::new();
         let block = HashSet::new();
         let mut gsubster = GlobalSubstituter::create(env, global_names, &block, &mut cache);
-        gsubster.recurse_on_term_no_err(self)
+        self.iter()
+            .map(|t| gsubster.recurse_on_term_no_err(t))
+            .collect()
     }
 
-    fn gsubst_all(&self, env: &mut Context) -> Self {
+    fn gsubst_all(&self, env: &mut Context) -> Self::Out {
         let block = HashSet::new();
         let global_names = env.defined_symbols();
         #[cfg(feature = "cache")]
         {
             let mut cache = std::mem::take(&mut env.caches.global_def_cache);
             let mut gsubster = GlobalSubstituter::create(env, &global_names, &block, &mut cache);
-            let r = gsubster.recurse_on_term_no_err(self);
+            let r = self
+                .iter()
+                .map(|t| gsubster.recurse_on_term_no_err(t))
+                .collect();
             env.caches.global_def_cache = cache;
             r
         }
@@ -73,8 +81,35 @@ impl GlobalSubst<Context> for Term {
         {
             let mut cache = HashMap::new();
             let mut gsubster = GlobalSubstituter::create(env, &global_names, &block, &mut cache);
-            gsubster.recurse_on_term_no_err(self)
+            self.iter()
+                .map(|t| gsubster.recurse_on_term_no_err(t))
+                .collect()
         }
+    }
+}
+
+impl GlobalSubst<Context> for Term {
+    type Out = Term;
+
+    fn gsubst<S>(&self, global_names: impl IntoIterator<Item = S>, env: &mut Context) -> Self::Out
+    where
+        S: AllocatableString<Arena>,
+    {
+        std::slice::from_ref(self)
+            .gsubst(global_names, env)
+            .pop()
+            .unwrap()
+    }
+
+    fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut Context) -> Self::Out {
+        std::slice::from_ref(self)
+            .gsubst_with_names(global_names, env)
+            .pop()
+            .unwrap()
+    }
+
+    fn gsubst_all(&self, env: &mut Context) -> Self::Out {
+        std::slice::from_ref(self).gsubst_all(env).pop().unwrap()
     }
 }
 
@@ -240,8 +275,7 @@ impl TermRecursor<Str, Sort, Term> for GlobalSubstituterInner<'_> {
             // The cache was just populated
             let def = self.global_def_cache.get(sym).unwrap();
             let sorts: Vec<Sort> = recs.iter().map(|t| t.get_sort(&mut self.inner)).collect();
-            // todo: fix the substitution here
-            let subst = Substitution::new_str(def.vars.iter().map(|v| v.0.clone()).zip(recs));
+            let subst = SubstitutionV2::new(def.vars.iter().map(|v| v.clone().into()).zip(recs));
             if def.sort_params.is_empty() {
                 Ok(def.body.subst(&subst, &mut self.inner))
             } else {
