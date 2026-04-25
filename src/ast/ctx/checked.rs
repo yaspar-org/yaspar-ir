@@ -186,7 +186,7 @@ pub trait CheckedApi: HasArena {
     {
         match self.typed_symbol(name)?.repr() {
             ATerm::Local(loc) => Ok(loc.clone()),
-            t => Err(format!("TC: symbol `{}` is not a local term", t).into()),
+            t => Err(format!("TC: symbol `{}` is not a local term", t)),
         }
     }
 

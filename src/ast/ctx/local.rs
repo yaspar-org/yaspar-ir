@@ -92,6 +92,10 @@ impl<'a, 'b> LocalContext<'a, 'b> {
         self.env.extend(bindings);
         Ok(ids)
     }
+
+    pub(crate) fn get_direct_bindings(&self) -> &[VarBinding<Str, Sort>] {
+        &self.env
+    }
 }
 
 impl HasArena for LocalContext<'_, '_> {

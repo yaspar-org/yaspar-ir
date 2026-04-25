@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::allocator::TermAllocator;
+use crate::ast::alg::VarBinding;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, Result, Sort, Str, TCEnv, Term};
@@ -65,6 +66,10 @@ impl<'a, 'b> QuantifierContext<'a, 'b> {
     {
         self.0.extend_many(tups)?;
         Ok(self)
+    }
+
+    pub fn get_direct_bindings(&self) -> &[VarBinding<Str, Sort>] {
+        self.0.get_direct_bindings()
     }
 
     /// Build a forall
