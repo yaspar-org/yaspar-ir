@@ -6,16 +6,19 @@
 
 //! Local substitution of variables in terms.
 //!
-//! This module provides [`Substitution`], a mapping from variable names to replacement terms,
-//! and the [`Substitute`] trait for applying substitutions to terms. The substitution operation
+//! This module provides [`SubstitutionV2`], a mapping from local variable IDs to replacement
+//! terms, and the [`SubstituteV2`] trait for applying substitutions. The substitution operation
 //! correctly handles variable shadowing in binders (`let`, `forall`, `exists`, `match`):
-//! a substitution for `x` is suspended inside a scope that re-binds `x`.
+//! a substitution is suspended inside a scope that re-binds the same variable.
+//!
+//! The legacy [`Substitution`] / [`Substitute`] API (name-based) is deprecated and will be
+//! removed in 2.7.4. Prefer [`SubstitutionV2`] / [`SubstituteV2`] (ID-based) for new code.
 //!
 //! # Example
 //!
 //! ```rust
 //! use yaspar_ir::ast::{CheckedApi, Context, ScopedSortApi, Typecheck};
-//! use yaspar_ir::ast::subst::{Substitution, Substitute};
+//! use yaspar_ir::ast::subst::{SubstitutionV2, SubstituteV2};
 //! use yaspar_ir::untyped::UntypedAst;
 //!
 //! let mut context = Context::new();
@@ -24,7 +27,8 @@
 //! let mut q = context.build_quantifier_with_domain([("x", int.clone()), ("y", int)]).unwrap();
 //! let term = UntypedAst.parse_term_str("(+ x y)").unwrap().type_check(&mut q).unwrap();
 //! let one = q.numeral(1u8.into()).unwrap();
-//! let subst = Substitution::new([("x", one)], &mut q);
+//! let loc = q.get_direct_bindings()[0].clone().into();
+//! let subst = SubstitutionV2::new([(loc, one)]);
 //! let result = term.subst(&subst, &mut q);
 //! assert_eq!(result.to_string(), "(+ 1 y)");
 //! ```
@@ -34,9 +38,8 @@
 use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::{
-    ATerm, Arena, Attribute, Constant, HasArena, HasArenaAlt,
-    Local, Memoize, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, Term,
-    TermRecursor, TypedBuilder, TypedTermRecursor,
+    ATerm, Arena, Attribute, Constant, HasArena, HasArenaAlt, Local, Memoize, Pattern, PatternArm,
+    QualifiedIdentifier, Sort, Str, Term, TermRecursor, TypedBuilder, TypedTermRecursor,
 };
 use crate::containers::{Mapping, MemLinkedList};
 use crate::raw::alg::rec::Bottom;
@@ -285,9 +288,9 @@ where
     }
 }
 
-/// A mapping from variable names to replacement terms.
+/// A mapping from local variable IDs to replacement terms.
 ///
-/// Create with [`SubstitutionV2::new`] (from name–term pairs) or [`SubstitutionV2::empty`].
+/// Create with [`SubstitutionV2::new`] (from `Local`–term pairs) or [`SubstitutionV2::empty`].
 /// Apply to a term via the [`SubstituteV2`] trait.
 #[derive(Clone, Debug)]
 pub struct SubstitutionV2(HashMap<usize, Term>);
@@ -299,10 +302,12 @@ impl Default for SubstitutionV2 {
 }
 
 impl SubstitutionV2 {
+    /// Create an empty substitution.
     pub fn empty() -> Self {
         Self(HashMap::new())
     }
 
+    /// Create a substitution from an iterator of `(Local, Term)` pairs.
     pub fn new(bindings: impl IntoIterator<Item = (Local, Term)>) -> Self {
         let map = bindings.into_iter().map(|(l, t)| (l.id, t)).collect();
         SubstitutionV2(map)
@@ -322,10 +327,12 @@ impl SubstitutionV2 {
         self.extend_with_id(bindings.into_iter().map(|(l, t)| (l.id, t)))
     }
 
+    /// Push a binding by raw local variable ID.
     pub fn push_with_id(&mut self, loc_id: usize, term: Term) {
         self.0.insert(loc_id, term);
     }
 
+    /// Push multiple bindings by raw local variable IDs.
     pub fn extend_with_id(&mut self, bindings: impl IntoIterator<Item = (usize, Term)>) {
         for (id, term) in bindings {
             self.0.insert(id, term);
@@ -337,8 +344,10 @@ impl SubstitutionV2 {
 ///
 /// Note that it is the caller's responsibility to maintain well-sortedness invariance.
 pub trait SubstituteV2<E> {
+    /// The type produced by the substitution.
     type Out;
 
+    /// Apply the substitution, returning a new value with locals replaced.
     fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self::Out;
 }
 
@@ -365,12 +374,14 @@ where
     }
 }
 
+/// Memoized, stack-safe local substituter. Use [`Substituter::create`] to construct.
 pub type Substituter<'a, E> = Memoize<SubstituterInner<'a, E>, HashMap<Term, Term>>;
 
 impl<'a, E> Substituter<'a, E>
 where
     E: HasArena,
 {
+    /// Create a new memoized substituter backed by the given arena and substitution.
     pub fn create(env: &'a mut E, subst: &'a SubstitutionV2) -> Self {
         Memoize::new(SubstituterInner::new(env, subst))
     }
@@ -378,18 +389,19 @@ where
 
 /// Stack-safe local substitution using [`TermRecursor`].
 ///
-/// Replaces local variables by name according to a [`SubstitutionV2`]. Binders (`let`, `forall`,
-/// `exists`, `match`) shadow substitutions for re-bound names. Unlike [`LetEliminatorInner`],
+/// Replaces local variables by ID according to a [`SubstitutionV2`]. Binders (`let`, `forall`,
+/// `exists`, `match`) shadow substitutions for re-bound variables. Unlike [`LetEliminatorInner`],
 /// let-bindings are preserved — only the RHS values are recursed and the body sees shadows.
 pub struct SubstituterInner<'a, E> {
     inner: TypedBuilder<'a, E>,
-    /// The base substitution (name → replacement term).
+    /// The base substitution (local id → replacement term).
     subst: &'a SubstitutionV2,
-    /// Shadow stack: each frame maps local variable id to a fresh id and block substitution in scoped bodies.
+    /// Shadow stack: each frame maps a local variable id to a fresh id, blocking substitution in scoped bodies.
     shadows: Vec<HashMap<usize, usize>>,
 }
 
 impl<'a, E: HasArena> SubstituterInner<'a, E> {
+    /// Create a new substituter backed by the given arena and substitution.
     pub fn new(arena: &'a mut E, subst: &'a SubstitutionV2) -> Self {
         Self {
             inner: TypedBuilder::new(arena),

@@ -3,7 +3,7 @@
 
 //! This module handles expansions of global definitions.
 //!
-//! A global substitution operation expands global definitions, invoking [`Substitute::subst`]
+//! A global substitution operation expands global definitions, invoking local substitution
 //! whenever necessary. The [`GlobalSubst`] trait provides the main entry point via
 //! `.gsubst(names, context)`, which expands the specified global definitions on the fly.
 
@@ -27,6 +27,7 @@ use yaspar::ast::Keyword;
 ///
 /// This trait implements substitutions by expanding the bodies of names during substitutions.
 pub trait GlobalSubst<E> {
+    /// The type produced by the substitution.
     type Out;
 
     /// Apply global substitutions with an iterable of specific names of global definitions to expand.
@@ -34,6 +35,7 @@ pub trait GlobalSubst<E> {
     where
         S: AllocatableString<Arena>;
 
+    /// Like [`gsubst`](Self::gsubst), but accepts a pre-allocated set of names.
     fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut E) -> Self::Out;
 
     /// Apply global substitutions to all global definitions
@@ -113,9 +115,16 @@ impl GlobalSubst<Context> for Term {
     }
 }
 
+/// Memoized, stack-safe global definition expander. Use [`GlobalSubstituter::create`] to construct.
 pub type GlobalSubstituter<'a> = Memoize<GlobalSubstituterInner<'a>, HashMap<Term, Term>>;
 
 impl<'a> GlobalSubstituter<'a> {
+    /// Create a new memoized global substituter.
+    ///
+    /// - `ctx`: the context holding global definitions.
+    /// - `global_names`: the set of names to expand.
+    /// - `block`: names to block from expansion (e.g. to prevent infinite recursion).
+    /// - `global_def_cache`: shared cache for resolved function definitions.
     pub fn create(
         ctx: &'a mut Context,
         global_names: &'a HashSet<Str>,
@@ -144,6 +153,7 @@ pub struct GlobalSubstituterInner<'a> {
 }
 
 impl<'a> GlobalSubstituterInner<'a> {
+    /// Create a child substituter that additionally blocks the given names from expansion.
     pub fn with_block<'b>(&'b mut self, block: &'b HashSet<Str>) -> GlobalSubstituterInner<'b>
     where
         'a: 'b,

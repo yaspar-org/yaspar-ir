@@ -706,7 +706,7 @@ Currently, the crate provides the following functionalities:
    functionality
    introduces let-bindings to terms, so that they can be compactly printed with let-bindings inserted for sub-terms
    appearing multiple times.
-9. Global and local substitutions; see `ast::Substitute` and `ast::GlobalSubst`.
+9. Global and local substitutions; see `ast::SubstituteV2` and `ast::GlobalSubst`.
 10. Stack-free recursors: see `ast::TermRecursor`, `ast::TypedTermRecursor`, `ast::u::UntypedTermRecursor` and `ast::Memoize`.
     This functionality provides a stack-free, visitor-based implementation of a depth first traversal of `Term`s. General
     recursions are still available, but for deeply nested terms, general recursions could hit the stack limit of the

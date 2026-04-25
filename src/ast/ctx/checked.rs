@@ -180,6 +180,9 @@ pub trait CheckedApi: HasArena {
     }
 
     /// Return a representation of a local variable with the name `name`, if exists.
+    /// Look up a local variable by name and return its [`Local`] representation.
+    ///
+    /// Returns `Err` if the name is not in scope or does not refer to a local variable.
     fn typed_local<S>(&mut self, name: S) -> TC<Local>
     where
         S: AllocatableString<Arena>,

@@ -95,6 +95,7 @@ impl<'a, 'b> LetContext<'a, 'b> {
         Ok(self)
     }
 
+    /// Return the variable bindings introduced directly by this let scope.
     pub fn get_direct_bindings(&self) -> &[VarBinding<Str, Sort>] {
         self.inner.get_direct_bindings()
     }

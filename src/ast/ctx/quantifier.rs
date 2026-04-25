@@ -68,6 +68,7 @@ impl<'a, 'b> QuantifierContext<'a, 'b> {
         Ok(self)
     }
 
+    /// Return the variable bindings introduced directly by this quantifier scope.
     pub fn get_direct_bindings(&self) -> &[VarBinding<Str, Sort>] {
         self.0.get_direct_bindings()
     }
