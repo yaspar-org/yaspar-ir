@@ -28,23 +28,26 @@
 //!
 //! For expanding global definitions (e.g. `define-fun` bodies), see [`crate::ast::gsubst`].
 
-use crate::allocator::TermAllocator;
+use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
-use crate::ast::{ATerm, Arena, Attribute, HasArena, HasArenaAlt, PatternArm, Str, Term};
-use crate::containers::MemLinkedList;
+use crate::ast::{
+    ATerm, Arena, Attribute, Constant, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt,
+    Local, Memoize, Monomorphization, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, Term,
+    TermRecursor, TypedBuilder, TypedTermRecursor,
+};
+use crate::containers::{Mapping, MemLinkedList};
 use crate::raw::alg::rec::Bottom;
-use crate::raw::alg::{Constant, Local, QualifiedIdentifier};
 use crate::raw::instance;
 use crate::traits::{AllocatableString, Repr};
+use delegate::delegate;
 use std::collections::HashMap;
 use yaspar::ast::Keyword;
-
-use crate::ast::{Sort, TermRecursor, TypedTermRecursor};
 
 /// A mapping from variable names to replacement terms.
 ///
 /// Create with [`Substitution::new`] (from name–term pairs) or [`Substitution::empty`].
 /// Apply to a term via the [`Substitute`] trait.
+#[deprecated = "this type is to be replaced in 2.7.4"]
 pub struct Substitution(HashMap<Str, Option<Term>>);
 
 impl Substitution {
@@ -95,6 +98,7 @@ impl Default for Substitution {
 /// Apply a substitution to `Self`.
 ///
 /// Note that it is the caller's responsibility to maintain well-sortedness invariance.
+#[deprecated = "this trait is to be replaced in 2.7.4"]
 pub trait Substitute<E> {
     fn subst(&self, subst: &Substitution, env: &mut E) -> Self;
 }
@@ -279,176 +283,149 @@ where
     }
 }
 
-/// Stack-safe local substitution using [`TermRecursor`].
+/// A mapping from variable names to replacement terms.
 ///
-/// Replaces local variables by name according to a [`Substitution`]. Binders (`let`, `forall`,
-/// `exists`, `match`) shadow substitutions for re-bound names. Unlike [`LetEliminatorInner`],
-/// let-bindings are preserved — only the RHS values are recursed and the body sees shadows.
-pub struct Substituter<'a, E> {
-    arena: &'a mut E,
-    /// The base substitution (name → replacement term).
-    subst: &'a Substitution,
-    /// Shadow stack: each frame maps names to `None` to block substitution in scoped bodies.
-    shadows: Vec<HashMap<Str, ()>>,
+/// Create with [`SubstitutionV2::new`] (from name–term pairs) or [`SubstitutionV2::empty`].
+/// Apply to a term via the [`SubstituteV2`] trait.
+pub struct SubstitutionV2(HashMap<usize, Term>);
+
+/// Apply a substitution to `Self`.
+///
+/// Note that it is the caller's responsibility to maintain well-sortedness invariance.
+pub trait SubstituteV2<E> {
+    fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self;
 }
 
-impl<'a, E: HasArena> Substituter<'a, E> {
-    pub fn new(arena: &'a mut E, subst: &'a Substitution) -> Self {
+impl<E> SubstituteV2<E> for Term
+where
+    E: HasArena,
+{
+    fn subst(&self, subst: &SubstitutionV2, env: &mut E) -> Self {
+        Substituter::create(env, subst).recurse_on_term_no_err(self)
+    }
+}
+
+pub type Substituter<'a, E> = Memoize<SubstituterInner<'a, E>, HashMap<Term, Term>>;
+
+impl<'a, E> Substituter<'a, E>
+where
+    E: HasArena,
+{
+    pub fn create(env: &'a mut E, subst: &'a SubstitutionV2) -> Self {
+        Memoize::new(SubstituterInner::new(env, subst))
+    }
+}
+
+/// Stack-safe local substitution using [`TermRecursor`].
+///
+/// Replaces local variables by name according to a [`SubstitutionV2`]. Binders (`let`, `forall`,
+/// `exists`, `match`) shadow substitutions for re-bound names. Unlike [`LetEliminatorInner`],
+/// let-bindings are preserved — only the RHS values are recursed and the body sees shadows.
+pub struct SubstituterInner<'a, E> {
+    inner: TypedBuilder<'a, E>,
+    /// The base substitution (name → replacement term).
+    subst: &'a SubstitutionV2,
+    /// Shadow stack: each frame maps local variable id to a fresh id and block substitution in scoped bodies.
+    shadows: Vec<HashMap<usize, usize>>,
+}
+
+impl<'a, E: HasArena> SubstituterInner<'a, E> {
+    pub fn new(arena: &'a mut E, subst: &'a SubstitutionV2) -> Self {
         Self {
-            arena,
+            inner: TypedBuilder::new(arena),
             subst,
             shadows: Vec::new(),
         }
     }
 
-    /// Look up a variable name. Returns `Some(term)` if substitution applies,
-    /// `None` if shadowed or not in the substitution.
-    fn lookup(&self, name: &Str) -> Option<Term> {
-        // Check shadows from innermost to outermost
-        for frame in self.shadows.iter().rev() {
-            if frame.contains_key(name) {
-                return None; // shadowed
-            }
-        }
-        // Fall through to the base substitution
-        self.subst.0.get(name).and_then(|v| v.clone())
-    }
-
-    fn push_shadow<T>(&mut self, names: impl Iterator<Item = T>, f: impl Fn(&T) -> Str) {
-        self.shadows.push(names.map(|n| (f(&n), ())).collect());
+    fn get_shadow(&self, id: usize) -> Option<usize> {
+        self.shadows.lookup(&id)
     }
 }
 
-impl<E: HasArena> TermRecursor<Str, Sort, Term> for Substituter<'_, E> {
+impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
     type Out = Term;
-    type Attr = instance::Attribute;
-    type Binding = Term;
-    type Pattern = ();
-    type Arm = instance::PatternArm;
+    type Attr = Attribute;
+    type Binding = VarBinding<Str, Term>;
+    type Pattern = Pattern;
+    type Arm = PatternArm;
     type Err = Bottom;
 
-    fn on_constant(
-        &mut self,
-        current: &Term,
-        _: &Constant<Str>,
-        _: &Option<Sort>,
-    ) -> Result<Term, Bottom> {
+    delegate! {
+        to self.inner {
+            fn on_constant(&mut self, current: &Term, constant: &Constant, sort: &Option<Sort>) -> Result<Term, Bottom>;
+            fn on_global(&mut self, current: &Term, id: &QualifiedIdentifier, sort: &Option<Sort>) -> Result<Term, Bottom>;
+            fn on_app(&mut self, current: &Term, f: &QualifiedIdentifier, args: &[Term], sort: &Option<Sort>, recs: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_match(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: Self::Out, cases_rec: Vec<Self::Arm>) -> Result<Term, Bottom>;
+            fn on_annotated(&mut self, current: &Term, t: &Term, anns: &[Attribute], t_rec: Term, anns_rec: Vec<Attribute>) -> Result<Term, Bottom>;
+            fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Attribute, Bottom>;
+            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &Constant) -> Result<Attribute, Bottom>;
+            fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
+            fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
+            fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
+            fn on_distinct(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_and(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_or(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_xor(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
+            fn on_not(&mut self, current: &Term, t: &Term, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_implies(&mut self, current: &Term, ts: &[Term], t: &Term, ts_rec: Vec<Term>, t_rec: Term) -> Result<Term, Bottom>;
+            fn on_ite(&mut self, current: &Term, b: &Term, t: &Term, e: &Term, b_rec: Term, t_rec: Term, e_rec: Term) -> Result<Term, Bottom>;
+        }
+    }
+
+    fn on_local(&mut self, current: &Term, id: &Local) -> Result<Term, Bottom> {
+        if let Some(new_id) = self.get_shadow(id.id) {
+            let new_loc = Local {
+                id: new_id,
+                symbol: id.symbol.clone(),
+                sort: id.sort.clone(),
+            };
+
+            return Ok(self.inner.local(new_loc));
+        }
+        if let Some(t) = self.subst.0.lookup(&id.id) {
+            return Ok(t);
+        }
         Ok(current.clone())
-    }
-
-    fn on_global(
-        &mut self,
-        current: &Term,
-        _: &QualifiedIdentifier<Str, Sort>,
-        _: &Option<Sort>,
-    ) -> Result<Term, Bottom> {
-        Ok(current.clone())
-    }
-
-    fn on_local(&mut self, current: &Term, id: &Local<Str, Sort>) -> Result<Term, Bottom> {
-        Ok(self.lookup(&id.symbol).unwrap_or_else(|| current.clone()))
-    }
-
-    fn on_app(
-        &mut self,
-        _: &Term,
-        id: &QualifiedIdentifier<Str, Sort>,
-        _: &[Term],
-        s: &Option<Sort>,
-        recs: Vec<Term>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().app(id.clone(), recs, s.clone()))
-    }
-
-    fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().eq(a, b))
-    }
-
-    fn on_distinct(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().distinct(recs))
-    }
-
-    fn on_and(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().and(recs))
-    }
-
-    fn on_or(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().or(recs))
-    }
-
-    fn on_xor(&mut self, _: &Term, _: &[Term], recs: Vec<Term>) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().xor(recs))
-    }
-
-    fn on_not(&mut self, _: &Term, _: &Term, r: Term) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().not(r))
-    }
-
-    fn on_implies(
-        &mut self,
-        _: &Term,
-        _: &[Term],
-        _: &Term,
-        ps: Vec<Term>,
-        c: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().implies(ps, c))
-    }
-
-    fn on_ite(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        _: &Term,
-        b: Term,
-        t: Term,
-        e: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().ite(b, t, e))
     }
 
     // --- Let: RHS is recursed normally, body gets shadows for bound names ---
 
     fn on_let_binding(
         &mut self,
-        _: &Term,
-        _: &[VarBinding<Str, Term>],
-        _: &Term,
-        _: usize,
-        rec: Term,
-    ) -> Result<Term, Bottom> {
-        Ok(rec)
+        current: &Term,
+        vs: &[VarBinding<Str, Term>],
+        body: &Term,
+        binding_idx: usize,
+        binding_rec: Term,
+    ) -> Result<Self::Binding, Bottom> {
+        let new_id = self.inner.new_local();
+        let v = &vs[binding_idx];
+        Ok(VarBinding(v.0.clone(), new_id, binding_rec))
     }
-
-    /// Shadow the let-bound variable names before entering the body.
     fn setup_let_scope(
         &mut self,
-        _: &Term,
+        current: &Term,
         vs: &[VarBinding<Str, Term>],
-        _: &Term,
-        _: &[Term],
+        body: &Term,
+        vs_rec: &[Self::Binding],
     ) -> Result<(), Bottom> {
-        self.push_shadow(vs.iter(), |v| v.0.clone());
+        self.shadows
+            .push(vs.iter().zip(vs_rec).map(|(v1, v2)| (v1.1, v2.1)).collect());
         Ok(())
     }
 
-    /// Rebuild the let with recursed bindings and body, then pop the shadow.
     fn on_let(
         &mut self,
-        _: &Term,
+        current: &Term,
         vs: &[VarBinding<Str, Term>],
-        _: &Term,
-        vs_rec: Vec<Term>,
-        body: Term,
+        body: &Term,
+        vs_rec: Vec<Self::Binding>,
+        body_rec: Term,
     ) -> Result<Term, Bottom> {
         self.shadows.pop();
-        let nbindings = vs
-            .iter()
-            .zip(vs_rec)
-            .map(|(v, r)| VarBinding(v.0.clone(), v.1, r))
-            .collect();
-        Ok(self.arena.arena().let_term(nbindings, body))
+        Ok(self.inner.let_term(vs_rec, body_rec))
     }
 
     // --- Quantifiers: shadow bound names ---
@@ -460,118 +437,105 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for Substituter<'_, E> {
         _: &Term,
         _: bool,
     ) -> Result<(), Bottom> {
-        self.push_shadow(vs.iter(), |v| v.0.clone());
+        self.shadows
+            .push(vs.iter().map(|v| (v.1, self.inner.new_local())).collect());
         Ok(())
     }
 
     fn on_forall(
         &mut self,
-        _: &Term,
+        current: &Term,
         vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Term,
+        body: &Term,
+        body_rec: Term,
     ) -> Result<Term, Bottom> {
-        self.shadows.pop();
-        Ok(self.arena.arena().forall(vs.to_vec(), body))
+        let map = self.shadows.pop().unwrap();
+        let new_vs = vs
+            .iter()
+            .map(|v| VarBinding(v.0.clone(), *map.get(&v.1).unwrap(), v.2.clone()))
+            .collect();
+        Ok(self.inner.forall(new_vs, body_rec))
     }
 
     fn on_exists(
         &mut self,
-        _: &Term,
+        current: &Term,
         vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Term,
+        body: &Term,
+        body_rec: Term,
     ) -> Result<Term, Bottom> {
-        self.shadows.pop();
-        Ok(self.arena.arena().exists(vs.to_vec(), body))
+        let map = self.shadows.pop().unwrap();
+        let new_vs = vs
+            .iter()
+            .map(|v| VarBinding(v.0.clone(), *map.get(&v.1).unwrap(), v.2.clone()))
+            .collect();
+        Ok(self.inner.exists(new_vs, body_rec))
     }
 
     // --- Match: shadow pattern-bound names ---
 
     fn setup_match_case_scope(
         &mut self,
-        _: &Term,
-        _: &Term,
-        cases: &[instance::PatternArm],
-        _: &Term,
-        idx: usize,
-    ) -> Result<(), Bottom> {
-        self.push_shadow(cases[idx].pattern.variables().into_iter(), |v| (*v).clone());
-        Ok(())
+        current: &Term,
+        scrutinee: &Term,
+        cases: &[PatternArm],
+        scrutinee_rec: &Self::Out,
+        case_idx: usize,
+    ) -> Result<Pattern, Bottom> {
+        let (map, pat) = match &cases[case_idx].pattern {
+            Pattern::Wildcard(None) => (Default::default(), Pattern::Wildcard(None)),
+            Pattern::Wildcard(Some((name, id))) => {
+                let new_id = self.inner.new_local();
+                (
+                    HashMap::from([(*id, new_id)]),
+                    Pattern::Wildcard(Some((name.clone(), new_id))),
+                )
+            }
+            Pattern::Ctor(ctor) => (Default::default(), Pattern::Ctor(ctor.clone())),
+            Pattern::Applied { ctor, arguments } => {
+                let mut new_args = vec![];
+                let mut map = HashMap::new();
+                for a in arguments {
+                    match a {
+                        None => {
+                            new_args.push(None);
+                        }
+                        Some((name, old_id)) => {
+                            let new_id = self.inner.new_local();
+                            new_args.push(Some((name.clone(), new_id)));
+                            map.insert(*old_id, new_id);
+                        }
+                    }
+                }
+                (
+                    map,
+                    Pattern::Applied {
+                        ctor: ctor.clone(),
+                        arguments: new_args,
+                    },
+                )
+            }
+        };
+        self.shadows.push(map);
+        Ok(pat)
     }
 
     fn on_match_arm(
         &mut self,
-        _: &Term,
-        _: &Term,
-        cases: &[instance::PatternArm],
+        current: &Term,
+        scrutinee: &Term,
+        cases: &[PatternArm],
         scrutinee_rec: &Self::Out,
-        idx: usize,
-        _: (),
-        body: Term,
-    ) -> Result<instance::PatternArm, Bottom> {
+        case_idx: usize,
+        current_pattern: Pattern,
+        arm: Term,
+    ) -> Result<PatternArm, Bottom> {
         self.shadows.pop();
-        Ok(instance::PatternArm {
-            pattern: cases[idx].pattern.clone(),
-            body,
+        Ok(PatternArm {
+            pattern: current_pattern,
+            body: arm,
         })
-    }
-
-    fn on_match(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[instance::PatternArm],
-        scrutinee: Term,
-        arms: Vec<instance::PatternArm>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().matching(scrutinee, arms))
-    }
-
-    // --- Annotated ---
-
-    fn on_annotated(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[instance::Attribute],
-        r: Term,
-        anns: Vec<instance::Attribute>,
-    ) -> Result<Term, Bottom> {
-        Ok(self.arena.arena().annotated(r, anns))
-    }
-
-    fn on_attribute_keyword(&mut self, kw: &Keyword) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Keyword(kw.clone()))
-    }
-
-    fn on_attribute_constant(
-        &mut self,
-        kw: &Keyword,
-        c: &Constant<Str>,
-    ) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Constant(kw.clone(), c.clone()))
-    }
-
-    fn on_attribute_symbol(
-        &mut self,
-        kw: &Keyword,
-        s: &Str,
-    ) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Symbol(kw.clone(), s.clone()))
-    }
-
-    fn on_attribute_named(&mut self, name: &Str) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Named(name.clone()))
-    }
-
-    fn on_attribute_pattern(
-        &mut self,
-        _: &[Term],
-        recs: Vec<Term>,
-    ) -> Result<instance::Attribute, Bottom> {
-        Ok(instance::Attribute::Pattern(recs))
     }
 }
 
-impl<E: HasArena> TypedTermRecursor for Substituter<'_, E> {}
+impl<E: HasArena> TypedTermRecursor for SubstituterInner<'_, E> {}

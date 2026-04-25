@@ -4,8 +4,8 @@
 use crate::allocator::TermAllocator;
 use crate::ast::alg::VarBinding;
 use crate::ast::{
-    Arena, Attribute, Bottom, Constant, HasArena, Local, PatternArm, QualifiedIdentifier, Sort,
-    Str, Term, TermRecursor, TypedTermRecursor,
+    Arena, Attribute, Bottom, Constant, HasArena, Local, Pattern, PatternArm, QualifiedIdentifier,
+    Sort, Str, Term, TermRecursor, TypedTermRecursor,
 };
 use yaspar::ast::Keyword;
 
@@ -83,7 +83,7 @@ where
     type Out = Term;
     type Attr = Attribute;
     type Binding = VarBinding<Str, Term>;
-    type Pattern = ();
+    type Pattern = Pattern;
     type Arm = PatternArm;
     type Err = Bottom;
 
@@ -187,11 +187,11 @@ where
         &mut self,
         _current: &Term,
         _scrutinee: &Term,
-        _cases: &[PatternArm],
+        cases: &[PatternArm],
         _scrutinee_rec: &Self::Out,
-        _case_idx: usize,
+        case_idx: usize,
     ) -> Result<Self::Pattern, Bottom> {
-        Ok(())
+        Ok(cases[case_idx].pattern.clone())
     }
 
     fn on_match_arm(
@@ -201,11 +201,11 @@ where
         cases: &[PatternArm],
         _scrutinee_rec: &Self::Out,
         case_idx: usize,
-        _current_pattern: Self::Pattern,
+        current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Result<Self::Arm, Bottom> {
         Ok(PatternArm {
-            pattern: cases[case_idx].pattern.clone(),
+            pattern: current_pattern,
             body: arm,
         })
     }

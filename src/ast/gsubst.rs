@@ -12,7 +12,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::subst::{Substitute, Substitution};
 use crate::ast::{
     Arena, Attribute, Constant, Context, FetchSort, FunctionDef, HasArena, Local, Memoize,
-    Monomorphization, PatternArm, QualifiedIdentifier, Sort, Str, Term, TypedBuilder,
+    Monomorphization, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, Term, TypedBuilder,
 };
 use crate::ast::{TermRecursor, TypedTermRecursor};
 use crate::raw::alg::rec::Bottom;
@@ -158,7 +158,7 @@ impl TermRecursor<Str, Sort, Term> for GlobalSubstituterInner<'_> {
     type Out = Term;
     type Attr = Attribute;
     type Binding = VarBinding<Str, Term>;
-    type Pattern = ();
+    type Pattern = Pattern;
     type Arm = PatternArm;
     type Err = Bottom;
 
@@ -172,8 +172,8 @@ impl TermRecursor<Str, Sort, Term> for GlobalSubstituterInner<'_> {
             fn setup_quantifier_scope(&mut self, current: &Term, vs: &[VarBinding<Str, Sort>], t: &Term, is_forall: bool) -> Result<(), Bottom>;
             fn on_exists(&mut self, current: &Term, vs: &[VarBinding<Str, Sort>], t: &Term, t_rec: Term) -> Result<Term, Bottom>;
             fn on_forall(&mut self, current: &Term, vs: &[VarBinding<Str, Sort>], t: &Term, t_rec: Term) -> Result<Term, Bottom>;
-            fn setup_match_case_scope(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: &Self::Out, case_idx: usize) -> Result<(), Bottom>;
-            fn on_match_arm(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: &Self::Out, case_idx: usize, current_pattern: (), arm: Term) -> Result<PatternArm, Bottom>;
+            fn setup_match_case_scope(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: &Self::Out, case_idx: usize) -> Result<Pattern, Bottom>;
+            fn on_match_arm(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: &Self::Out, case_idx: usize, current_pattern: Pattern, arm: Term) -> Result<PatternArm, Bottom>;
             fn on_match(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: Self::Out, cases_rec: Vec<Self::Arm>) -> Result<Term, Bottom>;
             fn on_annotated(&mut self, current: &Term, t: &Term, anns: &[Attribute], t_rec: Term, anns_rec: Vec<Attribute>) -> Result<Term, Bottom>;
             fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Attribute, Bottom>;
