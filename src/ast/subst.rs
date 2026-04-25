@@ -1,6 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+// The legacy `Substitution` / `Substitute` API is deprecated but still implemented here.
+#![allow(deprecated)]
+
 //! Local substitution of variables in terms.
 //!
 //! This module provides [`Substitution`], a mapping from variable names to replacement terms,
@@ -31,13 +34,12 @@
 use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::{
-    ATerm, Arena, Attribute, Constant, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt,
-    Local, Memoize, Monomorphization, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, Term,
+    ATerm, Arena, Attribute, Constant, HasArena, HasArenaAlt,
+    Local, Memoize, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, Term,
     TermRecursor, TypedBuilder, TypedTermRecursor,
 };
 use crate::containers::{Mapping, MemLinkedList};
 use crate::raw::alg::rec::Bottom;
-use crate::raw::instance;
 use crate::traits::{AllocatableString, Repr};
 use delegate::delegate;
 use std::collections::HashMap;
@@ -452,9 +454,9 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
 
     fn on_let_binding(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Term>],
-        body: &Term,
+        _body: &Term,
         binding_idx: usize,
         binding_rec: Term,
     ) -> Result<Self::Binding, Bottom> {
@@ -464,9 +466,9 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
     }
     fn setup_let_scope(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Term>],
-        body: &Term,
+        _body: &Term,
         vs_rec: &[Self::Binding],
     ) -> Result<(), Bottom> {
         self.shadows
@@ -476,9 +478,9 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
 
     fn on_let(
         &mut self,
-        current: &Term,
-        vs: &[VarBinding<Str, Term>],
-        body: &Term,
+        _current: &Term,
+        _vs: &[VarBinding<Str, Term>],
+        _body: &Term,
         vs_rec: Vec<Self::Binding>,
         body_rec: Term,
     ) -> Result<Term, Bottom> {
@@ -502,9 +504,9 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
 
     fn on_forall(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Sort>],
-        body: &Term,
+        _body: &Term,
         body_rec: Term,
     ) -> Result<Term, Bottom> {
         let map = self.shadows.pop().unwrap();
@@ -517,9 +519,9 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
 
     fn on_exists(
         &mut self,
-        current: &Term,
+        _current: &Term,
         vs: &[VarBinding<Str, Sort>],
-        body: &Term,
+        _body: &Term,
         body_rec: Term,
     ) -> Result<Term, Bottom> {
         let map = self.shadows.pop().unwrap();
@@ -534,10 +536,10 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
 
     fn setup_match_case_scope(
         &mut self,
-        current: &Term,
-        scrutinee: &Term,
+        _current: &Term,
+        _scrutinee: &Term,
         cases: &[PatternArm],
-        scrutinee_rec: &Self::Out,
+        _scrutinee_rec: &Self::Out,
         case_idx: usize,
     ) -> Result<Pattern, Bottom> {
         let (map, pat) = match &cases[case_idx].pattern {
@@ -580,11 +582,11 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for SubstituterInner<'_, E> {
 
     fn on_match_arm(
         &mut self,
-        current: &Term,
-        scrutinee: &Term,
-        cases: &[PatternArm],
-        scrutinee_rec: &Self::Out,
-        case_idx: usize,
+        _current: &Term,
+        _scrutinee: &Term,
+        _cases: &[PatternArm],
+        _scrutinee_rec: &Self::Out,
+        _case_idx: usize,
         current_pattern: Pattern,
         arm: Term,
     ) -> Result<PatternArm, Bottom> {

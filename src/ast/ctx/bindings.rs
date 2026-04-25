@@ -95,6 +95,10 @@ impl<'a, 'b> LetContext<'a, 'b> {
         Ok(self)
     }
 
+    pub fn get_direct_bindings(&self) -> &[VarBinding<Str, Sort>] {
+        self.inner.get_direct_bindings()
+    }
+
     /// Consume the given context and produce a term of a let binding
     pub fn typed_let(mut self, body: Term) -> Term {
         self.inner.let_term(self.bindings, body)

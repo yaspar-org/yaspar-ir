@@ -198,9 +198,9 @@ where
         &mut self,
         _current: &Term,
         _scrutinee: &Term,
-        cases: &[PatternArm],
+        _cases: &[PatternArm],
         _scrutinee_rec: &Self::Out,
-        case_idx: usize,
+        _case_idx: usize,
         current_pattern: Self::Pattern,
         arm: Self::Out,
     ) -> Result<Self::Arm, Bottom> {

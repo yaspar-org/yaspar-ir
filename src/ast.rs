@@ -60,6 +60,7 @@ pub use crate::untyped as u;
 pub use boilerplates::TypedBuilder;
 pub use gsubst::{GlobalSubst, GlobalSubstituter, GlobalSubstituterInner};
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
+#[allow(deprecated)]
 pub use subst::{Substitute, Substituter, SubstituterInner, Substitution, SubstitutionV2};
 
 pub use crate::ast::letelim::{LetElim, LetEliminator, LetEliminatorInner};
