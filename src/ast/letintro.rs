@@ -551,11 +551,7 @@ where
                     let sort = t.get_sort(env);
                     let nt = t.let_intro_body(cell.clone(), binders, vars, true, env);
                     vs.push(VarBinding(symbol.clone(), id, nt.clone()));
-                    let loc = Local {
-                        id,
-                        symbol,
-                        sort,
-                    };
+                    let loc = Local { id, symbol, sort };
                     vars.insert(t.clone(), loc);
                 }
                 let res = rec(t, cell, binders, vars, env, bindings, 1 + i);

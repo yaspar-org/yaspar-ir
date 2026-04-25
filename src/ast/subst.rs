@@ -390,8 +390,7 @@ where
 /// Stack-safe local substitution using [`TermRecursor`].
 ///
 /// Replaces local variables by ID according to a [`SubstitutionV2`]. Binders (`let`, `forall`,
-/// `exists`, `match`) shadow substitutions for re-bound variables. Unlike [`LetEliminatorInner`],
-/// let-bindings are preserved — only the RHS values are recursed and the body sees shadows.
+/// `exists`, `match`) shadow substitutions for re-bound variables.
 pub struct SubstituterInner<'a, E> {
     inner: TypedBuilder<'a, E>,
     /// The base substitution (local id → replacement term).
