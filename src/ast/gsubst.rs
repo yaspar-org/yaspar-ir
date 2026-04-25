@@ -171,7 +171,7 @@ impl<'a> GlobalSubstituterInner<'a> {
     fn populate_cache(&mut self, sym: &Str) -> bool {
         if !self.global_def_cache.contains_key(sym) {
             if let Some(def) = self.inner.arena.get_definition(sym).cloned() {
-                let mut gsubster = self.with_block(&def.rec_deps);
+                let mut gsubster = Memoize::new(self.with_block(&def.rec_deps));
                 let ret = gsubster.recurse_on_term_no_err(&def.def.body);
 
                 // the only possible case is a parametric function
