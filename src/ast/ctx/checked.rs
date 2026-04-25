@@ -61,7 +61,7 @@ use crate::ast::ctx::recs::RecFunsContext;
 use crate::ast::utils::{is_term_bool, is_term_bool_alt};
 use crate::ast::{
     ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt,
-    IdentifierKind, RecFunc, SymbolQuote, alg,
+    IdentifierKind, Local, RecFunc, SymbolQuote, alg,
 };
 use crate::meta::WithMeta;
 use crate::raw::instance::{Command, Constant, Identifier, QualifiedIdentifier, Sort, Str, Term};
@@ -177,6 +177,17 @@ pub trait CheckedApi: HasArena {
     {
         let symb = name.allocate(self.arena());
         self.typed_identifier(QualifiedIdentifier::simple(symb))
+    }
+
+    /// Return a representation of a local variable with the name `name`, if exists.
+    fn typed_local<S>(&mut self, name: S) -> TC<Local>
+    where
+        S: AllocatableString<Arena>,
+    {
+        match self.typed_symbol(name)?.repr() {
+            ATerm::Local(loc) => Ok(loc.clone()),
+            t => Err(format!("TC: symbol `{}` is not a local term", t).into()),
+        }
     }
 
     /// Return a typed representation of the symbol `name` with a specific `sort`, if `name` is a
