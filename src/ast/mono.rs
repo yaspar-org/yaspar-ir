@@ -263,7 +263,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
 
     fn on_local(&mut self, current: &Term, l: &Local) -> Result<Term, Bottom> {
         Ok(if let Some(new_id) = self.lookup_new_id(&l.symbol, l.id) {
-            let new_sort = l.sort.as_ref().map(|s| self.mono_sort(s));
+            let new_sort = self.mono_sort(&l.sort);
             self.inner.arena().local(Local {
                 id: new_id,
                 symbol: l.symbol.clone(),
@@ -586,7 +586,7 @@ mod tests {
         let nil_sym = ctx.allocate_symbol("nil");
         let nil = ctx.global(
             alg::QualifiedIdentifier::simple_sorted(nil_sym, list_x.clone()),
-            Some(list_x),
+            Some(list_x.clone()),
         );
 
         let y_sym = ctx.allocate_symbol("y");
@@ -594,7 +594,7 @@ mod tests {
         let y_local = ctx.local(Local {
             id: y_id,
             symbol: y_sym.clone(),
-            sort: None,
+            sort: list_x,
         });
         let let_term = ctx.let_term(vec![VarBinding(y_sym, y_id, nil)], y_local);
 
@@ -621,7 +621,7 @@ mod tests {
         let var_local = ctx.local(Local {
             id: var_id,
             symbol: var_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
         let eq = ctx.eq(var_local.clone(), var_local);
         let forall = ctx.forall(vec![VarBinding(var_sym, var_id, x_sort)], eq);
@@ -649,7 +649,7 @@ mod tests {
         let var_local = ctx.local(Local {
             id: var_id,
             symbol: var_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
         let eq = ctx.eq(var_local.clone(), var_local);
         let exists = ctx.exists(vec![VarBinding(var_sym, var_id, x_sort)], eq);
@@ -675,7 +675,7 @@ mod tests {
         let a = ctx.local(Local {
             id: var_id,
             symbol: var_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
 
         let b_sym = ctx.allocate_symbol("b");
@@ -683,7 +683,7 @@ mod tests {
         let b = ctx.local(Local {
             id: b_id,
             symbol: b_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
 
         // (distinct a b)
@@ -717,14 +717,14 @@ mod tests {
         let a = ctx.local(Local {
             id: a_id,
             symbol: a_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
         let b_sym = ctx.allocate_symbol("b");
         let b_id = ctx.new_local();
         let b = ctx.local(Local {
             id: b_id,
             symbol: b_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
 
         let eq_ab = ctx.eq(a.clone(), b.clone());

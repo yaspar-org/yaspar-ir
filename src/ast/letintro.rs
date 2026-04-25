@@ -554,7 +554,7 @@ where
                     let loc = Local {
                         id,
                         symbol,
-                        sort: Some(sort),
+                        sort,
                     };
                     vars.insert(t.clone(), loc);
                 }

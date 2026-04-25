@@ -287,6 +287,7 @@ where
 ///
 /// Create with [`SubstitutionV2::new`] (from name–term pairs) or [`SubstitutionV2::empty`].
 /// Apply to a term via the [`SubstituteV2`] trait.
+#[derive(Clone, Debug)]
 pub struct SubstitutionV2(HashMap<usize, Term>);
 
 impl Default for SubstitutionV2 {
@@ -309,15 +310,23 @@ impl SubstitutionV2 {
     ///
     /// c.f. [Self::extend]
     pub fn push(&mut self, loc: Local, term: Term) {
-        self.0.insert(loc.id, term);
+        self.push_with_id(loc.id, term)
     }
 
     /// Push multiple bindings to the substitution
     ///
     /// c.f. [Self::push]
     pub fn extend(&mut self, bindings: impl IntoIterator<Item = (Local, Term)>) {
-        for (loc, term) in bindings {
-            self.0.insert(loc.id, term);
+        self.extend_with_id(bindings.into_iter().map(|(l, t)| (l.id, t)))
+    }
+
+    pub fn push_with_id(&mut self, loc_id: usize, term: Term) {
+        self.0.insert(loc_id, term);
+    }
+
+    pub fn extend_with_id(&mut self, bindings: impl IntoIterator<Item = (usize, Term)>) {
+        for (id, term) in bindings {
+            self.0.insert(id, term);
         }
     }
 }

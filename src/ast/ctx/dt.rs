@@ -601,7 +601,7 @@ pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Con
             let x_loc = env.local(Local {
                 id,
                 symbol: x_var.clone(),
-                sort: Some(current_sort.clone()),
+                sort: current_sort.clone(),
             });
             let body = env.app(qid, vec![x_loc], Some(bool_sort.clone()));
             env.insert_symbol(
