@@ -632,6 +632,12 @@ where
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VarBinding<Str, T>(pub Str, pub usize, pub T);
 
+impl<Str, So> From<Local<Str, So>> for VarBinding<Str, So> {
+    fn from(value: Local<Str, So>) -> Self {
+        Self(value.symbol, value.id, value.sort)
+    }
+}
+
 /// Represent terms in SMTLib
 ///
 /// Invariants below only apply for typed ASTs.
