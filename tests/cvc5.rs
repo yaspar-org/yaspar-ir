@@ -726,7 +726,7 @@ fn command_result_get_model() {
          (get-model)",
         &[("produce-models", "true")],
         |results| match results.last().unwrap() {
-            CommandResult::GetModel(m) => assert_eq!(m, "(\n)\n"),
+            CommandResult::GetModel(m) => assert_eq!(m, "(\n(define-fun x () Int 42)\n)\n"),
             other => panic!("expected GetModel, got {other:?}"),
         },
     );
@@ -786,6 +786,173 @@ fn command_result_get_option() {
         |results| match results.last().unwrap() {
             CommandResult::Info(s) => assert!(!s.is_empty()),
             other => panic!("expected Info, got {other:?}"),
+        },
+    );
+}
+
+/// get-model with multiple arity-0 uninterpreted sorts and a two-argument function.
+#[test]
+fn command_result_get_model_uninterpreted_sort_multi_arg_fun() {
+    with_script_results(
+        "(set-logic QF_UF)
+         (declare-sort U 0)
+         (declare-sort V 0)
+         (declare-fun f (U U) V)
+         (declare-const a U)
+         (declare-const b U)
+         (declare-const c V)
+         (assert (= (f a b) c))
+         (assert (not (= (f b a) c)))
+         (check-sat)
+         (get-model)",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetModel(m) => {
+                assert!(
+                    m.contains("define-fun"),
+                    "model should contain definitions: {m}"
+                );
+            }
+            other => panic!("expected GetModel, got {other:?}"),
+        },
+    );
+}
+
+/// get-model with a three-argument function over uninterpreted sorts.
+#[test]
+fn command_result_get_model_uninterpreted_sort_three_arg_fun() {
+    with_script_results(
+        "(set-logic QF_UF)
+         (declare-sort S 0)
+         (declare-fun g (S S S) S)
+         (declare-const a S)
+         (declare-const b S)
+         (declare-const c S)
+         (assert (= (g a b c) a))
+         (assert (not (= (g c b a) a)))
+         (check-sat)
+         (get-model)",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetModel(m) => {
+                assert!(
+                    m.contains("define-fun"),
+                    "model should contain definitions: {m}"
+                );
+            }
+            other => panic!("expected GetModel, got {other:?}"),
+        },
+    );
+}
+
+/// get-model with uninterpreted sorts mixed with integers and a multi-argument function.
+#[test]
+fn command_result_get_model_uninterpreted_sort_mixed_with_ints() {
+    with_script_results(
+        "(set-logic ALL)
+         (declare-sort T 0)
+         (declare-fun wrap (Int) T)
+         (declare-fun unwrap (T) Int)
+         (declare-fun combine (T T Int) T)
+         (declare-const a T)
+         (declare-const b T)
+         (assert (= (unwrap a) 42))
+         (assert (= (unwrap b) 7))
+         (assert (= (combine a b (+ (unwrap a) (unwrap b))) (wrap 49)))
+         (check-sat)
+         (get-model)",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetModel(m) => {
+                assert!(
+                    m.contains("define-fun"),
+                    "model should contain definitions: {m}"
+                );
+            }
+            other => panic!("expected GetModel, got {other:?}"),
+        },
+    );
+}
+
+/// get-model with arity-1 uninterpreted sort and a two-argument function.
+#[test]
+fn command_result_get_model_uninterpreted_sort_arity1() {
+    with_script_results(
+        "(set-logic QF_UF)
+         (declare-sort F 1)
+         (declare-sort U 0)
+         (declare-const a (F U))
+         (declare-const b (F U))
+         (declare-fun g ((F U) (F U)) Bool)
+         (assert (g a b))
+         (assert (not (g b a)))
+         (check-sat)
+         (get-model)",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetModel(m) => {
+                assert!(
+                    m.contains("define-fun"),
+                    "model should contain definitions: {m}"
+                );
+            }
+            other => panic!("expected GetModel, got {other:?}"),
+        },
+    );
+}
+
+/// get-model with arity-2 uninterpreted sort and projection functions.
+#[test]
+fn command_result_get_model_uninterpreted_sort_arity2() {
+    with_script_results(
+        "(set-logic QF_UF)
+         (declare-sort Pair 2)
+         (declare-sort A 0)
+         (declare-sort B 0)
+         (declare-fun mk (A B) (Pair A B))
+         (declare-fun fst ((Pair A B)) A)
+         (declare-fun snd ((Pair A B)) B)
+         (declare-const x A)
+         (declare-const y B)
+         (assert (= (fst (mk x y)) x))
+         (assert (= (snd (mk x y)) y))
+         (check-sat)
+         (get-model)",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetModel(m) => {
+                assert!(
+                    m.contains("define-fun"),
+                    "model should contain definitions: {m}"
+                );
+            }
+            other => panic!("expected GetModel, got {other:?}"),
+        },
+    );
+}
+
+/// get-model with nested parameterized uninterpreted sorts.
+#[test]
+fn command_result_get_model_uninterpreted_sort_nested() {
+    with_script_results(
+        "(set-logic QF_UF)
+         (declare-sort F 1)
+         (declare-sort U 0)
+         (declare-const a (F (F U)))
+         (declare-const b (F U))
+         (declare-fun h ((F (F U)) (F U)) (F U))
+         (assert (= (h a b) b))
+         (check-sat)
+         (get-model)",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetModel(m) => {
+                assert!(
+                    m.contains("define-fun"),
+                    "model should contain definitions: {m}"
+                );
+            }
+            other => panic!("expected GetModel, got {other:?}"),
         },
     );
 }

@@ -27,7 +27,6 @@ use crate::instantiate_ast;
 use crate::traits::{Allocatable, Contains, MetaData, Repr};
 use hashconsing::{HConsed, HConsign, HashConsign};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt::Display;
 
 type P<T> = HConsed<T>;
@@ -109,7 +108,6 @@ pub struct Arena {
     sort: HConsign<RSort>,
     term: HConsign<RTerm>,
     command: HConsign<RCommand>,
-    symbols: HashSet<Str>,
     var_counter: u128,
     lvar_id: usize,
 }
@@ -121,7 +119,6 @@ impl Arena {
             sort: HConsign::empty(),
             term: HConsign::empty(),
             command: HConsign::empty(),
-            symbols: Default::default(),
             var_counter: 0,
             lvar_id: 0,
         }
@@ -154,9 +151,7 @@ impl StrAllocator for Arena {
     }
 
     fn allocate_symbol(&mut self, s: &str) -> Self::Str {
-        let sym = self.allocate_str(strip_symbol_quote(s));
-        self.symbols.insert(sym.clone());
-        sym
+        self.allocate_str(strip_symbol_quote(s))
     }
 }
 
@@ -250,8 +245,8 @@ impl FreshVar for Arena {
         loop {
             // use `-` to avoid `bvX`, which is a bit vector literal.
             let candidate = format!("{}-{}", prefix, self.var_counter);
-            let sym = self.allocate_string(candidate);
-            if self.symbols.insert(sym.clone()) {
+            if !self.string.contains(&candidate) {
+                let sym = self.allocate_string(candidate);
                 return sym;
             }
             // here we know sym is already seen
