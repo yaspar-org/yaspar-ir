@@ -503,17 +503,28 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
     }
     fn on_let(
         &mut self,
+        current: &Term,
+        vs: &[VarBinding<Str, Term>],
+        body: &Term,
+        vs_rec: Vec<Self::Binding>,
+        body_rec: WithPattern<'tm>,
+    ) -> Res<WithPattern<'tm>> {
+        self.cleanup_let_scope_on_error(current, vs, body, vs_rec);
+        Ok(body_rec)
+    }
+
+    fn cleanup_let_scope_on_error(
+        &mut self,
         _current: &Term,
         _vs: &[VarBinding<Str, Term>],
         _body: &Term,
         vs_rec: Vec<Self::Binding>,
-        body_rec: WithPattern<'tm>,
-    ) -> Res<WithPattern<'tm>> {
+    ) {
         for (idx, _) in vs_rec {
             self.locals.remove(&idx);
         }
-        Ok(body_rec)
     }
+
     fn setup_quantifier_scope(
         &mut self,
         _current: &Term,
@@ -543,6 +554,17 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
         let bound = self.unbind_vars(vs, |v| &v.1)?;
         self.translate_quantifier_body(Kind::Forall, bound, t_rec)
     }
+
+    fn cleanup_quantifier_scope_on_error(
+        &mut self,
+        _current: &Term,
+        vs: &[VarBinding<Str, Sort>],
+        _t: &Term,
+        _is_forall: bool,
+    ) {
+        let _ = self.unbind_vars(vs, |v| &v.1);
+    }
+
     fn setup_match_case_scope(
         &mut self,
         _current: &Term,
@@ -651,6 +673,18 @@ impl<'tm> TermRecursor<Str, Sort, Term> for Cvc5EnvInner<'tm> {
             }
         }
     }
+
+    fn cleanup_match_case_scope_on_error(
+        &mut self,
+        _current: &Term,
+        _scrutinee: &Term,
+        cases: &[alg::PatternArm<Str, Term>],
+        _scrutinee_rec: Self::Out,
+        case_idx: usize,
+    ) {
+        let _ = self.unbind_vars(&cases[case_idx].pattern.variables_and_ids(), |v| &v.1);
+    }
+
     fn on_match(
         &mut self,
         _current: &Term,

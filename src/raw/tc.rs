@@ -712,6 +712,16 @@ where
         Ok(self.arena.let_term(vs_rec, body_rec))
     }
 
+    fn cleanup_let_scope_on_error(
+        &mut self,
+        current: &T,
+        _vs: &[VarBinding<St, T>],
+        _body: &T,
+        _vs_rec: Vec<Self::Binding>,
+    ) {
+        let _ = self.local.scope_pop(current);
+    }
+
     fn setup_quantifier_scope(
         &mut self,
         _current: &T,
@@ -760,6 +770,16 @@ where
             })?;
         is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
         Ok(self.arena.forall(sorts, t_rec))
+    }
+
+    fn cleanup_quantifier_scope_on_error(
+        &mut self,
+        current: &T,
+        _vs: &[VarBinding<St, So>],
+        _t: &T,
+        _is_forall: bool,
+    ) {
+        let _ = self.local.scope_pop(current);
     }
 
     fn setup_match_case_scope(
@@ -915,6 +935,17 @@ where
             pattern: current_pattern,
             body: arm,
         })
+    }
+
+    fn cleanup_match_case_scope_on_error(
+        &mut self,
+        current: &T,
+        _scrutinee: &T,
+        _cases: &[alg::PatternArm<St, T>],
+        _scrutinee_rec: Self::Out,
+        _case_idx: usize,
+    ) {
+        let _ = self.local.scope_pop(current);
     }
 
     fn on_match(
