@@ -1,0 +1,156 @@
+[
+  {
+    "path": "20180523-Reynolds/kaluza/unsat/big/2211.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/unsat/big/2212.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/addBinary/ece4225233f21dea9e54d3ac1c97a16052460aa05fa17e806926596e.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/canWin/9a916ddf6acafe76e2a7e7dc07fd3da18fef0ac0c46141a997569ecd.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/findTheDifference/6c86eea01d6ec93c5c28e40f69c233bd2e9e5399572c8ba873047224.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/lengthOfLongestSubstringTwoDistinct/5a19e718b18673d3a6ba8f4d32ce46ade2b0ee500f5530c2134f9e6d.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/minWindow/26a9a11ad7f6fd3e870551b52a686918157d7d03693ff86279bfda64.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/numJewelsInStones/44fc899e500f76ea5edc6b93cc9fba2c5f7051ff833f4225dbbcc220.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/restoreIpAddresses/4b494b88c3fae8bb421aa5b28aae47ee6b4f79901a28198e3638ec63.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/subdomainVisits/94f9db8d476d68c1247ace37f95cf458f4e2c16b71d2a6d962a23b20.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/validPalindrome/51f1d2523a7a19a9aaae8d25c516156d0db9a7b295a3c0955f366a83.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/validWordSquare/62755c61d8411e2750022e3afcd58019f154ab9762b0d9331cdbdeb4.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-Leetcode/wordPattern/e0b493fddfb70c2c884b326875bcc59b650c22ffa36874cbc549dd73.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/leetcode_int-numDecodings/72.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/leetcode_int-numDecodings/73.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/leetcode_int-validIPAddress/13.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/lib_int-datetime__parse_hh_mm_ss_ff/20.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/lib_int-datetime__parse_isoformat_date/7.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/lib_int-email__parsedate_tz/19.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/lib_int-http_parse_request/6.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_cvc4/lib_int-wsgiref_check_status/4.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "2019-full_str_int/py-conbyte_trauc/lib_int-wsgiref_check_status/4.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

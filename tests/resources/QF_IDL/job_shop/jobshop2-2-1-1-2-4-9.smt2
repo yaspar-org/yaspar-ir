@@ -1,0 +1,15 @@
+(set-info :smt-lib-version 2.6)
+(set-logic QF_IDL)
+(set-info :source |
+Job_Shop_Scheduling Problem from Papadimitriou-Steiglitz is translated by Hyondeuk Kim in SMT-LIB format benchmark
+|)
+(set-info :category "crafted")
+(set-info :status sat)
+(declare-fun s1_1 () Int)
+(declare-fun s1_2 () Int)
+(declare-fun s2_1 () Int)
+(declare-fun s2_2 () Int)
+(declare-fun ref () Int)
+(assert (let ((?v_1 (>= (- s1_1 s2_1) 3)) (?v_0 (>= (- s2_1 s1_1) 3)) (?v_3 (>= (- s1_2 s2_2) 3)) (?v_2 (>= (- s2_2 s1_2) 3))) (and (or ?v_1 ?v_0) (or ?v_0 ?v_1) (or ?v_3 ?v_2) (or ?v_2 ?v_3) (>= (- s1_2 s1_1) 3) (>= (- s2_2 s2_1) 3) (<= (- s1_2 ref) 6) (<= (- s2_2 ref) 6) (>= (- s1_1 ref) 0) (>= (- s2_1 ref) 0))))
+(check-sat)
+(exit)

@@ -1,0 +1,51 @@
+[
+  {
+    "path": "LCTES/fly-by-wire.locals.nosummaries.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "LCTES/fly-by-wire.locals.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "LCTES/cruise-control.nosummaries.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "LCTES/cruise-control.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "LCTES/smtopt.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "LCTES/tdf.locals.nosummaries.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "LCTES/tdf.locals.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

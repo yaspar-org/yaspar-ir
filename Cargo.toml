@@ -19,6 +19,7 @@ implicant-generation = ["cnf"]
 cvc5 = ["dep:cvc5"]
 cache = []
 none = []
+regression = ["all", "cvc5"]
 
 [dependencies]
 yaspar = "2.7"
@@ -43,3 +44,7 @@ crate-type = ["lib"]
 
 [package.metadata.docs.rs]
 features = ["all", "cvc5"]
+
+[dev-dependencies]
+serde_json = "1"
+dashu = { version = "0.4.2", features = ["serde", "num-traits", "num-order"] }
