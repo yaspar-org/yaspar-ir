@@ -18,10 +18,10 @@
 
 use serde::Deserialize;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::panic;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use yaspar_ir::ast::{ACommand, CommandAllocator, Context, LetElim, Repr, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
 
@@ -143,10 +143,7 @@ fn smtlib_regression() {
 
     // Partition tests into chunks for parallel execution
     let chunk_size = total.div_ceil(num_threads);
-    let chunks: Vec<Vec<_>> = tests
-        .chunks(chunk_size)
-        .map(|c| c.to_vec())
-        .collect();
+    let chunks: Vec<Vec<_>> = tests.chunks(chunk_size).map(|c| c.to_vec()).collect();
 
     let handles: Vec<_> = chunks
         .into_iter()
@@ -158,9 +155,8 @@ fn smtlib_regression() {
                 .spawn(move || {
                     let mut local_failures = Vec::new();
                     for (name, path, steps) in &chunk {
-                        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                            run_test(path, steps)
-                        }));
+                        let result =
+                            panic::catch_unwind(panic::AssertUnwindSafe(|| run_test(path, steps)));
                         match result {
                             Ok(Ok(())) => {
                                 passed.fetch_add(1, Ordering::Relaxed);
