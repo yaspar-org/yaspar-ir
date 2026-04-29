@@ -7,8 +7,6 @@
 //! then for each logic reads `tests/resources/<logic>/result.json` (a list of test
 //! cases), and runs them in parallel across available CPU cores.
 //!
-//! Run `tests/resources/setup.sh` first to download and unpack the benchmarks.
-//!
 //! This test only runs in release mode with the `regression` feature enabled:
 //! ```sh
 //! cargo test --release --features regression --test regression
