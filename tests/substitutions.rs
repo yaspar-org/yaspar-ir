@@ -3,8 +3,8 @@
 
 use dashu::integer::UBig;
 use yaspar_ir::ast::{
-    CheckedApi, Context, GlobalSubst, LetElim, LocalVarAllocator, ObjectAllocatorExt, SubstituteV2,
-    SubstitutionV2, Typecheck,
+    CheckedApi, Context, GlobalSubst, LetElim, Local, LocalVarAllocator, ObjectAllocatorExt,
+    StrAllocator, SubstituteV2, SubstitutionV2, Typecheck,
 };
 use yaspar_ir::untyped::UntypedAst;
 
@@ -16,11 +16,10 @@ fn test_substitutions() {
 
     let int = context.int_sort();
     let mut q_ctx = context
-        .build_quantifier_with_domain([("x", int.clone()), ("y", int)])
+        .build_quantifier_with_domain([("x", int.clone()), ("y", int.clone())])
         .unwrap();
     let bindings = q_ctx.get_direct_bindings();
     let x_local = bindings[0].clone().into();
-    let z_id = q_ctx.new_local(); // a non-existent local id
 
     let t = UntypedAst
         .parse_term_str("(* x y 3)")
@@ -33,7 +32,14 @@ fn test_substitutions() {
         .type_check(&mut q_ctx)
         .unwrap();
     let mut subst = SubstitutionV2::new([(x_local, plus)]);
-    subst.push_with_id(z_id, one);
+    let z_sym = q_ctx.allocate_symbol("z");
+    let z_id = q_ctx.new_local(); // a non-existent local id
+    let loc = Local {
+        id: z_id,
+        symbol: z_sym,
+        sort: int.clone(),
+    };
+    subst.push(loc, one);
     let t = t.subst(&subst, &mut q_ctx);
     assert_eq!(t.to_string(), "(* (+ 1 2) y 3)");
 
