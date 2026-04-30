@@ -561,7 +561,7 @@ impl Context {
     }
 
     /// c.f. [Self::defined_symbols]
-    #[deprecated = "this function is to be removed in 2.7.4 due to its bad naming; use [defined_symbols]"]
+    #[deprecated = "this function is to be removed in 2.7.4 due to its bad naming; use defined_symbols"]
     pub fn all_defined_symbols(&self) -> HashSet<Str> {
         self.defined_symbols()
     }
