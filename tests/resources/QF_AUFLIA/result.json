@@ -1,0 +1,156 @@
+[
+  {
+    "path": "cvc/pp-dmem.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "cvc/pp-TakenBranch-s2e.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt101358492275879472.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt1495354633285877311.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt1766380371263919774.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt2621433222940787538.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt3093696166632615469.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt3150137541310906277.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt3440074116434092548.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt3444773566975549937.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt393108595912720571.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt4503191635050547935.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt4537035296062250448.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt4885496405062058007.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt5657856502894956631.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt5732050528631778495.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt6416286979991758948.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt7147939896033940408.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt8833779138211845249.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt8974883641230246788.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt9106017864656048635.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20170829-Rodin/smt971450140125177067.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

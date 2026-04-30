@@ -92,6 +92,27 @@ jobs:
         env:
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
+  regression:
+    name: Regression Tests
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Setup cvc5
+        id: cvc5
+        uses: ./.github/actions/setup-cvc5
+      - uses: Swatinem/rust-cache@v2
+      - name: Run regression tests
+        run: cargo test --release --features regression --test regression
+        env:
+          CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
+
   lints:
     name: Lints
     runs-on: ubuntu-latest

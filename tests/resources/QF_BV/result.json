@@ -1,0 +1,156 @@
+[
+  {
+    "path": "Sage2/bench_4127.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Sage2/bench_9140.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/a240test0001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/a4test0001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/a5test0002.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/a77test0001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/a8test0001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/a97test0001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/a9test0002.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "bench_ab/b265test0001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "check2/bigHex.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "check2/bvnor.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "check2/bvsdiv.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "check2/bvsmod.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "check2/repeat.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "dwp_formulas/try3_true_functions_fse-bfs_yes.close_stdout_set_file_name.il.fse-bfs.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "dwp_formulas/try5_small_true_functions_dwp_yes.close_stdout_set_file_name.il.dwp.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sage/app7/bench_8501.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sage/app7/bench_8503.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sage/app7/bench_8504.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sage/app7/bench_8505.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sage/app7/bench_8507.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

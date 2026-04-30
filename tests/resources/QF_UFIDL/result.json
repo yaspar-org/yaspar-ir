@@ -1,0 +1,156 @@
+[
+  {
+    "path": "20210312-Bouvier/vlsat3_l87.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20210312-Bouvier/vlsat3_l98.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.600173.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.600181.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.600189.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.693706.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.693723.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.693740.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.877439.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.877456.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.877473.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.883173.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.883188.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.883203.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "TwoSquares/smtlib.883218.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "UCLID-pred/OOO/OOO0.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "UCLID-pred/ibm_cache/ibm_cache_full0.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "mathsat/EufLaArithmetic/vhard/vhard2.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "mathsat/EufLaArithmetic/vhard/vhard3.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "mathsat/EufLaArithmetic/vhard/vhard4.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "mathsat/EufLaArithmetic/vhard/vhard5.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "uclid/elf.rf6.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

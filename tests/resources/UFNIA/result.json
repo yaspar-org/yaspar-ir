@@ -1,0 +1,156 @@
+[
+  {
+    "path": "vcc-havoc/CWindowsCard.c.49.ExecuteInstruction.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "vcc-havoc/CWindowsCard.c.50.ExecuteInstruction.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/Fundamental_Theorem_Algebra/z3.760286.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.693076.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.693112.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.698169.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.756810.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.756838.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.756866.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.773492.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.773523.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.773554.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.775264.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.775288.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.775315.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.776976.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.776997.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.777018.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.840172.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.874089.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.879684.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "sledgehammer/TwoSquares/z3.879717.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

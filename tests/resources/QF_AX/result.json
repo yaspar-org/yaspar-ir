@@ -1,0 +1,156 @@
+[
+  {
+    "path": "storecomm/storecomm_t1_np_sf_ai_00060_003.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "storecomm/storecomm_t1_np_sf_ai_00060_004.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "storeinv/storeinv_invalid_t3_np_nf_ai_00002_001.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "storeinv/storeinv_t1_np_nf_ai_00002_001.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "storeinv/storeinv_t2_np_nf_ai_00001_001.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t1_np_nf_ai_00002_006.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t1_np_nf_ai_00003_001.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t1_np_nf_ai_00003_004.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t3_np_nf_ai_00002_002.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t3_np_nf_ai_00002_005.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t3_np_nf_ai_00002_009.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t3_np_nf_ai_00003_007.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_invalid_t3_np_nf_ai_00003_008.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t1_np_nf_ai_00002_003.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t1_np_nf_ai_00002_005.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t1_np_nf_ai_00003_008.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t2_np_nf_ai_00002_001.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t2_np_nf_ai_00002_002.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t2_np_nf_ai_00002_006.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t2_np_nf_ai_00003_001.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t2_np_nf_ai_00003_003.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "swap/swap_t2_np_nf_ai_00003_007.cvc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

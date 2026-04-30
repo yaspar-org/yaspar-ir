@@ -1,0 +1,156 @@
+[
+  {
+    "path": "asp/DisjunctiveScheduling/disjunctiveScheduling.in8.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "asp/DisjunctiveScheduling/disjunctiveScheduling.in9.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Averest/buble_sort/BubbleSort_safe_bgmc001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Averest/fast_max/FastMax_safe_bgmc001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Averest/insertion_sort/InsertionSort_safe_bgmc001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Averest/min_max/MinMax_safe_bgmc001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Averest/selection_sort/SelectionSort_safe_bgmc001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Averest/sorting_network/SortingNetwork4_safe_bgmc001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "Averest/sorting_network/SortingNetwork8_safe_bgmc001.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "asp/MazeGeneration/maze-generation-width=12-height=12-density=0.01-run=3.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "check/bignum_idl1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "check/int_incompleteness1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "job_shop/jobshop2-2-1-1-2-4-12.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "job_shop/jobshop2-2-1-1-2-4-9.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "job_shop/jobshop2-2-1-1-4-4-11.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "job_shop/jobshop2-2-1-1-4-4-12.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "queens_bench/n_queen/queen3-1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "queens_bench/n_queen/queen4-1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "queens_bench/super_queen/super_queen2-1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "queens_bench/super_queen/super_queen3-1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "queens_bench/toroidal_bench/toroidal_queen2-1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "queens_bench/toroidal_bench/toroidal_queen3-1.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

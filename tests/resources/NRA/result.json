@@ -1,0 +1,156 @@
+[
+  {
+    "path": "20220222-strassen-matrix-multiplication/strassen-hard.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20220222-strassen-matrix-multiplication/strassen-impossible.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/ETCS-d-braking-node1346.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/ETCS-d-braking-node2220.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/ETCS-essentials-live-range2.proof-node577.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/ETCS-essentials-live2.proof-node640.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/FTRM-entry-tang-feasible-node1796.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/bouncing-ball-simple-node5919.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/bouncing-ball-simple-node5980.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/controllability-lemma-disturbed-node4537.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/controllability-lemma-node1346.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/controllability-lemma-node2220.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/dynamic_reaction_to_static_bounds.proof-node819.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/dynamic_reaction_to_static_bounds.proof-node829.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/dynamic_reaction_to_static_bounds.proof-node839.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/dynamic_reaction_to_static_bounds.proof-node849.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/moving-point-node1721.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/moving-point-node2370.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/rbc-controllability-characterisation-node3299.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/to_left-node1505.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/to_right-node1083.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "keymaera/vsl.proof-node1351.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

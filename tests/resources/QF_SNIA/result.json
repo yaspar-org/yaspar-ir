@@ -1,0 +1,156 @@
+[
+  {
+    "path": "20180523-Reynolds/kaluza/sat/big/808.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/big/809.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1633.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1634.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1884.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1885.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1886.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1907.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1908.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1909.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1910.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1911.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/1997.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/2007.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/2008.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/2009.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20180523-Reynolds/kaluza/sat/small/2010.corecstrs.readable.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20200224-Wu-PyExZ3/5735c9082c3f9cd487c6376032029bb499ba1f87113dc9ca03adc6bc.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20200224-Wu-PyExZ3/bdcb3877984a55b540face066045c4642cba1bc553af78576a41a76e.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20200224-Wu-PyExZ3/dddb9cc1f86d5738fd85ffa1b430c4e9df9771c0fffa945b9b414772.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20200224-Wu-PyExZ3/e007cfdcf4dd61007107222cbedbb46ad161a945ab5ee0a68d3f585a.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "20200224-Wu-PyExZ3/f72b09bc9444f702ad7cdf3a9075754e71d673f3d134d9f485f6608a.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]

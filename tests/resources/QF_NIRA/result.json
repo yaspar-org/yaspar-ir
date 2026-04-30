@@ -1,0 +1,23 @@
+[
+  {
+    "path": "LCTES/miniflight.nosummaries.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "LCTES/miniflight.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  },
+  {
+    "path": "UltimateAutomizer/test_union_cast-1_true-unreach-call.i.smt2",
+    "steps": [
+      "typecheck",
+      "letelim"
+    ]
+  }
+]
