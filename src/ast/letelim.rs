@@ -45,10 +45,10 @@ pub trait LetElim<Env> {
 /// It can be wrapped with [`Memoize`] for caching.
 pub struct LetEliminatorInner<'a, E> {
     inner: TypedBuilder<'a, E>,
-    /// Environment stack: each frame maps `(name, id)` to the substituted term.
+    /// Environment stack: each frame maps a local variable id to the substituted term.
     /// Quantifier/match-bound variables are represented by frames with no entry
     /// (their locals simply won't be found, so they pass through unchanged).
-    env: Vec<HashMap<(Str, usize), Option<Term>>>,
+    env: Vec<HashMap<usize, Option<Term>>>,
 }
 
 /// Memoized, stack-safe let-eliminator. Use [`LetEliminator::create`] to construct.
@@ -65,14 +65,13 @@ where
         }
     }
 
-    /// Search the environment stack for a variable by `(name, id)`.
+    /// Search the environment stack for a variable by id.
     ///
     /// Returns `Some(Some(term))` for let-bound variables (substitute with `term`),
     /// `Some(None)` for quantifier/match-bound variables (do not substitute),
     /// or `None` if the variable is not in any scope.
-    fn lookup(&self, name: &Str, id: usize) -> Option<Option<Term>> {
-        let key = (name.clone(), id);
-        self.env.lookup(&key)
+    fn lookup(&self, id: usize) -> Option<Option<Term>> {
+        self.env.lookup(&id)
     }
 }
 
@@ -120,7 +119,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
     /// Look up the local variable in the environment. If it is let-bound (`Some(Some(t))`),
     /// return the substituted term. Otherwise (quantifier/match-bound or not found), keep as-is.
     fn on_local(&mut self, current: &Term, id: &Local) -> Result<Term, Bottom> {
-        Ok(match self.lookup(id.id_str(), id.id) {
+        Ok(match self.lookup(id.id) {
             Some(Some(t)) => t,
             _ => current.clone(),
         })
@@ -150,7 +149,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
         let frame = vs
             .iter()
             .zip(vs_rec.iter())
-            .map(|(v, r)| ((v.0.clone(), v.1), Some(r.clone())))
+            .map(|(v, r)| (v.1, Some(r.clone())))
             .collect();
         self.env.push(frame);
         Ok(())
@@ -180,8 +179,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
         _: &Term,
         _: bool,
     ) -> Result<(), Bottom> {
-        self.env
-            .push(vs.iter().map(|v| ((v.0.clone(), v.1), None)).collect());
+        self.env.push(vs.iter().map(|v| (v.1, None)).collect());
         Ok(())
     }
 
@@ -223,7 +221,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
                 .pattern
                 .variables_and_ids()
                 .into_iter()
-                .map(|tup| (tup, None))
+                .map(|(_, id)| (id, None))
                 .collect(),
         );
         Ok(())

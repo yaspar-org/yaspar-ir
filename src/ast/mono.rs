@@ -42,7 +42,7 @@ pub struct MonomorphizerInner<'a, E> {
     inner: TypedBuilder<'a, E>,
     subst: &'a SortSubst,
     /// Scoped old-id → new-id mappings. Each frame corresponds to a let, quantifier, or match arm.
-    env: Vec<HashMap<(Str, usize), usize>>,
+    env: Vec<HashMap<usize, usize>>,
 }
 
 pub type Monomorphizer<'a, E> = Memoize<MonomorphizerInner<'a, E>, HashMap<Term, Term>>;
@@ -163,7 +163,7 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     }
 
     fn mono_sort(&mut self, s: &Sort) -> Sort {
-        apply_subst(self.inner.arena(), self.subst, s)
+        s.monomorphize(self.subst, &mut self.inner)
     }
 
     fn mono_opt_sort(&mut self, s: &Option<Sort>) -> Option<Sort> {
@@ -175,9 +175,8 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     }
 
     /// Look up a local variable's new id from the env stack.
-    fn lookup_new_id(&self, name: &Str, id: usize) -> Option<usize> {
-        let key = (name.clone(), id);
-        self.env.lookup(&key)
+    fn lookup_new_id(&self, id: usize) -> Option<usize> {
+        self.env.lookup(&id)
     }
 
     /// Allocate new local IDs for a set of bindings and push a scope frame.
@@ -186,15 +185,15 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
             .iter()
             .map(|v| {
                 let new_id = self.inner.arena().new_local();
-                ((v.0.clone(), v.1), new_id)
+                (v.1, new_id)
             })
             .collect();
         self.env.push(frame);
     }
 
     /// Get the new id for a binding from the current top frame.
-    fn new_id_for(&self, name: &Str, old_id: usize) -> usize {
-        self.env.last().unwrap()[&(name.clone(), old_id)]
+    fn new_id_for(&self, old_id: usize) -> usize {
+        self.env.last().unwrap()[&old_id]
     }
 
     /// Monomorphize quantifier bindings: remap IDs and apply sort substitution.
@@ -202,13 +201,7 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     fn mono_quantifier_vars(&mut self, vs: &[VarBinding<Str, Sort>]) -> Vec<VarBinding<Str, Sort>> {
         let nvars = vs
             .iter()
-            .map(|v| {
-                VarBinding(
-                    v.0.clone(),
-                    self.new_id_for(&v.0, v.1),
-                    self.mono_sort(&v.2),
-                )
-            })
+            .map(|v| VarBinding(v.0.clone(), self.new_id_for(v.1), self.mono_sort(&v.2)))
             .collect();
         self.env.pop();
         nvars
@@ -262,7 +255,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
     }
 
     fn on_local(&mut self, current: &Term, l: &Local) -> Result<Term, Bottom> {
-        Ok(if let Some(new_id) = self.lookup_new_id(&l.symbol, l.id) {
+        Ok(if let Some(new_id) = self.lookup_new_id(l.id) {
             let new_sort = self.mono_sort(&l.sort);
             self.inner.arena().local(Local {
                 id: new_id,
@@ -324,7 +317,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         let nbindings = vs
             .iter()
             .zip(vs_rec)
-            .map(|(v, rec)| VarBinding(v.0.clone(), self.new_id_for(&v.0, v.1), rec))
+            .map(|(v, rec)| VarBinding(v.0.clone(), self.new_id_for(v.1), rec))
             .collect();
         self.env.pop();
         Ok(self.inner.arena().let_term(nbindings, body))
@@ -378,9 +371,9 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         let vars = cases[idx].pattern.variables_and_ids();
         let frame = vars
             .into_iter()
-            .map(|(name, old_id)| {
+            .map(|(_, old_id)| {
                 let new_id = self.inner.arena().new_local();
-                ((name, old_id), new_id)
+                (old_id, new_id)
             })
             .collect();
         self.env.push(frame);
