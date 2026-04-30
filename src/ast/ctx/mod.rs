@@ -560,6 +560,12 @@ impl Context {
         self.frame.sorts.get(name)
     }
 
+    /// c.f. [Self::defined_symbols]
+    #[deprecated = "this function is to be removed in 2.7.4 due to its bad naming; use [defined_symbols]"]
+    pub fn all_defined_symbols(&self) -> HashSet<Str> {
+        self.defined_symbols()
+    }
+
     /// Get all the symbols with a definition body
     ///
     /// This function is different from [Self::user_defined_symbols] in that it only returns the symbols

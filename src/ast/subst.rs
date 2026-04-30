@@ -328,12 +328,12 @@ impl SubstitutionV2 {
     }
 
     /// Push a binding by raw local variable ID.
-    pub fn push_with_id(&mut self, loc_id: usize, term: Term) {
+    pub(crate) fn push_with_id(&mut self, loc_id: usize, term: Term) {
         self.0.insert(loc_id, term);
     }
 
     /// Push multiple bindings by raw local variable IDs.
-    pub fn extend_with_id(&mut self, bindings: impl IntoIterator<Item = (usize, Term)>) {
+    pub(crate) fn extend_with_id(&mut self, bindings: impl IntoIterator<Item = (usize, Term)>) {
         for (id, term) in bindings {
             self.0.insert(id, term);
         }

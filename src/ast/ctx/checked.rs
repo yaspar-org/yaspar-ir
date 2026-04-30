@@ -179,7 +179,6 @@ pub trait CheckedApi: HasArena {
         self.typed_identifier(QualifiedIdentifier::simple(symb))
     }
 
-    /// Return a representation of a local variable with the name `name`, if exists.
     /// Look up a local variable by name and return its [`Local`] representation.
     ///
     /// Returns `Err` if the name is not in scope or does not refer to a local variable.
