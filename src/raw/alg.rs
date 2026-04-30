@@ -741,6 +741,35 @@ impl<Str, So, T> Term<Str, So, T> {
     pub fn is_constant(&self) -> bool {
         matches!(self, Term::Constant(_, _))
     }
+
+    /// Return an iterator of sub-terms
+    pub fn sub_terms(&self) -> impl Iterator<Item = &T> {
+        let r: Box<dyn Iterator<Item = &T>> = match self {
+            Term::Constant(_, _) | Term::Global(_, _) | Term::Local(_) => {
+                Box::new(std::iter::empty())
+            }
+            Term::App(_, ts, _)
+            | Term::Distinct(ts)
+            | Term::And(ts)
+            | Term::Or(ts)
+            | Term::Xor(ts) => Box::new(ts.iter()),
+            Term::Let(bindings, body) => Box::new(bindings.iter().map(|v| &v.2).chain([body])),
+            Term::Exists(_, t) | Term::Forall(_, t) | Term::Not(t) => Box::new(std::iter::once(t)),
+            Term::Matching(t, arms) => {
+                Box::new(std::iter::once(t).chain(arms.iter().map(|a| &a.body)))
+            }
+            Term::Annotated(t, annos) => {
+                Box::new(std::iter::once(t).chain(annos.iter().flat_map(|a| match a {
+                    Attribute::Pattern(ts) => ts.iter(),
+                    _ => [].iter(),
+                })))
+            }
+            Term::Eq(a, b) => Box::new([a, b].into_iter()),
+            Term::Implies(ts, t) => Box::new(ts.iter().chain(std::iter::once(t))),
+            Term::Ite(c, t, e) => Box::new([c, t, e].into_iter()),
+        };
+        r
+    }
 }
 
 impl<Str, So, T> From<Constant<Str>> for Term<Str, So, T> {

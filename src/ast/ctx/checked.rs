@@ -58,7 +58,8 @@ use crate::ast::ctx::fun::FunctionContext;
 use crate::ast::ctx::matching::MatchContext;
 use crate::ast::ctx::quantifier::QuantifierContext;
 use crate::ast::ctx::recs::RecFunsContext;
-use crate::ast::utils::{is_term_bool, is_term_bool_alt};
+use crate::ast::fv::is_closed;
+use crate::ast::utils::{is_quantifier_free, is_term_bool, is_term_bool_alt};
 use crate::ast::{
     ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, HasArena, HasArenaAlt,
     IdentifierKind, RecFunc, SymbolQuote, alg,
@@ -520,6 +521,9 @@ impl Context {
     pub fn typed_assert(&mut self, t: Term) -> TC<Command> {
         self.check_logic()?;
         is_term_bool(self, &t)?;
+        if !is_closed(&t) {
+            return Err(format!("TC: assertion {t} is expected to be closed!"));
+        }
         let mut acc = HashMap::new();
         self.scan_named(&t, &mut acc)?;
         for (n, t) in acc {
@@ -588,6 +592,11 @@ impl Context {
         let mut ts = vec![];
         for assumption in assumptions {
             is_term_bool(self, &assumption)?;
+            if !is_closed(&assumption) {
+                return Err(format!(
+                    "TC: assumption {assumption} is expected to be a closed term!"
+                ));
+            }
             ts.push(assumption);
         }
         Ok(self.check_sat_assuming(ts))
@@ -637,5 +646,15 @@ impl Context {
         };
         self.def_symbol(def)?;
         Ok(self.define_const(name, sort, body))
+    }
+
+    /// Return a typed [`Command`] for `get-value`
+    pub fn typed_get_value(&mut self, ts: impl IntoIterator<Item = Term>) -> TC<Command> {
+        let ts = ts.into_iter().collect::<Vec<_>>();
+        if ts.is_empty() {
+            return Err("get-value should contain at least one term!".into());
+        }
+        ts.iter().try_for_each(is_quantifier_free)?;
+        Ok(self.get_value(ts))
     }
 }
