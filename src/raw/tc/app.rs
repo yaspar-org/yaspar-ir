@@ -239,7 +239,7 @@ where
                 Ok(env.arena.local(alg::Local {
                     id: l,
                     symbol: symbol.clone(),
-                    sort: Some(s.clone()),
+                    sort: s.clone(),
                 }))
             }
         }

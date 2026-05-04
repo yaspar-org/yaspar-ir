@@ -10,12 +10,11 @@ use super::boilerplates::TypedBuilder;
 use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::{
-    Attribute, ConstructorDec, DatatypeDec, HasArena, HasArenaAlt, Local, QualifiedIdentifier,
-    Sort, Str, TC, Term,
+    Attribute, Constant, ConstructorDec, DatatypeDec, HasArena, HasArenaAlt, Local,
+    QualifiedIdentifier, Sort, Str, TC, Term,
 };
 use crate::ast::{Memoize, alg};
 use crate::containers::Mapping;
-use crate::raw::alg::Constant;
 use crate::raw::alg::rec::Bottom;
 use crate::raw::instance::PatternArm;
 use crate::raw::tc::unif::{SortSubst, apply_subst};
@@ -43,7 +42,7 @@ pub struct MonomorphizerInner<'a, E> {
     inner: TypedBuilder<'a, E>,
     subst: &'a SortSubst,
     /// Scoped old-id → new-id mappings. Each frame corresponds to a let, quantifier, or match arm.
-    env: Vec<HashMap<(Str, usize), usize>>,
+    env: Vec<HashMap<usize, usize>>,
 }
 
 pub type Monomorphizer<'a, E> = Memoize<MonomorphizerInner<'a, E>, HashMap<Term, Term>>;
@@ -164,7 +163,7 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     }
 
     fn mono_sort(&mut self, s: &Sort) -> Sort {
-        apply_subst(self.inner.arena(), self.subst, s)
+        s.monomorphize(self.subst, &mut self.inner)
     }
 
     fn mono_opt_sort(&mut self, s: &Option<Sort>) -> Option<Sort> {
@@ -176,9 +175,8 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     }
 
     /// Look up a local variable's new id from the env stack.
-    fn lookup_new_id(&self, name: &Str, id: usize) -> Option<usize> {
-        let key = (name.clone(), id);
-        self.env.lookup(&key)
+    fn lookup_new_id(&self, id: usize) -> Option<usize> {
+        self.env.lookup(&id)
     }
 
     /// Allocate new local IDs for a set of bindings and push a scope frame.
@@ -187,15 +185,15 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
             .iter()
             .map(|v| {
                 let new_id = self.inner.arena().new_local();
-                ((v.0.clone(), v.1), new_id)
+                (v.1, new_id)
             })
             .collect();
         self.env.push(frame);
     }
 
     /// Get the new id for a binding from the current top frame.
-    fn new_id_for(&self, name: &Str, old_id: usize) -> usize {
-        self.env.last().unwrap()[&(name.clone(), old_id)]
+    fn new_id_for(&self, old_id: usize) -> usize {
+        self.env.last().unwrap()[&old_id]
     }
 
     /// Monomorphize quantifier bindings: remap IDs and apply sort substitution.
@@ -203,13 +201,7 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     fn mono_quantifier_vars(&mut self, vs: &[VarBinding<Str, Sort>]) -> Vec<VarBinding<Str, Sort>> {
         let nvars = vs
             .iter()
-            .map(|v| {
-                VarBinding(
-                    v.0.clone(),
-                    self.new_id_for(&v.0, v.1),
-                    self.mono_sort(&v.2),
-                )
-            })
+            .map(|v| VarBinding(v.0.clone(), self.new_id_for(v.1), self.mono_sort(&v.2)))
             .collect();
         self.env.pop();
         nvars
@@ -229,7 +221,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
             fn on_match(&mut self, current: &Term, scrutinee: &Term, cases: &[PatternArm], scrutinee_rec: Self::Out, cases_rec: Vec<Self::Arm>) -> Result<Term, Bottom>;
             fn on_annotated(&mut self, current: &Term, t: &Term, anns: &[Attribute], t_rec: Term, anns_rec: Vec<Attribute>) -> Result<Term, Bottom>;
             fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Attribute, Bottom>;
-            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &crate::ast::alg::Constant<Str>) -> Result<Attribute, Bottom>;
+            fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &Constant) -> Result<Attribute, Bottom>;
             fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
@@ -246,12 +238,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
 
     // --- Leaves (custom: apply sort substitution) ---
 
-    fn on_constant(
-        &mut self,
-        _: &Term,
-        c: &Constant<Str>,
-        sort: &Option<Sort>,
-    ) -> Result<Term, Bottom> {
+    fn on_constant(&mut self, _: &Term, c: &Constant, sort: &Option<Sort>) -> Result<Term, Bottom> {
         let s = self.mono_opt_sort(sort);
         Ok(self.inner.arena().constant(c.clone(), s))
     }
@@ -268,8 +255,8 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
     }
 
     fn on_local(&mut self, current: &Term, l: &Local) -> Result<Term, Bottom> {
-        Ok(if let Some(new_id) = self.lookup_new_id(&l.symbol, l.id) {
-            let new_sort = l.sort.as_ref().map(|s| self.mono_sort(s));
+        Ok(if let Some(new_id) = self.lookup_new_id(l.id) {
+            let new_sort = self.mono_sort(&l.sort);
             self.inner.arena().local(Local {
                 id: new_id,
                 symbol: l.symbol.clone(),
@@ -330,7 +317,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         let nbindings = vs
             .iter()
             .zip(vs_rec)
-            .map(|(v, rec)| VarBinding(v.0.clone(), self.new_id_for(&v.0, v.1), rec))
+            .map(|(v, rec)| VarBinding(v.0.clone(), self.new_id_for(v.1), rec))
             .collect();
         self.env.pop();
         Ok(self.inner.arena().let_term(nbindings, body))
@@ -384,9 +371,9 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
         let vars = cases[idx].pattern.variables_and_ids();
         let frame = vars
             .into_iter()
-            .map(|(name, old_id)| {
+            .map(|(_, old_id)| {
                 let new_id = self.inner.arena().new_local();
-                ((name, old_id), new_id)
+                (old_id, new_id)
             })
             .collect();
         self.env.push(frame);
@@ -592,7 +579,7 @@ mod tests {
         let nil_sym = ctx.allocate_symbol("nil");
         let nil = ctx.global(
             alg::QualifiedIdentifier::simple_sorted(nil_sym, list_x.clone()),
-            Some(list_x),
+            Some(list_x.clone()),
         );
 
         let y_sym = ctx.allocate_symbol("y");
@@ -600,7 +587,7 @@ mod tests {
         let y_local = ctx.local(Local {
             id: y_id,
             symbol: y_sym.clone(),
-            sort: None,
+            sort: list_x,
         });
         let let_term = ctx.let_term(vec![VarBinding(y_sym, y_id, nil)], y_local);
 
@@ -627,7 +614,7 @@ mod tests {
         let var_local = ctx.local(Local {
             id: var_id,
             symbol: var_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
         let eq = ctx.eq(var_local.clone(), var_local);
         let forall = ctx.forall(vec![VarBinding(var_sym, var_id, x_sort)], eq);
@@ -655,7 +642,7 @@ mod tests {
         let var_local = ctx.local(Local {
             id: var_id,
             symbol: var_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
         let eq = ctx.eq(var_local.clone(), var_local);
         let exists = ctx.exists(vec![VarBinding(var_sym, var_id, x_sort)], eq);
@@ -681,7 +668,7 @@ mod tests {
         let a = ctx.local(Local {
             id: var_id,
             symbol: var_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
 
         let b_sym = ctx.allocate_symbol("b");
@@ -689,7 +676,7 @@ mod tests {
         let b = ctx.local(Local {
             id: b_id,
             symbol: b_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
 
         // (distinct a b)
@@ -723,14 +710,14 @@ mod tests {
         let a = ctx.local(Local {
             id: a_id,
             symbol: a_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
         let b_sym = ctx.allocate_symbol("b");
         let b_id = ctx.new_local();
         let b = ctx.local(Local {
             id: b_id,
             symbol: b_sym.clone(),
-            sort: Some(x_sort.clone()),
+            sort: x_sort.clone(),
         });
 
         let eq_ab = ctx.eq(a.clone(), b.clone());

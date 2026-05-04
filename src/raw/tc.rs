@@ -632,7 +632,7 @@ where
             Some((id, s)) => Ok(self.arena.local(alg::Local {
                 id,
                 symbol,
-                sort: Some(s),
+                sort: s,
             })),
         }
     }

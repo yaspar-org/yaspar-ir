@@ -292,9 +292,7 @@ pub struct Local<Str, So> {
     /// The variable name
     pub symbol: Str,
     /// The sort of local variable
-    ///
-    /// Invariant: this field must be `Some` in typed AST
-    pub sort: Option<So>,
+    pub sort: So,
 }
 
 impl<Str, So> Local<Str, So> {
@@ -309,7 +307,7 @@ impl<Str, So> From<VarBinding<Str, So>> for Local<Str, So> {
         Self {
             id: value.1,
             symbol: value.0,
-            sort: Some(value.2),
+            sort: value.2,
         }
     }
 }
@@ -633,6 +631,12 @@ where
 /// variable clashing.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VarBinding<Str, T>(pub Str, pub usize, pub T);
+
+impl<Str, So> From<Local<Str, So>> for VarBinding<Str, So> {
+    fn from(value: Local<Str, So>) -> Self {
+        Self(value.symbol, value.id, value.sort)
+    }
+}
 
 /// Represent terms in SMTLib
 ///

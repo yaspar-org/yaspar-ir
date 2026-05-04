@@ -55,6 +55,7 @@ impl Context {
             },
             #[cfg(feature = "cache")]
             caches: Caches {
+                global_def_cache: Default::default(),
                 #[cfg(feature = "cnf")]
                 cnf_cache: CNFCache::new(),
             },

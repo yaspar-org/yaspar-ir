@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dashu::integer::UBig;
-use yaspar_ir::ast::gsubst::GlobalSubst;
-use yaspar_ir::ast::subst::{Substitute, Substitution};
-use yaspar_ir::ast::{CheckedApi, Context, LetElim, ObjectAllocatorExt, Typecheck};
+use yaspar_ir::ast::{
+    CheckedApi, Context, GlobalSubst, LetElim, Local, LocalVarAllocator, ObjectAllocatorExt,
+    StrAllocator, SubstituteV2, SubstitutionV2, Typecheck,
+};
 use yaspar_ir::untyped::UntypedAst;
 
 #[test]
@@ -15,8 +16,11 @@ fn test_substitutions() {
 
     let int = context.int_sort();
     let mut q_ctx = context
-        .build_quantifier_with_domain([("x", int.clone()), ("y", int)])
+        .build_quantifier_with_domain([("x", int.clone()), ("y", int.clone())])
         .unwrap();
+    let bindings = q_ctx.get_direct_bindings();
+    let x_local = bindings[0].clone().into();
+
     let t = UntypedAst
         .parse_term_str("(* x y 3)")
         .unwrap()
@@ -27,7 +31,15 @@ fn test_substitutions() {
         .unwrap()
         .type_check(&mut q_ctx)
         .unwrap();
-    let subst = Substitution::new([("x", plus), ("z", one)], &mut q_ctx);
+    let mut subst = SubstitutionV2::new([(x_local, plus)]);
+    let z_sym = q_ctx.allocate_symbol("z");
+    let z_id = q_ctx.new_local(); // a non-existent local id
+    let loc = Local {
+        id: z_id,
+        symbol: z_sym,
+        sort: int.clone(),
+    };
+    subst.push(loc, one);
     let t = t.subst(&subst, &mut q_ctx);
     assert_eq!(t.to_string(), "(* (+ 1 2) y 3)");
 
@@ -61,19 +73,22 @@ fn test_substitutions_shadow() {
     let mut q_ctx = context
         .build_quantifier_with_domain([("x", int.clone()), ("y", int)])
         .unwrap();
+    let x_local = q_ctx.get_direct_bindings()[0].clone().into();
+
     let plus = UntypedAst
         .parse_term_str("(+ 1 2)")
         .unwrap()
         .type_check(&mut q_ctx)
         .unwrap();
-    let subst = Substitution::new([("x", plus)], &mut q_ctx);
+    let subst = SubstitutionV2::new([(x_local, plus)]);
     let t = UntypedAst
         .parse_term_str("(forall ((x Int)) (= x 10))")
         .unwrap()
         .type_check(&mut q_ctx)
         .unwrap();
     let nt = t.subst(&subst, &mut q_ctx);
-    assert_eq!(nt, t);
+    // v2 substituter reassigns id for bound variables, so compare by string
+    assert_eq!(nt.to_string(), t.to_string());
 
     let t = UntypedAst
         .parse_term_str("(exists ((x Int)) (= x 10))")
@@ -81,7 +96,7 @@ fn test_substitutions_shadow() {
         .type_check(&mut q_ctx)
         .unwrap();
     let nt = t.subst(&subst, &mut q_ctx);
-    assert_eq!(nt, t);
+    assert_eq!(nt.to_string(), t.to_string());
 
     let t = UntypedAst
         .parse_term_str("(let ((x (* y 10))) (* x y 3))")
@@ -89,7 +104,7 @@ fn test_substitutions_shadow() {
         .type_check(&mut q_ctx)
         .unwrap();
     let nt = t.subst(&subst, &mut q_ctx);
-    assert_eq!(nt, t);
+    assert_eq!(nt.to_string(), t.to_string());
 
     let t = UntypedAst
         .parse_term_str("(xor (= x 5) (= y 10))")
@@ -131,7 +146,7 @@ fn test_global_substitutions() {
         nz.to_string(),
         "(ite (> (* x (/ x 100.1)) (/ x 100.1)) (* x (/ x 100.1)) (/ x 100.1))"
     );
-    let all = context.all_defined_symbols();
+    let all = context.defined_symbols();
     let nz = z.gsubst(&all, &mut context);
     assert_eq!(
         nz.to_string(),

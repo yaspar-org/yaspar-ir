@@ -58,9 +58,10 @@ pub use crate::raw::alg::rec_memo::Memoize;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck, unif::SortSubst};
 pub use crate::untyped as u;
 pub use boilerplates::TypedBuilder;
-pub use gsubst::GlobalSubst;
+pub use gsubst::{GlobalSubst, GlobalSubstituter, GlobalSubstituterInner};
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
-pub use subst::{Substitute, Substitution};
+#[allow(deprecated)]
+pub use subst::{Substitute, SubstituteV2, Substitution, SubstitutionV2};
 
 pub use crate::ast::letelim::{LetElim, LetEliminator, LetEliminatorInner};
 use crate::traits::MetaData;

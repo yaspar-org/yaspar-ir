@@ -371,7 +371,7 @@ impl<T: HasArenaAlt> FetchSort<T> for Term {
         match self.repr() {
             alg::Term::Constant(_, s) => s.clone(),
             alg::Term::Global(_, so) => so.clone(),
-            alg::Term::Local(id) => id.sort.clone(),
+            alg::Term::Local(id) => Some(id.sort.clone()),
             alg::Term::App(_, _, s) => s.clone(),
             alg::Term::Let(_, t) => t.maybe_sort(arena),
             alg::Term::Exists(_, _) => Some(arena.arena_alt().bool_sort()),
