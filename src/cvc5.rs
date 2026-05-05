@@ -109,6 +109,11 @@ pub trait ConvertToCvc5<Env> {
     fn to_cvc5(&self, env: &mut Env) -> Res<Self::Output>;
 }
 
+pub trait ConvertFromCvc5<Env> {
+    type Output;
+    fn conv_from_cvc5(&self, env: &mut Env) -> Res<Self::Output>;
+}
+
 /// A translated cvc5 term together with any `:pattern` annotations collected during traversal.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct WithPattern<'tm> {
@@ -315,6 +320,119 @@ impl<'tm> ConvertToCvc5<Cvc5Env<'tm>> for Sort {
     fn to_cvc5(&self, env: &mut Cvc5Env<'tm>) -> Res<Self::Output> {
         self.to_cvc5(&mut env.inner)
     }
+}
+
+// ── Reverse sort translation (CSort → Sort) ─────────────────
+
+/// Environment for translating cvc5 objects back to yaspar-ir typed ASTs.
+///
+/// This is independent of [`Cvc5Env`] / [`Cvc5EnvInner`] — the forward and reverse
+/// translations have no shared mutable state.
+///
+/// The type parameter `Env` must implement [`HasArena`], providing the [`Arena`] used
+/// to allocate yaspar-ir objects. This lets callers reuse an existing [`Context`] (or
+/// any other `HasArena` implementor) instead of creating a throwaway arena.
+///
+/// # Example
+///
+/// ```rust
+/// use yaspar_ir::ast::Context;
+/// use yaspar_ir::cvc5::FromCvc5Env;
+///
+/// let mut ctx = Context::new();
+/// let mut from_env = FromCvc5Env::new(&mut ctx);
+/// // use from_env with ConvertFromCvc5::conv_from_cvc5
+/// ```
+pub struct FromCvc5Env<'tm, 'env, Env> {
+    /// Cache from [`CSort`] to yaspar-ir [`Sort`], avoiding redundant work.
+    sort_cache: HashMap<CSort<'tm>, Sort>,
+    /// The backing environment that provides the [`Arena`].
+    pub env: &'env mut Env,
+}
+
+impl<'tm, 'env, Env: HasArena> FromCvc5Env<'tm, 'env, Env> {
+    /// Create a new reverse-translation environment backed by `env`.
+    pub fn new(env: &'env mut Env) -> Self {
+        Self {
+            sort_cache: HashMap::new(),
+            env,
+        }
+    }
+}
+
+impl<'tm, 'env, Env: HasArena> ConvertFromCvc5<FromCvc5Env<'tm, 'env, Env>> for CSort<'tm> {
+    type Output = Sort;
+
+    fn conv_from_cvc5(&self, fenv: &mut FromCvc5Env<'tm, 'env, Env>) -> Res<Sort> {
+        if let Some(s) = fenv.sort_cache.get(self) {
+            return Ok(s.clone());
+        }
+        let s = translate_sort_from_cvc5(self, fenv.env.arena())?;
+        fenv.sort_cache.insert(self.clone(), s.clone());
+        Ok(s)
+    }
+}
+
+fn translate_sort_from_cvc5<'tm>(cs: &CSort<'tm>, arena: &mut Arena) -> Res<Sort> {
+    if cs.is_boolean() {
+        return Ok(arena.bool_sort());
+    }
+    if cs.is_integer() {
+        return Ok(arena.int_sort());
+    }
+    if cs.is_real() {
+        return Ok(arena.real_sort());
+    }
+    if cs.is_string() {
+        return Ok(arena.string_sort());
+    }
+    if cs.is_regexp() {
+        return Ok(arena.reglan_sort());
+    }
+    if cs.is_bv() {
+        return Ok(arena.bv_sort(cs.bv_size().into()));
+    }
+    if cs.is_array() {
+        let idx = translate_sort_from_cvc5(&cs.array_index_sort(), arena)?;
+        let elem = translate_sort_from_cvc5(&cs.array_element_sort(), arena)?;
+        return Ok(arena.array_sort(idx, elem));
+    }
+    // Instantiated parametric datatype (e.g. (List Int))
+    if cs.is_dt() && cs.is_instantiated() {
+        let dt = cs.datatype();
+        let name = dt.name();
+        let params = cs.instantiated_parameters();
+        let ir_params: Vec<Sort> = params
+            .iter()
+            .map(|p| translate_sort_from_cvc5(p, arena))
+            .collect::<Res<_>>()?;
+        let sym = arena.allocate_symbol(name);
+        return Ok(arena.sort_n(sym, ir_params));
+    }
+    // Monomorphic datatype sort
+    if cs.is_dt() {
+        let dt = cs.datatype();
+        let name = dt.name();
+        return Ok(arena.simple_sort(name));
+    }
+    // Instantiated parametric uninterpreted sort (e.g. (Pair A B))
+    if cs.is_instantiated() {
+        let base = cs.uninterpreted_sort_constructor();
+        let name = base.symbol();
+        let params = cs.instantiated_parameters();
+        let ir_params: Vec<Sort> = params
+            .iter()
+            .map(|p| translate_sort_from_cvc5(p, arena))
+            .collect::<Res<_>>()?;
+        let sym = arena.allocate_symbol(name);
+        return Ok(arena.sort_n(sym, ir_params));
+    }
+    // Uninterpreted sort
+    if cs.is_uninterpreted_sort() {
+        let name = cs.symbol();
+        return Ok(arena.simple_sort(name));
+    }
+    Err(format!("unsupported cvc5 sort: {cs}"))
 }
 
 // ── Identifier kind → cvc5 Kind mapping ─────────────────────
