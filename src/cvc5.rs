@@ -500,15 +500,7 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
     if ct.is_bv_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
         let bits = ct.bv_value(2);
-        let input = format!("#b{bits}");
-        let mut tokenizer = yaspar::tokenize_str(&input, false);
-        let (bytes, len) = match tokenizer.next_token() {
-            Some(Ok(rt)) => match rt.tok {
-                yaspar::tokens::Token::Binary(v) => v,
-                _ => return Err(format!("failed to parse bitvector literal: {input}")),
-            },
-            _ => return Err(format!("failed to parse bitvector literal: {input}")),
-        };
+        let (bytes, len) = parse_binary_str_to_bytes(&bits);
         let arena = fenv.env.arena();
         return Ok(arena.allocate_term(ATerm::Constant(Constant::Binary(bytes, len), Some(sort))));
     }
@@ -704,8 +696,42 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
                 sort,
             }));
         }
+        // ── Nullary regexp constants ───────────────────────────────
+        Kind::RegexpNone | Kind::RegexpAll | Kind::RegexpAllchar => {
+            let ik = cvc5_kind_to_ident_kind(kind).unwrap();
+            let sort = ct.sort().conv_from_cvc5(fenv)?;
+            let arena = fenv.env.arena();
+            let sym = arena.allocate_symbol(ik.name());
+            let qid = QualifiedIdentifier::simple(sym);
+            return Ok(arena.global(qid, Some(sort)));
+        }
+
+        // ── BitvectorToNat ──────────────────────────────────────
+        Kind::BitvectorToNat => {
+            let child = translate_term_from_cvc5(&ct.child(0), fenv)?;
+            let sort = ct.sort().conv_from_cvc5(fenv)?;
+            let arena = fenv.env.arena();
+            let sym = arena.allocate_symbol("bv2nat");
+            let qid = QualifiedIdentifier::simple(sym);
+            return Ok(arena.app(qid, vec![child], Some(sort)));
+        }
+
+        // ── Match expressions ───────────────────────────────────
+        Kind::Match => {
+            let scrutinee = translate_term_from_cvc5(&ct.child(0), fenv)?;
+            let n = ct.num_children();
+            let mut arms = Vec::with_capacity(n - 1);
+            for i in 1..n {
+                let case = ct.child(i);
+                let arm = translate_match_case_from_cvc5(&case, fenv)?;
+                arms.push(arm);
+            }
+            let arena = fenv.env.arena();
+            return Ok(arena.matching(scrutinee, arms));
+        }
         _ => {}
     }
+
     // ── Known operator kinds ────────────────────────────────
     if let Some(ik) = cvc5_kind_to_ident_kind(kind) {
         let children = translate_children(ct, fenv)?;
@@ -728,6 +754,29 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
     Err(format!("unsupported cvc5 term kind: {:?}", kind))
 }
 
+/// Parse a binary string (e.g. "10110") into packed bytes and length.
+/// Mirrors the logic of `yaspar::parse_binary_str`.
+fn parse_binary_str_to_bytes(s: &str) -> (Vec<u8>, usize) {
+    let mut ret = Vec::new();
+    let mut r: u8 = 0;
+    let mut i: usize = 1;
+    for c in s.chars().rev() {
+        if c == '1' {
+            r |= i as u8;
+        }
+        i *= 2;
+        if i == 256 {
+            i = 1;
+            ret.push(r);
+            r = 0;
+        }
+    }
+    if i > 1 {
+        ret.push(r);
+    }
+    (ret, s.len())
+}
+
 fn translate_children<'tm, 'env, Env: HasArena>(
     ct: &CTerm<'tm>,
     fenv: &mut FromCvc5Env<'tm, 'env, Env>,
@@ -740,6 +789,120 @@ fn translate_children<'tm, 'env, Env: HasArena>(
     Ok(children)
 }
 
+fn translate_match_case_from_cvc5<'tm, 'env, Env: HasArena>(
+    case: &CTerm<'tm>,
+    fenv: &mut FromCvc5Env<'tm, 'env, Env>,
+) -> Res<alg::PatternArm<Str, Term>> {
+    let case_kind = case.kind();
+    match case_kind {
+        Kind::MatchCase => {
+            // Children: [pattern (ApplyConstructor), body]
+            let pattern_ct = case.child(0);
+            // Nullary constructor: ApplyConstructor with just the ctor term
+            let ctor_term = pattern_ct.child(0);
+            let ctor_name = ctor_term.symbol().to_string();
+            let body = translate_term_from_cvc5(&case.child(1), fenv)?;
+            let arena = fenv.env.arena();
+            let sym = arena.allocate_symbol(&ctor_name);
+            Ok(alg::PatternArm {
+                pattern: alg::Pattern::Ctor(sym),
+                body,
+            })
+        }
+        Kind::MatchBindCase => {
+            // Children: [variable_list, pattern, body]
+            let vlist = case.child(0);
+            let pattern_ct = case.child(1);
+            let body_ct = case.child(2);
+
+            // Determine if this is a wildcard or an applied constructor pattern
+            let pat_kind = pattern_ct.kind();
+            if pat_kind == Kind::Variable {
+                // Wildcard pattern: pattern is the same variable as in vlist
+                let v = vlist.child(0);
+                let cvc5_id = v.id();
+                let name = v.symbol().to_string();
+                let vs = v.sort().conv_from_cvc5(fenv)?;
+                let arena = fenv.env.arena();
+                let id = arena.new_local();
+                let sym = arena.allocate_symbol(&name);
+                let vb = VarBinding(sym.clone(), id, vs);
+                fenv.locals.insert(cvc5_id, vb);
+                fenv.scope_stack.push(vec![cvc5_id]);
+
+                let body = translate_term_from_cvc5(&body_ct, fenv)?;
+
+                let scope_ids = fenv.scope_stack.pop().unwrap();
+                for sid in &scope_ids {
+                    fenv.locals.remove(sid);
+                }
+                Ok(alg::PatternArm {
+                    pattern: alg::Pattern::Wildcard(Some((sym, id))),
+                    body,
+                })
+            } else {
+                // Applied constructor pattern: pattern is ApplyConstructor
+                let ctor_term = pattern_ct.child(0);
+                let ctor_name = ctor_term.symbol().to_string();
+                let num_args = pattern_ct.num_children() - 1;
+
+                // Bind variables from the variable list
+                let mut scope_ids = Vec::new();
+                let mut arguments = Vec::with_capacity(num_args);
+
+                // Build a set of variable ids from the vlist for lookup
+                let mut vlist_vars: HashMap<u64, usize> = HashMap::new();
+                for i in 0..vlist.num_children() {
+                    let v = vlist.child(i);
+                    let cvc5_id = v.id();
+                    let name = v.symbol().to_string();
+                    let vs = v.sort().conv_from_cvc5(fenv)?;
+                    let arena = fenv.env.arena();
+                    let id = arena.new_local();
+                    let sym = arena.allocate_symbol(&name);
+                    fenv.locals.insert(cvc5_id, VarBinding(sym, id, vs));
+                    scope_ids.push(cvc5_id);
+                    vlist_vars.insert(cvc5_id, i);
+                }
+                fenv.scope_stack.push(scope_ids.clone());
+
+                // Map pattern arguments to Option<(Str, usize)>
+                for i in 0..num_args {
+                    let arg = pattern_ct.child(i + 1);
+                    let arg_id = arg.id();
+                    if let Some(vb) = fenv.locals.get(&arg_id) {
+                        if arg.has_symbol() {
+                            arguments.push(Some((vb.0.clone(), vb.1)));
+                        } else {
+                            arguments.push(None);
+                        }
+                    } else {
+                        arguments.push(None);
+                    }
+                }
+
+                let body = translate_term_from_cvc5(&body_ct, fenv)?;
+
+                let scope_ids = fenv.scope_stack.pop().unwrap();
+                for sid in &scope_ids {
+                    fenv.locals.remove(sid);
+                }
+
+                let arena = fenv.env.arena();
+                let ctor_sym = arena.allocate_symbol(&ctor_name);
+                Ok(alg::PatternArm {
+                    pattern: alg::Pattern::Applied {
+                        ctor: ctor_sym,
+                        arguments,
+                    },
+                    body,
+                })
+            }
+        }
+        _ => Err(format!("unsupported match case kind: {:?}", case_kind)),
+    }
+}
+
 fn translate_indexed_from_cvc5<'tm, 'env, Env: HasArena>(
     ct: &CTerm<'tm>,
     op: &cvc5::Op<'tm>,
@@ -750,7 +913,7 @@ fn translate_indexed_from_cvc5<'tm, 'env, Env: HasArena>(
     let sort = ct.sort().conv_from_cvc5(fenv)?;
     let arena = fenv.env.arena();
 
-    let mk_indexed = |arena: &mut Arena, name: &str, indices: Vec<Index<Str>>| -> Term {
+    let mk_indexed = |arena: &mut Arena, name: &str, indices: Vec<Index>| -> Term {
         let sym = arena.allocate_symbol(name);
         let id = alg::Identifier {
             symbol: sym,
@@ -1542,6 +1705,9 @@ impl<'tm> Cvc5EnvInner<'tm> {
                     false,
                 )
                 .into()),
+            Some(ref ik) if ident_kind_to_cvc5(ik).is_some() => {
+                Ok(self.tm.mk_term(ident_kind_to_cvc5(ik).unwrap(), &[]).into())
+            }
             _ => {
                 // For sort-ascribed parametric constructors like (as nil (List Int)),
                 // resolve via the instantiated sort using instantiated_term

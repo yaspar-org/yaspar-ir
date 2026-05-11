@@ -1256,3 +1256,53 @@ fn from_cvc5_term_exists() {
         "(exists ((x Int)) (= x y))",
     );
 }
+
+#[test]
+fn from_cvc5_term_regexp_none() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s re.none)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_regexp_all() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s re.all)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_regexp_allchar() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s re.allchar)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv2nat() {
+    // cvc5 normalizes BitvectorToNat to BitvectorUbvToInt internally,
+    // so we test the ubv_to_int round-trip which exercises the same path.
+    term_round_trip(
+        "(set-logic ALL) (declare-const x (_ BitVec 8))",
+        "(ubv_to_int x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (Green 2) (Blue 3)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_applied() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const p Pair)",
+        "(match p (((mkpair x y) (+ x y))))",
+    );
+}
