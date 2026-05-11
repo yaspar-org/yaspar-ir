@@ -1106,6 +1106,7 @@ fn const_array_negative() {
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
     }
@@ -1115,4 +1116,143 @@ fn const_array_negative() {
         .type_check(&mut ctx)
         .unwrap();
     assert!(term.to_cvc5(&mut env).is_err());
+}
+/// Helper: translate a yaspar-ir Term to cvc5 and back, asserting the round-trip
+/// produces the same string representation.
+fn term_round_trip(script: &str, term_str: &str) {
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str(term_str)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(term.to_string(), back.to_string());
+}
+
+#[test]
+fn from_cvc5_term_bool_true() {
+    term_round_trip("(set-logic QF_UF)", "true");
+}
+
+#[test]
+fn from_cvc5_term_bool_false() {
+    term_round_trip("(set-logic QF_UF)", "false");
+}
+
+#[test]
+fn from_cvc5_term_integer() {
+    term_round_trip("(set-logic QF_LIA) (declare-const x Int)", "x");
+}
+
+#[test]
+fn from_cvc5_term_and() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(and a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_or() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(or a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_not() {
+    term_round_trip("(set-logic QF_UF) (declare-const a Bool)", "(not a)");
+}
+
+#[test]
+fn from_cvc5_term_implies() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(=> a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_eq() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(= x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_ite() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const a Bool) (declare-const x Int) (declare-const y Int)",
+        "(ite a x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_add() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(+ x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_gt() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(> x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_add() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvadd x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_numeral() {
+    term_round_trip("(set-logic QF_LIA) (declare-const x Int)", "(+ x 42)");
+}
+
+#[test]
+fn from_cvc5_term_bv_literal() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "(bvadd x #b00101010)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_forall() {
+    term_round_trip(
+        "(set-logic LIA) (declare-const y Int)",
+        "(forall ((x Int)) (> x y))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_exists() {
+    term_round_trip(
+        "(set-logic LIA) (declare-const y Int)",
+        "(exists ((x Int)) (= x y))",
+    );
 }
