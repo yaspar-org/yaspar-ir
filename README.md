@@ -716,20 +716,29 @@ Currently, the crate provides the following functionalities:
 13. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
     `cvc5`. It translates typed `Sort`s, `Term`s, and `Command`s to their cvc5 counterparts, with memoized caching
     and support for quantifier `:pattern` annotations.
+14. Translation from cvc5: see the `cvc5` module and the `ConvertFromCvc5` trait. This functionality requires the
+    feature `cvc5`. It translates cvc5 `Sort`s and `Term`s back to yaspar-ir typed ASTs, with sort caching and
+    scoped variable tracking for quantifiers and match expressions.
 
-### Translation to cvc5
+### Translation to and from cvc5
 
-The `cvc5` module exposes the `ConvertToCvc5<Env>` trait, which provides a uniform `.to_cvc5(env)` method for
-translating sorts, terms, and commands. Two environment types are used:
+The `cvc5` module provides bidirectional translation between yaspar-ir and cvc5. It exposes two
+traits and three environment types:
 
-- `Cvc5Env` — a memoized wrapper around `Cvc5EnvInner` that caches term translations. Used for
-  translating `Sort`s and `Term`s.
-- `Cvc5EnvSolver` — wraps a `Cvc5Env` and a `Solver`. Used for translating `Command`s.
+**Forward** (`ConvertToCvc5<Env>`): translates yaspar-ir `Sort`s, `Term`s, and `Command`s to cvc5.
+
+- `Cvc5Env` — a memoized environment that caches sort and term translations. Used for `Sort`s and `Term`s.
+- `Cvc5EnvSolver` — wraps a `Cvc5Env` and a `Solver`. Used for `Command`s.
+
+**Backward** (`ConvertFromCvc5<Env>`): translates cvc5 sorts and terms back to yaspar-ir.
+
+- `FromCvc5Env` — manages sort/term caching, scoped variable bindings for quantifiers and match
+  expressions, and tracking of uninterpreted sort values from models.
 
 ```rust
 use cvc5::{Solver, TermManager};
 use yaspar_ir::ast::{Context, Typecheck};
-use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
+use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver, FromCvc5Env};
 use yaspar_ir::untyped::UntypedAst;
 
 fn main() {
@@ -749,18 +758,19 @@ fn main() {
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::create(&tm);
 
-    // translate commands (which internally translate sorts and terms)
+    // translate commands to cvc5 (which internally translate sorts and terms)
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
     }
 
-    // sorts and terms can also be translated individually
-    let int = ctx.int_sort();
-    let cvc5_int = int.to_cvc5(&mut env).unwrap();
-
+    // translate a term to cvc5 and back
     let term = UntypedAst.parse_term_str("(+ x 1)").unwrap().type_check(&mut ctx).unwrap();
-    let cvc5_term = term.to_cvc5(&mut env).unwrap();
+    let cvc5_term = term.to_cvc5(&mut *es.env).unwrap();
+
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cvc5_term.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(term.to_string(), back.to_string());
 }
 ```
 

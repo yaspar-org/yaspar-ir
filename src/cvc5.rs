@@ -1,12 +1,16 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Translation from yaspar-ir typed ASTs to cvc5 objects.
+//! Translation between yaspar-ir typed ASTs and cvc5 objects.
 //!
-//! This module provides the [`ConvertToCvc5`] trait and two environment types for translating
-//! yaspar-ir typed ASTs into their cvc5 counterparts. It requires the `cvc5` feature.
+//! This module provides bidirectional translation between yaspar-ir and cvc5:
 //!
-//! # Overview
+//! - **Forward** ([`ConvertToCvc5`]): translates yaspar-ir [`Sort`], [`Term`], and [`Command`]
+//!   into their cvc5 counterparts.
+//! - **Backward** ([`ConvertFromCvc5`]): translates cvc5 sorts and terms back into yaspar-ir
+//!   typed ASTs.
+//!
+//! # Forward translation
 //!
 //! - [`ConvertToCvc5<Env>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
 //! - [`Cvc5Env`] — holds a [`cvc5::TermManager`] and caches for sort/term/symbol translation.
@@ -14,6 +18,17 @@
 //! - [`Cvc5EnvSolver`] — wraps a [`Cvc5EnvInner`] and a [`Solver`]. Used as the environment
 //!   for `Command::to_cvc5`, since commands may interact with the solver (e.g. `assert`,
 //!   `check-sat`, `define-fun`).
+//!
+//! # Backward translation
+//!
+//! - [`ConvertFromCvc5<Env>`] — the core trait, implemented for [`CSort`] and [`CTerm`].
+//! - [`FromCvc5Env`] — holds a mutable reference to a [`Context`] and manages scoped variable
+//!   bindings, sort caching, and tracking of uninterpreted sort values. Used as the environment
+//!   for `CSort::conv_from_cvc5` and `CTerm::conv_from_cvc5`.
+//!
+//! The backward translation handles constants, logical connectives, quantifiers (including
+//! `:pattern` annotations), arithmetic/bitvector/string operators, indexed operators,
+//! datatype constructors/selectors/testers, match expressions, and uninterpreted sort values.
 //!
 //! # Example
 //!
@@ -42,12 +57,14 @@
 //! # Caching
 //!
 //! [`Cvc5Env`] caches translated sorts and terms so that repeated translations of the same
-//! hashconsed object return the cached cvc5 object directly.
+//! hash-consed object return the cached cvc5 object directly. [`FromCvc5Env`] similarly caches
+//! both sort and term translations from cvc5 back to yaspar-ir.
 //!
 //! # Annotations
 //!
-//! Quantifier `:pattern` annotations are translated to cvc5 `INST_PATTERN` / `INST_PATTERN_LIST`
-//! terms, which guide quantifier instantiation. Other annotations are ignored.
+//! Quantifier `:pattern` annotations are preserved in both directions: translated to cvc5
+//! `INST_PATTERN` / `INST_PATTERN_LIST` terms in the forward direction, and reconstructed as
+//! `Attribute::Pattern` annotations in the backward direction.
 
 use crate::ast::alg::VarBinding;
 use crate::ast::*;
@@ -112,8 +129,22 @@ pub trait ConvertToCvc5<Env> {
     fn to_cvc5(&self, env: &mut Env) -> Res<Self::Output>;
 }
 
+/// Convert a cvc5 object back to its yaspar-ir typed AST counterpart.
+///
+/// This trait is implemented for [`CSort`] and [`CTerm`], both using
+/// [`FromCvc5Env`] as the environment:
+///
+/// | cvc5 type   | Environment      | Output   |
+/// |-------------|------------------|----------|
+/// | [`CSort`]   | [`FromCvc5Env`]  | [`Sort`] |
+/// | [`CTerm`]   | [`FromCvc5Env`]  | [`Term`] |
+///
+/// Translation may fail if the cvc5 object uses features not supported by yaspar-ir
+/// (e.g. floating-point sorts, set operations).
 pub trait ConvertFromCvc5<Env> {
+    /// The yaspar-ir type produced by the translation.
     type Output;
+    /// Translate `self` into a yaspar-ir object, using `env` for allocation and scope tracking.
     fn conv_from_cvc5(&self, env: &mut Env) -> Res<Self::Output>;
 }
 
@@ -252,12 +283,17 @@ impl<'a, 'tm> Cvc5EnvSolver<'a, 'tm> {
 
 /// Environment for translating cvc5 objects back to yaspar-ir typed ASTs.
 ///
-/// This is independent of [`Cvc5Env`] / [`Cvc5EnvInner`] — the forward and reverse
-/// translations have no shared mutable state.
+/// This struct manages:
+/// - **Sort caching**: avoids redundant sort translations via a [`CSort`] → [`Sort`] cache.
+/// - **Term caching**: avoids redundant term translations via a [`CTerm`] → [`Term`] cache.
+/// - **Scoped variable bindings**: tracks bound variables introduced by quantifiers and match
+///   expressions, ensuring that variable references in the body resolve to the correct local IDs.
+/// - **Uninterpreted sort values**: records names of uninterpreted sort values encountered
+///   during translation (e.g. `@U0`, `@U1` from models), queryable after translation.
 ///
-/// The type parameter `Env` must implement [`HasArena`], providing the [`Arena`] used
-/// to allocate yaspar-ir objects. This lets callers reuse an existing [`Context`] (or
-/// any other `HasArena` implementor) instead of creating a throwaway fenv.env.
+/// The environment requires a mutable reference to a [`Context`] to access the arena for
+/// allocation and the active theories for sort-aware constant construction (e.g. distinguishing
+/// `Int` numerals from `Real` decimals in mixed `RealInts` logics).
 ///
 /// # Example
 ///
@@ -272,6 +308,8 @@ impl<'a, 'tm> Cvc5EnvSolver<'a, 'tm> {
 pub struct FromCvc5Env<'tm, 'env> {
     /// Cache from [`CSort`] to yaspar-ir [`Sort`], avoiding redundant work.
     sort_cache: HashMap<CSort<'tm>, Sort>,
+    /// Cache from [`CTerm`] to yaspar-ir [`Term`], avoiding redundant work.
+    term_cache: HashMap<CTerm<'tm>, Term>,
     /// Bound variable map: cvc5 term id → VarBinding.
     locals: HashMap<u64, VarBinding<Str, Sort>>,
     /// Stack of bound variable ids for scope cleanup.
@@ -287,6 +325,7 @@ impl<'tm, 'env> FromCvc5Env<'tm, 'env> {
     pub fn new(env: &'env mut Context) -> Self {
         Self {
             sort_cache: HashMap::new(),
+            term_cache: HashMap::new(),
             locals: HashMap::new(),
             scope_stack: Vec::new(),
             uninterpreted_values: HashSet::new(),
@@ -477,7 +516,12 @@ impl<'tm, 'env> ConvertFromCvc5<FromCvc5Env<'tm, 'env>> for CTerm<'tm> {
     type Output = Term;
 
     fn conv_from_cvc5(&self, fenv: &mut FromCvc5Env<'tm, 'env>) -> Res<Term> {
-        translate_term_from_cvc5(self, fenv)
+        if let Some(t) = fenv.term_cache.get(self) {
+            return Ok(t.clone());
+        }
+        let t = translate_term_from_cvc5(self, fenv)?;
+        fenv.term_cache.insert(self.clone(), t.clone());
+        Ok(t)
     }
 }
 
@@ -591,7 +635,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
             return Ok(fenv.env.xor(children));
         }
         Kind::Not => {
-            let child = translate_term_from_cvc5(&ct.child(0), fenv)?;
+            let child = ct.child(0).conv_from_cvc5(fenv)?;
 
             return Ok(fenv.env.not(child));
         }
@@ -599,9 +643,9 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let n = ct.num_children();
             let mut premises = Vec::with_capacity(n - 1);
             for i in 0..n - 1 {
-                premises.push(translate_term_from_cvc5(&ct.child(i), fenv)?);
+                premises.push(ct.child(i).conv_from_cvc5(fenv)?);
             }
-            let concl = translate_term_from_cvc5(&ct.child(n - 1), fenv)?;
+            let concl = ct.child(n - 1).conv_from_cvc5(fenv)?;
 
             return Ok(fenv.env.implies(premises, concl));
         }
@@ -624,9 +668,9 @@ fn translate_term_from_cvc5<'tm, 'env>(
             return Ok(fenv.env.distinct(children));
         }
         Kind::Ite => {
-            let b = translate_term_from_cvc5(&ct.child(0), fenv)?;
-            let t = translate_term_from_cvc5(&ct.child(1), fenv)?;
-            let e = translate_term_from_cvc5(&ct.child(2), fenv)?;
+            let b = ct.child(0).conv_from_cvc5(fenv)?;
+            let t = ct.child(1).conv_from_cvc5(fenv)?;
+            let e = ct.child(2).conv_from_cvc5(fenv)?;
 
             return Ok(fenv.env.ite(b, t, e));
         }
@@ -647,7 +691,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
                 scope_ids.push(cvc5_id);
             }
             fenv.push_scope(scope_ids);
-            let result = translate_term_from_cvc5(&body_ct, fenv).and_then(|body| {
+            let result = body_ct.conv_from_cvc5(fenv).and_then(|body| {
                 // Translate :pattern annotations if present (child 2 is INST_PATTERN_LIST)
                 if ct.num_children() > 2 {
                     let plist = ct.child(2);
@@ -657,7 +701,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
                         if pat.kind() == Kind::InstPattern {
                             let mut pat_terms = Vec::new();
                             for j in 0..pat.num_children() {
-                                pat_terms.push(translate_term_from_cvc5(&pat.child(j), fenv)?);
+                                pat_terms.push(pat.child(j).conv_from_cvc5(fenv)?);
                             }
                             attrs.push(Attribute::Pattern(pat_terms));
                         }
@@ -682,7 +726,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
         }
         // ── Negation (unary minus) ──────────────────────────────
         Kind::Neg => {
-            let child = translate_term_from_cvc5(&ct.child(0), fenv)?;
+            let child = ct.child(0).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
             let sym = fenv.env.allocate_symbol(SUB);
@@ -705,7 +749,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let name = head.symbol().to_string();
             let mut args = Vec::with_capacity(ct.num_children() - 1);
             for i in 1..ct.num_children() {
-                args.push(translate_term_from_cvc5(&ct.child(i), fenv)?);
+                args.push(ct.child(i).conv_from_cvc5(fenv)?);
             }
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
@@ -745,7 +789,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
             }
             let mut args = Vec::with_capacity(n - 1);
             for i in 1..n {
-                args.push(translate_term_from_cvc5(&ct.child(i), fenv)?);
+                args.push(ct.child(i).conv_from_cvc5(fenv)?);
             }
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
@@ -760,7 +804,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
             } else {
                 format!("{head}")
             };
-            let arg = translate_term_from_cvc5(&ct.child(1), fenv)?;
+            let arg = ct.child(1).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
             let sym = fenv.env.allocate_symbol(&name);
@@ -776,7 +820,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
             };
             // cvc5 tester names are "is_<ctor>"; extract the constructor name
             let ctor_name = tester_name.strip_prefix("is_").unwrap_or(&tester_name);
-            let arg = translate_term_from_cvc5(&ct.child(1), fenv)?;
+            let arg = ct.child(1).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
             let is_sym = fenv.env.allocate_symbol(IS);
@@ -799,17 +843,9 @@ fn translate_term_from_cvc5<'tm, 'env>(
                     sort: vb.2.clone(),
                 }));
             }
-            // Fallback: unregistered variable (shouldn't happen in well-formed terms)
-            let name = ct.symbol().to_string();
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let id = fenv.env.new_local();
-            let sym = fenv.env.allocate_symbol(&name);
-            return Ok(fenv.env.local(alg::Local {
-                id,
-                symbol: sym,
-                sort,
-            }));
+            return Err(format!(
+                "unexpected and fatal scope management error: local variable {ct} is not bound!"
+            ));
         }
         // ── Nullary regexp constants ───────────────────────────────
         Kind::RegexpNone | Kind::RegexpAll | Kind::RegexpAllchar => {
@@ -823,7 +859,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
 
         // ── BitvectorToNat ──────────────────────────────────────
         Kind::BitvectorToNat => {
-            let child = translate_term_from_cvc5(&ct.child(0), fenv)?;
+            let child = ct.child(0).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
             let sym = fenv.env.allocate_symbol(BV2NAT);
@@ -833,7 +869,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
 
         // ── Match expressions ───────────────────────────────────
         Kind::Match => {
-            let scrutinee = translate_term_from_cvc5(&ct.child(0), fenv)?;
+            let scrutinee = ct.child(0).conv_from_cvc5(fenv)?;
             let n = ct.num_children();
             let mut arms = Vec::with_capacity(n - 1);
             for i in 1..n {
@@ -917,7 +953,7 @@ fn translate_children<'tm, 'env>(
     let n = ct.num_children();
     let mut children = Vec::with_capacity(n);
     for i in 0..n {
-        children.push(translate_term_from_cvc5(&ct.child(i), fenv)?);
+        children.push(ct.child(i).conv_from_cvc5(fenv)?);
     }
     Ok(children)
 }
@@ -947,7 +983,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                 }
                 name
             };
-            let body = translate_term_from_cvc5(&case.child(1), fenv)?;
+            let body = case.child(1).conv_from_cvc5(fenv)?;
 
             let sym = fenv.env.allocate_symbol(&ctor_name);
             Ok(alg::PatternArm {
@@ -977,7 +1013,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                     fenv.locals.insert(cvc5_id, vb);
                     fenv.push_scope(vec![cvc5_id]);
 
-                    let result = translate_term_from_cvc5(&body_ct, fenv);
+                    let result = body_ct.conv_from_cvc5(fenv);
                     fenv.pop_scope();
                     let body = result?;
                     Ok(alg::PatternArm {
@@ -986,7 +1022,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                     })
                 } else {
                     // Anonymous wildcard — no variable binding
-                    let body = translate_term_from_cvc5(&body_ct, fenv)?;
+                    let body = body_ct.conv_from_cvc5(fenv)?;
                     Ok(alg::PatternArm {
                         pattern: Pattern::Wildcard(None),
                         body,
@@ -1022,7 +1058,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                 }
                 fenv.push_scope(scope_ids);
 
-                let result = translate_term_from_cvc5(&body_ct, fenv);
+                let result = body_ct.conv_from_cvc5(fenv);
                 fenv.pop_scope();
                 let body = result?;
 
