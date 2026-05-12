@@ -1953,3 +1953,39 @@ fn from_cvc5_term_parametric_datatype_tester() {
         "((_ is cons) l)",
     );
 }
+
+#[test]
+fn from_cvc5_term_match_anonymous_wildcard() {
+    // Wildcard without a variable name: (_ 0)
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (_ 0)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_applied_with_anonymous_arg() {
+    // Applied pattern with anonymous wildcard in selector position
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const p Pair)",
+        "(match p (((mkpair x _) x)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_multiple_arms() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 10) (Green 20) (Blue 30)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_nested() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "(match l ((nil 0) ((cons h t) (match t ((nil h) ((cons h2 t2) (+ h h2)))))))",
+    );
+}

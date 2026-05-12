@@ -303,6 +303,20 @@ impl<'tm, 'env> FromCvc5Env<'tm, 'env> {
     pub fn uninterpreted_values(&self) -> &HashSet<String> {
         &self.uninterpreted_values
     }
+
+    /// Push a new scope with the given cvc5 variable IDs.
+    fn push_scope(&mut self, ids: Vec<u64>) {
+        self.scope_stack.push(ids);
+    }
+
+    /// Pop the current scope and remove all its bindings from locals.
+    fn pop_scope(&mut self) -> Vec<VarBinding<Str, Sort>> {
+        let scope_ids = self.scope_stack.pop().unwrap();
+        scope_ids
+            .iter()
+            .filter_map(|id| self.locals.remove(id))
+            .collect()
+    }
 }
 
 // ── Sort translation ─────────────────────────────────────────
@@ -632,35 +646,33 @@ fn translate_term_from_cvc5<'tm, 'env>(
                 fenv.locals.insert(cvc5_id, VarBinding(sym, id, vs));
                 scope_ids.push(cvc5_id);
             }
-            fenv.scope_stack.push(scope_ids);
-            let body = translate_term_from_cvc5(&body_ct, fenv)?;
-            // Translate :pattern annotations if present (child 2 is INST_PATTERN_LIST)
-            let body = if ct.num_children() > 2 {
-                let plist = ct.child(2);
-                let mut attrs = Vec::new();
-                for i in 0..plist.num_children() {
-                    let pat = plist.child(i);
-                    if pat.kind() == Kind::InstPattern {
-                        let mut pat_terms = Vec::new();
-                        for j in 0..pat.num_children() {
-                            pat_terms.push(translate_term_from_cvc5(&pat.child(j), fenv)?);
+            fenv.push_scope(scope_ids);
+            let result = translate_term_from_cvc5(&body_ct, fenv).and_then(|body| {
+                // Translate :pattern annotations if present (child 2 is INST_PATTERN_LIST)
+                if ct.num_children() > 2 {
+                    let plist = ct.child(2);
+                    let mut attrs = Vec::new();
+                    for i in 0..plist.num_children() {
+                        let pat = plist.child(i);
+                        if pat.kind() == Kind::InstPattern {
+                            let mut pat_terms = Vec::new();
+                            for j in 0..pat.num_children() {
+                                pat_terms.push(translate_term_from_cvc5(&pat.child(j), fenv)?);
+                            }
+                            attrs.push(Attribute::Pattern(pat_terms));
                         }
-                        attrs.push(alg::Attribute::Pattern(pat_terms));
                     }
-                }
-                if attrs.is_empty() {
-                    body
+                    if attrs.is_empty() {
+                        Ok(body)
+                    } else {
+                        Ok(fenv.env.annotated(body, attrs))
+                    }
                 } else {
-                    fenv.env.annotated(body, attrs)
+                    Ok(body)
                 }
-            } else {
-                body
-            };
-            let scope_ids = fenv.scope_stack.pop().unwrap();
-            let bindings: Vec<_> = scope_ids
-                .iter()
-                .map(|id| fenv.locals.remove(id).unwrap())
-                .collect();
+            });
+            let bindings = fenv.pop_scope();
+            let body = result?;
 
             return if kind == Kind::Forall {
                 Ok(fenv.env.forall(bindings, body))
@@ -921,7 +933,20 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
             let pattern_ct = case.child(0);
             // Nullary constructor: ApplyConstructor with just the ctor term
             let ctor_term = pattern_ct.child(0);
-            let ctor_name = ctor_term.symbol().to_string();
+            let ctor_name = if ctor_term.has_symbol() {
+                ctor_term.symbol().to_string()
+            } else {
+                let dt = pattern_ct.sort().datatype();
+                let mut name = String::new();
+                for i in 0..dt.num_constructors() {
+                    let c = dt.constructor(i);
+                    if c.num_selectors() == 0 {
+                        name = c.name().to_string();
+                        break;
+                    }
+                }
+                name
+            };
             let body = translate_term_from_cvc5(&case.child(1), fenv)?;
 
             let sym = fenv.env.allocate_symbol(&ctor_name);
@@ -942,72 +967,64 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                 // Wildcard pattern: pattern is the same variable as in vlist
                 let v = vlist.child(0);
                 let cvc5_id = v.id();
-                let name = v.symbol().to_string();
                 let vs = v.sort().conv_from_cvc5(fenv)?;
 
-                let id = fenv.env.new_local();
-                let sym = fenv.env.allocate_symbol(&name);
-                let vb = VarBinding(sym.clone(), id, vs);
-                fenv.locals.insert(cvc5_id, vb);
-                fenv.scope_stack.push(vec![cvc5_id]);
+                if v.has_symbol() {
+                    let name = v.symbol().to_string();
+                    let id = fenv.env.new_local();
+                    let sym = fenv.env.allocate_symbol(&name);
+                    let vb = VarBinding(sym.clone(), id, vs);
+                    fenv.locals.insert(cvc5_id, vb);
+                    fenv.push_scope(vec![cvc5_id]);
 
-                let body = translate_term_from_cvc5(&body_ct, fenv)?;
-
-                let scope_ids = fenv.scope_stack.pop().unwrap();
-                for sid in &scope_ids {
-                    fenv.locals.remove(sid);
+                    let result = translate_term_from_cvc5(&body_ct, fenv);
+                    fenv.pop_scope();
+                    let body = result?;
+                    Ok(alg::PatternArm {
+                        pattern: Pattern::Wildcard(Some((sym, id))),
+                        body,
+                    })
+                } else {
+                    // Anonymous wildcard — no variable binding
+                    let body = translate_term_from_cvc5(&body_ct, fenv)?;
+                    Ok(alg::PatternArm {
+                        pattern: Pattern::Wildcard(None),
+                        body,
+                    })
                 }
-                Ok(alg::PatternArm {
-                    pattern: Pattern::Wildcard(Some((sym, id))),
-                    body,
-                })
             } else {
                 // Applied constructor pattern: pattern is ApplyConstructor
                 let ctor_term = pattern_ct.child(0);
-                let ctor_name = ctor_term.symbol().to_string();
+                let ctor_name = if ctor_term.has_symbol() {
+                    ctor_term.symbol().to_string()
+                } else {
+                    format!("{ctor_term}")
+                };
                 let num_args = pattern_ct.num_children() - 1;
 
-                // Bind variables from the variable list
                 let mut scope_ids = Vec::new();
                 let mut arguments = Vec::with_capacity(num_args);
 
-                // Build a set of variable ids from the vlist for lookup
-                let mut vlist_vars: HashMap<u64, usize> = HashMap::new();
-                for i in 0..vlist.num_children() {
-                    let v = vlist.child(i);
-                    let cvc5_id = v.id();
-                    let name = v.symbol().to_string();
-                    let vs = v.sort().conv_from_cvc5(fenv)?;
-
-                    let id = fenv.env.new_local();
-                    let sym = fenv.env.allocate_symbol(&name);
-                    fenv.locals.insert(cvc5_id, VarBinding(sym, id, vs));
-                    scope_ids.push(cvc5_id);
-                    vlist_vars.insert(cvc5_id, i);
-                }
-                fenv.scope_stack.push(scope_ids.clone());
-
-                // Map pattern arguments to Option<(Str, usize)>
                 for i in 0..num_args {
                     let arg = pattern_ct.child(i + 1);
-                    let arg_id = arg.id();
-                    if let Some(vb) = fenv.locals.get(&arg_id) {
-                        if arg.has_symbol() {
-                            arguments.push(Some((vb.0.clone(), vb.1)));
-                        } else {
-                            arguments.push(None);
-                        }
+                    let cvc5_id = arg.id();
+                    scope_ids.push(cvc5_id);
+                    if arg.has_symbol() {
+                        let name = arg.symbol().to_string();
+                        let vs = arg.sort().conv_from_cvc5(fenv)?;
+                        let id = fenv.env.new_local();
+                        let sym = fenv.env.allocate_symbol(&name);
+                        fenv.locals.insert(cvc5_id, VarBinding(sym.clone(), id, vs));
+                        arguments.push(Some((sym, id)));
                     } else {
                         arguments.push(None);
                     }
                 }
+                fenv.push_scope(scope_ids);
 
-                let body = translate_term_from_cvc5(&body_ct, fenv)?;
-
-                let scope_ids = fenv.scope_stack.pop().unwrap();
-                for sid in &scope_ids {
-                    fenv.locals.remove(sid);
-                }
+                let result = translate_term_from_cvc5(&body_ct, fenv);
+                fenv.pop_scope();
+                let body = result?;
 
                 let ctor_sym = fenv.env.allocate_symbol(&ctor_name);
                 Ok(alg::PatternArm {
