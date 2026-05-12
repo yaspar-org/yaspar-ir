@@ -58,7 +58,7 @@ use crate::traits::{Contains, Repr};
 use crate::untyped::UntypedAst;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
 use dashu::integer::UBig;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
 
@@ -250,6 +250,61 @@ impl<'a, 'tm> Cvc5EnvSolver<'a, 'tm> {
     }
 }
 
+/// Environment for translating cvc5 objects back to yaspar-ir typed ASTs.
+///
+/// This is independent of [`Cvc5Env`] / [`Cvc5EnvInner`] — the forward and reverse
+/// translations have no shared mutable state.
+///
+/// The type parameter `Env` must implement [`HasArena`], providing the [`Arena`] used
+/// to allocate yaspar-ir objects. This lets callers reuse an existing [`Context`] (or
+/// any other `HasArena` implementor) instead of creating a throwaway fenv.env.
+///
+/// # Example
+///
+/// ```rust
+/// use yaspar_ir::ast::Context;
+/// use yaspar_ir::cvc5::FromCvc5Env;
+///
+/// let mut ctx = Context::new();
+/// let mut from_env = FromCvc5Env::new(&mut ctx);
+/// // use from_env with ConvertFromCvc5::conv_from_cvc5
+/// ```
+pub struct FromCvc5Env<'tm, 'env> {
+    /// Cache from [`CSort`] to yaspar-ir [`Sort`], avoiding redundant work.
+    sort_cache: HashMap<CSort<'tm>, Sort>,
+    /// Bound variable map: cvc5 term id → VarBinding.
+    locals: HashMap<u64, VarBinding<Str, Sort>>,
+    /// Stack of bound variable ids for scope cleanup.
+    scope_stack: Vec<Vec<u64>>,
+    /// Allocated symbols for uninterpreted sort values encountered during translation.
+    uninterpreted_values: HashSet<String>,
+    /// The backing context.
+    pub env: &'env mut Context,
+}
+
+impl<'tm, 'env> FromCvc5Env<'tm, 'env> {
+    /// Create a new reverse-translation environment backed by `env`.
+    pub fn new(env: &'env mut Context) -> Self {
+        Self {
+            sort_cache: HashMap::new(),
+            locals: HashMap::new(),
+            scope_stack: Vec::new(),
+            uninterpreted_values: HashSet::new(),
+            env,
+        }
+    }
+
+    /// Returns whether the given symbol is an uninterpreted sort value.
+    pub fn is_uninterpreted_value(&self, name: &str) -> bool {
+        self.uninterpreted_values.contains(name)
+    }
+
+    /// Returns the set of uninterpreted sort value names encountered.
+    pub fn uninterpreted_values(&self) -> &HashSet<String> {
+        &self.uninterpreted_values
+    }
+}
+
 // ── Sort translation ─────────────────────────────────────────
 impl<'tm> ConvertToCvc5<Cvc5EnvInner<'tm>> for Sort {
     type Output = CSort<'tm>;
@@ -326,48 +381,6 @@ impl<'tm> ConvertToCvc5<Cvc5Env<'tm>> for Sort {
 }
 
 // ── Reverse sort translation (CSort → Sort) ─────────────────
-
-/// Environment for translating cvc5 objects back to yaspar-ir typed ASTs.
-///
-/// This is independent of [`Cvc5Env`] / [`Cvc5EnvInner`] — the forward and reverse
-/// translations have no shared mutable state.
-///
-/// The type parameter `Env` must implement [`HasArena`], providing the [`Arena`] used
-/// to allocate yaspar-ir objects. This lets callers reuse an existing [`Context`] (or
-/// any other `HasArena` implementor) instead of creating a throwaway fenv.env.
-///
-/// # Example
-///
-/// ```rust
-/// use yaspar_ir::ast::Context;
-/// use yaspar_ir::cvc5::FromCvc5Env;
-///
-/// let mut ctx = Context::new();
-/// let mut from_env = FromCvc5Env::new(&mut ctx);
-/// // use from_env with ConvertFromCvc5::conv_from_cvc5
-/// ```
-pub struct FromCvc5Env<'tm, 'env> {
-    /// Cache from [`CSort`] to yaspar-ir [`Sort`], avoiding redundant work.
-    sort_cache: HashMap<CSort<'tm>, Sort>,
-    /// Bound variable map: cvc5 term id → VarBinding.
-    locals: HashMap<u64, VarBinding<Str, Sort>>,
-    /// Stack of bound variable ids for scope cleanup.
-    scope_stack: Vec<Vec<u64>>,
-    /// The backing context.
-    pub env: &'env mut Context,
-}
-
-impl<'tm, 'env> FromCvc5Env<'tm, 'env> {
-    /// Create a new reverse-translation environment backed by `env`.
-    pub fn new(env: &'env mut Context) -> Self {
-        Self {
-            sort_cache: HashMap::new(),
-            locals: HashMap::new(),
-            scope_stack: Vec::new(),
-            env,
-        }
-    }
-}
 
 impl<'tm, 'env> ConvertFromCvc5<FromCvc5Env<'tm, 'env>> for CSort<'tm> {
     type Output = Sort;
@@ -826,7 +839,12 @@ fn translate_term_from_cvc5<'tm, 'env>(
 
         // ── Uninterpreted sort value (from models) ──────────────
         Kind::UninterpretedSortValue => {
-            todo!("UninterpretedSortValue reverse translation")
+            let name = ct.uninterpreted_sort_value();
+            let sort = ct.sort().conv_from_cvc5(fenv)?;
+            fenv.uninterpreted_values.insert(name.clone());
+            let sym = fenv.env.allocate_symbol(&name);
+            let qid = QualifiedIdentifier::simple(sym);
+            return Ok(fenv.env.global(qid, Some(sort)));
         }
 
         // ── Lambda ──────────────────────────────────────────────
@@ -908,7 +926,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
 
             let sym = fenv.env.allocate_symbol(&ctor_name);
             Ok(alg::PatternArm {
-                pattern: alg::Pattern::Ctor(sym),
+                pattern: Pattern::Ctor(sym),
                 body,
             })
         }
@@ -940,7 +958,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                     fenv.locals.remove(sid);
                 }
                 Ok(alg::PatternArm {
-                    pattern: alg::Pattern::Wildcard(Some((sym, id))),
+                    pattern: Pattern::Wildcard(Some((sym, id))),
                     body,
                 })
             } else {
@@ -993,7 +1011,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
 
                 let ctor_sym = fenv.env.allocate_symbol(&ctor_name);
                 Ok(alg::PatternArm {
-                    pattern: alg::Pattern::Applied {
+                    pattern: Pattern::Applied {
                         ctor: ctor_sym,
                         arguments,
                     },
@@ -1035,21 +1053,6 @@ fn translate_indexed_from_cvc5<'tm, 'env>(
             RE_LOOP,
             vec![Index::Numeral(idx_u32(0)?), Index::Numeral(idx_u32(1)?)],
         ),
-        Kind::Divisible => {
-            todo!("Divisible indexed operator reverse translation")
-        }
-        Kind::FloatingpointToFpFromIeeeBv
-        | Kind::FloatingpointToFpFromFp
-        | Kind::FloatingpointToFpFromReal
-        | Kind::FloatingpointToFpFromSbv
-        | Kind::FloatingpointToFpFromUbv
-        | Kind::FloatingpointToUbv
-        | Kind::FloatingpointToSbv => {
-            todo!("Floating point indexed operator reverse translation")
-        }
-        Kind::TupleProject => {
-            todo!("TupleProject indexed operator reverse translation")
-        }
         _ => return Ok(None),
     };
 
