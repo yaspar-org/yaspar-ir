@@ -956,3 +956,98 @@ fn command_result_get_model_uninterpreted_sort_nested() {
         },
     );
 }
+
+// ── ConvertFromCvc5 sort round-trip tests ────────────────────
+
+use yaspar_ir::cvc5::{ConvertFromCvc5, FromCvc5Env};
+
+/// Helper: translate a yaspar-ir Sort to cvc5 and back, asserting the round-trip
+/// produces the same string representation.
+fn sort_round_trip(script: &str, sort_str: &str) {
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let sort = UntypedAst
+        .parse_sort_str(sort_str)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let csort = sort.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = csort.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(sort.to_string(), back.to_string());
+}
+
+#[test]
+fn from_cvc5_sort_bool() {
+    sort_round_trip("(set-logic QF_UF)", "Bool");
+}
+
+#[test]
+fn from_cvc5_sort_int() {
+    sort_round_trip("(set-logic QF_LIA)", "Int");
+}
+
+#[test]
+fn from_cvc5_sort_real() {
+    sort_round_trip("(set-logic QF_LRA)", "Real");
+}
+
+#[test]
+fn from_cvc5_sort_string() {
+    sort_round_trip("(set-logic QF_S)", "String");
+}
+
+#[test]
+fn from_cvc5_sort_bv() {
+    sort_round_trip("(set-logic QF_BV)", "(_ BitVec 32)");
+}
+
+#[test]
+fn from_cvc5_sort_array() {
+    sort_round_trip("(set-logic QF_AUFLIA)", "(Array Int Int)");
+}
+
+#[test]
+fn from_cvc5_sort_uninterpreted() {
+    sort_round_trip("(set-logic QF_UF) (declare-sort U 0)", "U");
+}
+
+#[test]
+fn from_cvc5_sort_datatype() {
+    sort_round_trip(
+        "(set-logic ALL)
+         (declare-datatype Color ((red) (green) (blue)))",
+        "Color",
+    );
+}
+
+#[test]
+fn from_cvc5_sort_parametric_datatype() {
+    sort_round_trip(
+        "(set-logic ALL)
+         (declare-datatype List (par (X) ((nil) (cons (car X) (cdr (List X))))))",
+        "(List Int)",
+    );
+}
+
+#[test]
+fn from_cvc5_sort_cache_hit() {
+    let tm = TermManager::new();
+    let csort = tm.integer_sort();
+    let mut ctx = Context::new();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back1 = csort.conv_from_cvc5(&mut from_env).unwrap();
+    let back2 = csort.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(back1, back2);
+}
