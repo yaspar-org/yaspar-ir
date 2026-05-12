@@ -3,9 +3,9 @@
 
 #![cfg(feature = "cvc5")]
 
-use cvc5::{Solver, TermManager};
+use cvc5::{Kind, Solver, TermManager};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
-use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
+use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver, FromCvc5Env};
 use yaspar_ir::untyped::UntypedAst;
 
 /// Helper: parse + type-check a script, then translate all commands to cvc5.
@@ -959,7 +959,6 @@ fn command_result_get_model_uninterpreted_sort_nested() {
 
 // ── ConvertFromCvc5 sort round-trip tests ────────────────────
 
-use yaspar_ir::cvc5::{ConvertFromCvc5, FromCvc5Env};
 
 /// Helper: translate a yaspar-ir Sort to cvc5 and back, asserting the round-trip
 /// produces the same string representation.
@@ -1304,5 +1303,378 @@ fn from_cvc5_term_match_applied() {
     term_round_trip(
         "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const p Pair)",
         "(match p (((mkpair x y) (+ x y))))",
+    );
+}
+
+
+// ── Comprehensive backward translation tests ─────────────────
+
+#[test]
+fn from_cvc5_term_forall_pattern() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int) Int)",
+        "(forall ((x Int)) (! (> (f x) 0) :pattern ((f x))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_forall_multi_pattern() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int) Int) (declare-fun g (Int) Int)",
+        "(forall ((x Int)) (! (> (f x) (g x)) :pattern ((f x)) :pattern ((g x))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_forall_multi_var() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int Int) Int)",
+        "(forall ((x Int) (y Int)) (> (f x y) 0))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_nested_quantifier() {
+    term_round_trip(
+        "(set-logic ALL) (declare-const a Int)",
+        "(forall ((x Int)) (exists ((y Int)) (= (+ x y) a)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_xor() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(xor a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_distinct() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int) (declare-const z Int)",
+        "(distinct x y z)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_chained_eq() {
+    // (= x y z) in cvc5 is n-ary; reverse translates to (and (= x y) (= y z))
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic QF_LIA) (declare-const x Int) (declare-const y Int) (declare-const z Int)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    // Build (= x y z) by translating individual terms and combining
+    let x = UntypedAst.parse_term_str("x").unwrap().type_check(&mut ctx).unwrap();
+    let y = UntypedAst.parse_term_str("y").unwrap().type_check(&mut ctx).unwrap();
+    let z = UntypedAst.parse_term_str("z").unwrap().type_check(&mut ctx).unwrap();
+    let cx = x.to_cvc5(&mut *es.env).unwrap();
+    let cy = y.to_cvc5(&mut *es.env).unwrap();
+    let cz = z.to_cvc5(&mut *es.env).unwrap();
+    let eq_xyz = tm.mk_term(Kind::Equal, &[cx, cy, cz]);
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = eq_xyz.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(back.to_string(), "(and (= x y) (= y z))");
+}
+
+#[test]
+fn from_cvc5_term_unary_minus() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int)",
+        "(- x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_sub() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(- x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_mul() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(* x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_div() {
+    term_round_trip(
+        "(set-logic QF_LRA) (declare-const x Real) (declare-const y Real)",
+        "(/ x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_idiv() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(div x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_mod() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(mod x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_le() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(<= x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_lt() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(< x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_ge() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(>= x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_select_store() {
+    term_round_trip(
+        "(set-logic QF_AUFLIA) (declare-const a (Array Int Int)) (declare-const i Int) (declare-const v Int)",
+        "(select (store a i v) i)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_extract() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ extract 3 0) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_zero_extend() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ zero_extend 8) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_sign_extend() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ sign_extend 8) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_concat() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 4)) (declare-const y (_ BitVec 4))",
+        "(concat x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_not() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "(bvnot x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_neg() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "(bvneg x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_and() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvand x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_or() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvor x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_ult() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvult x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_string_concat() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s1 String) (declare-const s2 String)",
+        "(str.++ s1 s2)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_string_len() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.len s)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_string_literal() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.++ s \"hello\")",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_to_re() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (str.to_re \"abc\"))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_star() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.* (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_uf_application() {
+    term_round_trip(
+        "(set-logic QF_UFLIA) (declare-fun f (Int Int) Int) (declare-const x Int) (declare-const y Int)",
+        "(f x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_constructor_nullary() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue))))",
+        "Red",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_constructor_applied() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const x Int)",
+        "(mkpair x 42)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_selector() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const p Pair)",
+        "(fst p)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_tester() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "((_ is Red) c)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_wildcard() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (x 0)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_real_literal() {
+    // 1.5 is represented as 3/2 in cvc5; reverse translates to (/ 3 2)
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic QF_LRA) (declare-const x Real)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(+ x 1.5)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(back.to_string(), "(+ x (/ 3 2))");
+}
+
+#[test]
+fn from_cvc5_term_let_eliminated() {
+    // let bindings are eliminated during forward translation; the reverse should still work
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int)",
+        "(+ (+ x 1) (+ x 1))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_deeply_nested() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int)",
+        "(+ (+ (+ (+ x 1) 2) 3) 4)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_implies_chain() {
+    // cvc5 normalizes (=> a b c) to (=> a (=> b c))
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool) (declare-const c Bool)",
+        "(=> a (=> b c))",
     );
 }

@@ -53,6 +53,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::*;
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
+use crate::statics::*;
 use crate::traits::{Contains, Repr};
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
 use dashu::integer::UBig;
@@ -332,7 +333,7 @@ impl<'tm> ConvertToCvc5<Cvc5Env<'tm>> for Sort {
 ///
 /// The type parameter `Env` must implement [`HasArena`], providing the [`Arena`] used
 /// to allocate yaspar-ir objects. This lets callers reuse an existing [`Context`] (or
-/// any other `HasArena` implementor) instead of creating a throwaway arena.
+/// any other `HasArena` implementor) instead of creating a throwaway fenv.env.
 ///
 /// # Example
 ///
@@ -344,20 +345,20 @@ impl<'tm> ConvertToCvc5<Cvc5Env<'tm>> for Sort {
 /// let mut from_env = FromCvc5Env::new(&mut ctx);
 /// // use from_env with ConvertFromCvc5::conv_from_cvc5
 /// ```
-pub struct FromCvc5Env<'tm, 'env, Env> {
+pub struct FromCvc5Env<'tm, 'env> {
     /// Cache from [`CSort`] to yaspar-ir [`Sort`], avoiding redundant work.
     sort_cache: HashMap<CSort<'tm>, Sort>,
     /// Bound variable map: cvc5 term id → VarBinding.
     locals: HashMap<u64, VarBinding<Str, Sort>>,
     /// Stack of bound variable ids for scope cleanup.
     scope_stack: Vec<Vec<u64>>,
-    /// The backing environment that provides the [`Arena`].
-    pub env: &'env mut Env,
+    /// The backing context.
+    pub env: &'env mut Context,
 }
 
-impl<'tm, 'env, Env: HasArena> FromCvc5Env<'tm, 'env, Env> {
+impl<'tm, 'env> FromCvc5Env<'tm, 'env> {
     /// Create a new reverse-translation environment backed by `env`.
-    pub fn new(env: &'env mut Env) -> Self {
+    pub fn new(env: &'env mut Context) -> Self {
         Self {
             sort_cache: HashMap::new(),
             locals: HashMap::new(),
@@ -367,10 +368,10 @@ impl<'tm, 'env, Env: HasArena> FromCvc5Env<'tm, 'env, Env> {
     }
 }
 
-impl<'tm, 'env, Env: HasArena> ConvertFromCvc5<FromCvc5Env<'tm, 'env, Env>> for CSort<'tm> {
+impl<'tm, 'env> ConvertFromCvc5<FromCvc5Env<'tm, 'env>> for CSort<'tm> {
     type Output = Sort;
 
-    fn conv_from_cvc5(&self, fenv: &mut FromCvc5Env<'tm, 'env, Env>) -> Res<Sort> {
+    fn conv_from_cvc5(&self, fenv: &mut FromCvc5Env<'tm, 'env>) -> Res<Sort> {
         if let Some(s) = fenv.sort_cache.get(self) {
             return Ok(s.clone());
         }
@@ -444,25 +445,26 @@ fn translate_sort_from_cvc5<'tm>(cs: &CSort<'tm>, arena: &mut Arena) -> Res<Sort
 
 // ── Term: cvc5 → yaspar-ir ───────────────────────────────────
 
-impl<'tm, 'env, Env: HasArena> ConvertFromCvc5<FromCvc5Env<'tm, 'env, Env>> for CTerm<'tm> {
+impl<'tm, 'env> ConvertFromCvc5<FromCvc5Env<'tm, 'env>> for CTerm<'tm> {
     type Output = Term;
 
-    fn conv_from_cvc5(&self, fenv: &mut FromCvc5Env<'tm, 'env, Env>) -> Res<Term> {
+    fn conv_from_cvc5(&self, fenv: &mut FromCvc5Env<'tm, 'env>) -> Res<Term> {
         translate_term_from_cvc5(self, fenv)
     }
 }
 
-fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
+fn translate_term_from_cvc5<'tm, 'env>(
     ct: &CTerm<'tm>,
-    fenv: &mut FromCvc5Env<'tm, 'env, Env>,
+    fenv: &mut FromCvc5Env<'tm, 'env>,
 ) -> Res<Term> {
-    let arena = fenv.env.arena();
     let kind = ct.kind();
 
     // ── Constants ────────────────────────────────────────────
     if ct.is_boolean_value() {
-        let sort = Some(arena.bool_sort());
-        return Ok(arena.allocate_term(ATerm::Constant(Constant::Bool(ct.boolean_value()), sort)));
+        let sort = Some(fenv.env.bool_sort());
+        return Ok(fenv
+            .env
+            .allocate_term(ATerm::Constant(Constant::Bool(ct.boolean_value()), sort)));
     }
     if ct.is_integer_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -470,21 +472,48 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
             .integer_value()
             .parse()
             .map_err(|e| format!("Big integer parse error: {e}"))?;
-        let arena = fenv.env.arena();
-        return Ok(arena.allocate_term(ATerm::Constant(Constant::Numeral(n), Some(sort))));
+        return Ok(fenv
+            .env
+            .allocate_term(ATerm::Constant(Constant::Numeral(n), Some(sort))));
     }
     if ct.is_real_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
         let s = ct.real_value();
-        let arena = fenv.env.arena();
+        let has_ints = fenv.env.get_theories().iter().any(|t| t.has_int());
         // cvc5 returns rationals as "num/den" or just "num"
-        if let Some((num, den)) = s.split_once('/') {
-            let n: dashu::float::DBig =
-                format!("{num}/{den}").parse().map_err(|e| format!("{e}"))?;
-            return Ok(arena.allocate_term(ATerm::Constant(Constant::Decimal(n), Some(sort))));
+        if let Some((num_s, den_s)) = s.split_once('/') {
+            let (numer, denom) = if has_ints {
+                // In RealInts, numerals are Int; use Decimal constants for Real division
+                let n = Constant::Decimal(format!("{num_s}.0").parse().unwrap());
+                let d = Constant::Decimal(format!("{den_s}.0").parse().unwrap());
+                let numer = fenv
+                    .env
+                    .allocate_term(ATerm::Constant(n, Some(sort.clone())));
+                let denom = fenv
+                    .env
+                    .allocate_term(ATerm::Constant(d, Some(sort.clone())));
+                (numer, denom)
+            } else {
+                let num: UBig = num_s.parse().map_err(|e| format!("{e}"))?;
+                let den: UBig = den_s.parse().map_err(|e| format!("{e}"))?;
+                let int = fenv.env.int_sort();
+                let numer = fenv
+                    .env
+                    .allocate_term(ATerm::Constant(Constant::Numeral(num), Some(int.clone())));
+                let denom = fenv
+                    .env
+                    .allocate_term(ATerm::Constant(Constant::Numeral(den), Some(int)));
+                (numer, denom)
+            };
+            let sym = fenv.env.allocate_symbol(RDIV);
+            let qid = QualifiedIdentifier::simple(sym);
+            return Ok(fenv.env.app(qid, vec![numer, denom], Some(sort)));
         }
-        let n: dashu::float::DBig = format!("{s}/1").parse().map_err(|e| format!("{e}"))?;
-        return Ok(arena.allocate_term(ATerm::Constant(Constant::Decimal(n), Some(sort))));
+        // No division — parse as a single decimal
+        let n: dashu::float::DBig = format!("{s}.0").parse().map_err(|e| format!("{e}"))?;
+        return Ok(fenv
+            .env
+            .allocate_term(ATerm::Constant(Constant::Decimal(n), Some(sort))));
     }
     if ct.is_string_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -493,39 +522,39 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
             .iter()
             .map(|&c| char::from_u32(c).unwrap_or('\u{FFFD}'))
             .collect();
-        let arena = fenv.env.arena();
-        let str_val = arena.allocate_str(&s);
-        return Ok(arena.allocate_term(ATerm::Constant(Constant::String(str_val), Some(sort))));
+        
+        let str_val = fenv.env.allocate_str(&s);
+        return Ok(fenv.env.allocate_term(ATerm::Constant(Constant::String(str_val), Some(sort))));
     }
     if ct.is_bv_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
         let bits = ct.bv_value(2);
         let (bytes, len) = parse_binary_str_to_bytes(&bits);
-        let arena = fenv.env.arena();
-        return Ok(arena.allocate_term(ATerm::Constant(Constant::Binary(bytes, len), Some(sort))));
+        
+        return Ok(fenv.env.allocate_term(ATerm::Constant(Constant::Binary(bytes, len), Some(sort))));
     }
 
     // ── Logical connectives ─────────────────────────────────
     match kind {
         Kind::And => {
             let children = translate_children(ct, fenv)?;
-            let arena = fenv.env.arena();
-            return Ok(arena.and(children));
+            
+            return Ok(fenv.env.and(children));
         }
         Kind::Or => {
             let children = translate_children(ct, fenv)?;
-            let arena = fenv.env.arena();
-            return Ok(arena.or(children));
+            
+            return Ok(fenv.env.or(children));
         }
         Kind::Xor => {
             let children = translate_children(ct, fenv)?;
-            let arena = fenv.env.arena();
-            return Ok(arena.xor(children));
+            
+            return Ok(fenv.env.xor(children));
         }
         Kind::Not => {
             let child = translate_term_from_cvc5(&ct.child(0), fenv)?;
-            let arena = fenv.env.arena();
-            return Ok(arena.not(child));
+            
+            return Ok(fenv.env.not(child));
         }
         Kind::Implies => {
             let n = ct.num_children();
@@ -534,33 +563,33 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
                 premises.push(translate_term_from_cvc5(&ct.child(i), fenv)?);
             }
             let concl = translate_term_from_cvc5(&ct.child(n - 1), fenv)?;
-            let arena = fenv.env.arena();
-            return Ok(arena.implies(premises, concl));
+            
+            return Ok(fenv.env.implies(premises, concl));
         }
         Kind::Equal => {
             let children = translate_children(ct, fenv)?;
-            let arena = fenv.env.arena();
+            
             if children.len() == 2 {
-                return Ok(arena.eq(children[0].clone(), children[1].clone()));
+                return Ok(fenv.env.eq(children[0].clone(), children[1].clone()));
             }
             // Chain: (= a b c) → (and (= a b) (= b c))
             let mut eqs = Vec::with_capacity(children.len() - 1);
             for i in 0..children.len() - 1 {
-                eqs.push(arena.eq(children[i].clone(), children[i + 1].clone()));
+                eqs.push(fenv.env.eq(children[i].clone(), children[i + 1].clone()));
             }
-            return Ok(arena.and(eqs));
+            return Ok(fenv.env.and(eqs));
         }
         Kind::Distinct => {
             let children = translate_children(ct, fenv)?;
-            let arena = fenv.env.arena();
-            return Ok(arena.distinct(children));
+            
+            return Ok(fenv.env.distinct(children));
         }
         Kind::Ite => {
             let b = translate_term_from_cvc5(&ct.child(0), fenv)?;
             let t = translate_term_from_cvc5(&ct.child(1), fenv)?;
             let e = translate_term_from_cvc5(&ct.child(2), fenv)?;
-            let arena = fenv.env.arena();
-            return Ok(arena.ite(b, t, e));
+            
+            return Ok(fenv.env.ite(b, t, e));
         }
         // ── Quantifiers ─────────────────────────────────────────
         Kind::Forall | Kind::Exists => {
@@ -572,34 +601,57 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
                 let cvc5_id = v.id();
                 let name = v.symbol().to_string();
                 let vs = v.sort().conv_from_cvc5(fenv)?;
-                let arena = fenv.env.arena();
-                let id = arena.new_local();
-                let sym = arena.allocate_symbol(&name);
+                
+                let id = fenv.env.new_local();
+                let sym = fenv.env.allocate_symbol(&name);
                 fenv.locals.insert(cvc5_id, VarBinding(sym, id, vs));
                 scope_ids.push(cvc5_id);
             }
             fenv.scope_stack.push(scope_ids);
             let body = translate_term_from_cvc5(&body_ct, fenv)?;
+            // Translate :pattern annotations if present (child 2 is INST_PATTERN_LIST)
+            let body = if ct.num_children() > 2 {
+                let plist = ct.child(2);
+                let mut attrs = Vec::new();
+                for i in 0..plist.num_children() {
+                    let pat = plist.child(i);
+                    if pat.kind() == Kind::InstPattern {
+                        let mut pat_terms = Vec::new();
+                        for j in 0..pat.num_children() {
+                            pat_terms.push(translate_term_from_cvc5(&pat.child(j), fenv)?);
+                        }
+                        attrs.push(alg::Attribute::Pattern(pat_terms));
+                    }
+                }
+                if attrs.is_empty() {
+                    body
+                } else {
+                    
+                    fenv.env.annotated(body, attrs)
+                }
+            } else {
+                body
+            };
             let scope_ids = fenv.scope_stack.pop().unwrap();
             let bindings: Vec<_> = scope_ids
                 .iter()
                 .map(|id| fenv.locals.remove(id).unwrap())
                 .collect();
-            let arena = fenv.env.arena();
+            
             return if kind == Kind::Forall {
-                Ok(arena.forall(bindings, body))
+                Ok(fenv.env.forall(bindings, body))
             } else {
-                Ok(arena.exists(bindings, body))
+                Ok(fenv.env.exists(bindings, body))
             };
         }
         // ── Negation (unary minus) ──────────────────────────────
         Kind::Neg => {
             let child = translate_term_from_cvc5(&ct.child(0), fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol("-");
+            
+            let sym = fenv.env.allocate_symbol(SUB);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(arena.app(qid, vec![child], Some(sort)));
+            return Ok(fenv.env.app(qid, vec![child], Some(sort)));
         }
 
         // ── Function application (UF, constructors, selectors, testers) ──
@@ -607,10 +659,10 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
             // Uninterpreted constant (declared symbol)
             let name = ct.symbol().to_string();
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol(&name);
+            
+            let sym = fenv.env.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(arena.global(qid, Some(sort)));
+            return Ok(fenv.env.global(qid, Some(sort)));
         }
         Kind::ApplyUf => {
             let head = ct.child(0);
@@ -620,10 +672,10 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
                 args.push(translate_term_from_cvc5(&ct.child(i), fenv)?);
             }
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol(&name);
+            
+            let sym = fenv.env.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(arena.app(qid, args, Some(sort)));
+            return Ok(fenv.env.app(qid, args, Some(sort)));
         }
         Kind::ApplyConstructor => {
             let head = ct.child(0);
@@ -632,53 +684,55 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
             if n == 1 {
                 // Nullary constructor → global
                 let sort = ct.sort().conv_from_cvc5(fenv)?;
-                let arena = fenv.env.arena();
-                let sym = arena.allocate_symbol(&name);
+                
+                let sym = fenv.env.allocate_symbol(&name);
                 let qid = QualifiedIdentifier::simple(sym);
-                return Ok(arena.global(qid, Some(sort)));
+                return Ok(fenv.env.global(qid, Some(sort)));
             }
             let mut args = Vec::with_capacity(n - 1);
             for i in 1..n {
                 args.push(translate_term_from_cvc5(&ct.child(i), fenv)?);
             }
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol(&name);
+            
+            let sym = fenv.env.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(arena.app(qid, args, Some(sort)));
+            return Ok(fenv.env.app(qid, args, Some(sort)));
         }
         Kind::ApplySelector => {
             let head = ct.child(0);
             let name = head.symbol().to_string();
             let arg = translate_term_from_cvc5(&ct.child(1), fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol(&name);
+            
+            let sym = fenv.env.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(arena.app(qid, vec![arg], Some(sort)));
+            return Ok(fenv.env.app(qid, vec![arg], Some(sort)));
         }
         Kind::ApplyTester => {
             let head = ct.child(0);
-            let ctor_name = head.symbol().to_string();
+            let tester_name = head.symbol().to_string();
+            // cvc5 tester names are "is_<ctor>"; extract the constructor name
+            let ctor_name = tester_name.strip_prefix("is_").unwrap_or(&tester_name);
             let arg = translate_term_from_cvc5(&ct.child(1), fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let is_sym = arena.allocate_symbol("is");
-            let ctor_sym = arena.allocate_symbol(&ctor_name);
+            
+            let is_sym = fenv.env.allocate_symbol(IS);
+            let ctor_sym = fenv.env.allocate_symbol(ctor_name);
             let id = alg::Identifier {
                 symbol: is_sym,
                 indices: vec![Index::Symbol(ctor_sym)],
             };
             let qid = QualifiedIdentifier::from(id);
-            return Ok(arena.app(qid, vec![arg], Some(sort)));
+            return Ok(fenv.env.app(qid, vec![arg], Some(sort)));
         }
 
         // ── Variable (bound) ────────────────────────────────────
         Kind::Variable => {
             let cvc5_id = ct.id();
             if let Some(vb) = fenv.locals.get(&cvc5_id) {
-                let arena = fenv.env.arena();
-                return Ok(arena.local(alg::Local {
+                
+                return Ok(fenv.env.local(alg::Local {
                     id: vb.1,
                     symbol: vb.0.clone(),
                     sort: vb.2.clone(),
@@ -687,10 +741,10 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
             // Fallback: unregistered variable (shouldn't happen in well-formed terms)
             let name = ct.symbol().to_string();
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let id = arena.new_local();
-            let sym = arena.allocate_symbol(&name);
-            return Ok(arena.local(alg::Local {
+            
+            let id = fenv.env.new_local();
+            let sym = fenv.env.allocate_symbol(&name);
+            return Ok(fenv.env.local(alg::Local {
                 id,
                 symbol: sym,
                 sort,
@@ -700,20 +754,20 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
         Kind::RegexpNone | Kind::RegexpAll | Kind::RegexpAllchar => {
             let ik = cvc5_kind_to_ident_kind(kind).unwrap();
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol(ik.name());
+            
+            let sym = fenv.env.allocate_symbol(ik.name());
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(arena.global(qid, Some(sort)));
+            return Ok(fenv.env.global(qid, Some(sort)));
         }
 
         // ── BitvectorToNat ──────────────────────────────────────
         Kind::BitvectorToNat => {
             let child = translate_term_from_cvc5(&ct.child(0), fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol("bv2nat");
+            
+            let sym = fenv.env.allocate_symbol(BV2NAT);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(arena.app(qid, vec![child], Some(sort)));
+            return Ok(fenv.env.app(qid, vec![child], Some(sort)));
         }
 
         // ── Match expressions ───────────────────────────────────
@@ -726,9 +780,10 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
                 let arm = translate_match_case_from_cvc5(&case, fenv)?;
                 arms.push(arm);
             }
-            let arena = fenv.env.arena();
-            return Ok(arena.matching(scrutinee, arms));
+            
+            return Ok(fenv.env.matching(scrutinee, arms));
         }
+        // todo: Const and UninterpretedSortValue
         _ => {}
     }
 
@@ -736,11 +791,11 @@ fn translate_term_from_cvc5<'tm, 'env, Env: HasArena>(
     if let Some(ik) = cvc5_kind_to_ident_kind(kind) {
         let children = translate_children(ct, fenv)?;
         let sort = ct.sort().conv_from_cvc5(fenv)?;
-        let arena = fenv.env.arena();
+        
         let name = ik.name();
-        let sym = arena.allocate_symbol(name);
+        let sym = fenv.env.allocate_symbol(name);
         let qid = QualifiedIdentifier::simple(sym);
-        return Ok(arena.app(qid, children, Some(sort)));
+        return Ok(fenv.env.app(qid, children, Some(sort)));
     }
 
     // ── Indexed operators ───────────────────────────────────
@@ -777,9 +832,9 @@ fn parse_binary_str_to_bytes(s: &str) -> (Vec<u8>, usize) {
     (ret, s.len())
 }
 
-fn translate_children<'tm, 'env, Env: HasArena>(
+fn translate_children<'tm, 'env>(
     ct: &CTerm<'tm>,
-    fenv: &mut FromCvc5Env<'tm, 'env, Env>,
+    fenv: &mut FromCvc5Env<'tm, 'env>,
 ) -> Res<Vec<Term>> {
     let n = ct.num_children();
     let mut children = Vec::with_capacity(n);
@@ -789,9 +844,9 @@ fn translate_children<'tm, 'env, Env: HasArena>(
     Ok(children)
 }
 
-fn translate_match_case_from_cvc5<'tm, 'env, Env: HasArena>(
+fn translate_match_case_from_cvc5<'tm, 'env>(
     case: &CTerm<'tm>,
-    fenv: &mut FromCvc5Env<'tm, 'env, Env>,
+    fenv: &mut FromCvc5Env<'tm, 'env>,
 ) -> Res<alg::PatternArm<Str, Term>> {
     let case_kind = case.kind();
     match case_kind {
@@ -802,8 +857,8 @@ fn translate_match_case_from_cvc5<'tm, 'env, Env: HasArena>(
             let ctor_term = pattern_ct.child(0);
             let ctor_name = ctor_term.symbol().to_string();
             let body = translate_term_from_cvc5(&case.child(1), fenv)?;
-            let arena = fenv.env.arena();
-            let sym = arena.allocate_symbol(&ctor_name);
+            
+            let sym = fenv.env.allocate_symbol(&ctor_name);
             Ok(alg::PatternArm {
                 pattern: alg::Pattern::Ctor(sym),
                 body,
@@ -823,9 +878,9 @@ fn translate_match_case_from_cvc5<'tm, 'env, Env: HasArena>(
                 let cvc5_id = v.id();
                 let name = v.symbol().to_string();
                 let vs = v.sort().conv_from_cvc5(fenv)?;
-                let arena = fenv.env.arena();
-                let id = arena.new_local();
-                let sym = arena.allocate_symbol(&name);
+                
+                let id = fenv.env.new_local();
+                let sym = fenv.env.allocate_symbol(&name);
                 let vb = VarBinding(sym.clone(), id, vs);
                 fenv.locals.insert(cvc5_id, vb);
                 fenv.scope_stack.push(vec![cvc5_id]);
@@ -857,9 +912,9 @@ fn translate_match_case_from_cvc5<'tm, 'env, Env: HasArena>(
                     let cvc5_id = v.id();
                     let name = v.symbol().to_string();
                     let vs = v.sort().conv_from_cvc5(fenv)?;
-                    let arena = fenv.env.arena();
-                    let id = arena.new_local();
-                    let sym = arena.allocate_symbol(&name);
+                    
+                    let id = fenv.env.new_local();
+                    let sym = fenv.env.allocate_symbol(&name);
                     fenv.locals.insert(cvc5_id, VarBinding(sym, id, vs));
                     scope_ids.push(cvc5_id);
                     vlist_vars.insert(cvc5_id, i);
@@ -888,8 +943,8 @@ fn translate_match_case_from_cvc5<'tm, 'env, Env: HasArena>(
                     fenv.locals.remove(sid);
                 }
 
-                let arena = fenv.env.arena();
-                let ctor_sym = arena.allocate_symbol(&ctor_name);
+                
+                let ctor_sym = fenv.env.allocate_symbol(&ctor_name);
                 Ok(alg::PatternArm {
                     pattern: alg::Pattern::Applied {
                         ctor: ctor_sym,
@@ -903,82 +958,41 @@ fn translate_match_case_from_cvc5<'tm, 'env, Env: HasArena>(
     }
 }
 
-fn translate_indexed_from_cvc5<'tm, 'env, Env: HasArena>(
+fn translate_indexed_from_cvc5<'tm, 'env>(
     ct: &CTerm<'tm>,
     op: &cvc5::Op<'tm>,
-    fenv: &mut FromCvc5Env<'tm, 'env, Env>,
+    fenv: &mut FromCvc5Env<'tm, 'env>,
 ) -> Res<Option<Term>> {
     let op_kind = op.kind();
     let children = translate_children(ct, fenv)?;
     let sort = ct.sort().conv_from_cvc5(fenv)?;
-    let arena = fenv.env.arena();
-
-    let mk_indexed = |arena: &mut Arena, name: &str, indices: Vec<Index>| -> Term {
-        let sym = arena.allocate_symbol(name);
-        let id = alg::Identifier {
-            symbol: sym,
-            indices,
-        };
-        let qid = QualifiedIdentifier::from(id);
-        arena.app(qid, children.clone(), Some(sort.clone()))
-    };
 
     let idx_u32 = |i: usize| -> Res<UBig> {
         let idx_term = op.index(i);
-        let val: u32 = idx_term.uint32_value();
-        Ok(UBig::from(val))
+        Ok(UBig::from(idx_term.uint32_value()))
     };
 
-    let term = match op_kind {
+    let (name, indices) = match op_kind {
         Kind::BitvectorExtract => {
-            let hi = idx_u32(0)?;
-            let lo = idx_u32(1)?;
-            mk_indexed(
-                arena,
-                "extract",
-                vec![Index::Numeral(hi), Index::Numeral(lo)],
-            )
+            (BV_EXTRACT, vec![Index::Numeral(idx_u32(0)?), Index::Numeral(idx_u32(1)?)])
         }
-        Kind::BitvectorRepeat => {
-            let n = idx_u32(0)?;
-            mk_indexed(arena, "repeat", vec![Index::Numeral(n)])
-        }
-        Kind::BitvectorZeroExtend => {
-            let n = idx_u32(0)?;
-            mk_indexed(arena, "zero_extend", vec![Index::Numeral(n)])
-        }
-        Kind::BitvectorSignExtend => {
-            let n = idx_u32(0)?;
-            mk_indexed(arena, "sign_extend", vec![Index::Numeral(n)])
-        }
-        Kind::BitvectorRotateLeft => {
-            let n = idx_u32(0)?;
-            mk_indexed(arena, "rotate_left", vec![Index::Numeral(n)])
-        }
-        Kind::BitvectorRotateRight => {
-            let n = idx_u32(0)?;
-            mk_indexed(arena, "rotate_right", vec![Index::Numeral(n)])
-        }
-        Kind::IntToBitvector => {
-            let n = idx_u32(0)?;
-            mk_indexed(arena, "int2bv", vec![Index::Numeral(n)])
-        }
-        Kind::RegexpRepeat => {
-            let n = idx_u32(0)?;
-            mk_indexed(arena, "re.^", vec![Index::Numeral(n)])
-        }
+        Kind::BitvectorRepeat => (BV_REPEAT, vec![Index::Numeral(idx_u32(0)?)]),
+        Kind::BitvectorZeroExtend => (BV_ZERO_EXTEND, vec![Index::Numeral(idx_u32(0)?)]),
+        Kind::BitvectorSignExtend => (BV_SIGN_EXTEND, vec![Index::Numeral(idx_u32(0)?)]),
+        Kind::BitvectorRotateLeft => (BV_ROTATE_LEFT, vec![Index::Numeral(idx_u32(0)?)]),
+        Kind::BitvectorRotateRight => (BV_ROTATE_RIGHT, vec![Index::Numeral(idx_u32(0)?)]),
+        Kind::IntToBitvector => (INT2BV, vec![Index::Numeral(idx_u32(0)?)]),
+        Kind::RegexpRepeat => (RE_POWER, vec![Index::Numeral(idx_u32(0)?)]),
         Kind::RegexpLoop => {
-            let lo = idx_u32(0)?;
-            let hi = idx_u32(1)?;
-            mk_indexed(
-                arena,
-                "re.loop",
-                vec![Index::Numeral(lo), Index::Numeral(hi)],
-            )
+            (RE_LOOP, vec![Index::Numeral(idx_u32(0)?), Index::Numeral(idx_u32(1)?)])
         }
         _ => return Ok(None),
     };
-    Ok(Some(term))
+
+    let sym = fenv.env.allocate_symbol(name);
+    let id = alg::Identifier { symbol: sym, indices };
+    let qid = QualifiedIdentifier::from(id);
+    Ok(Some(fenv.env.app(qid, children, Some(sort))))
 }
 
 /// Reverse mapping from cvc5 Kind to yaspar-ir IdentifierKind.
