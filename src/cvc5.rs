@@ -512,6 +512,17 @@ fn translate_sort_from_cvc5<'tm>(cs: &CSort<'tm>, arena: &mut Arena) -> Res<Sort
 
 // ── Term: cvc5 → yaspar-ir ───────────────────────────────────
 
+impl<'tm, 'env, T> ConvertFromCvc5<FromCvc5Env<'tm, 'env>> for [T]
+where
+    T: ConvertFromCvc5<FromCvc5Env<'tm, 'env>>,
+{
+    type Output = Vec<T::Output>;
+
+    fn conv_from_cvc5(&self, env: &mut FromCvc5Env<'tm, 'env>) -> Res<Self::Output> {
+        self.iter().map(|s| s.conv_from_cvc5(env)).collect()
+    }
+}
+
 impl<'tm, 'env> ConvertFromCvc5<FromCvc5Env<'tm, 'env>> for CTerm<'tm> {
     type Output = Term;
 
