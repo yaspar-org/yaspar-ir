@@ -1087,3 +1087,32 @@ fn const_array_bool() {
          (check-sat)",
     );
 }
+
+#[test]
+fn const_array_negative() {
+    let mut ctx = Context::new();
+    let cmds = UntypedAst
+        .parse_script_str(
+            "(set-logic ALL)
+         (set-option :arrays-exp true)
+         (declare-const a (Array Int Bool))
+         (declare-const b Bool)
+         ",
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(= a ((as const (Array Int Bool)) b))")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    assert!(term.to_cvc5(&mut env).is_err());
+}
