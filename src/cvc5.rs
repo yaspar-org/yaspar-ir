@@ -1096,26 +1096,29 @@ fn translate_indexed_from_cvc5<'tm, 'env>(
     let children = translate_children(ct, fenv)?;
     let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-    let idx_u32 = |i: usize| -> Res<UBig> {
+    let idx_ubig = |i: usize| -> Res<UBig> {
         let idx_term = op.index(i);
-        Ok(UBig::from(idx_term.uint32_value()))
+        idx_term
+            .integer_value()
+            .parse::<UBig>()
+            .map_err(|e| format!("Big integer parse error: {e}"))
     };
 
     let (name, indices) = match op_kind {
         Kind::BitvectorExtract => (
             BV_EXTRACT,
-            vec![Index::Numeral(idx_u32(0)?), Index::Numeral(idx_u32(1)?)],
+            vec![Index::Numeral(idx_ubig(0)?), Index::Numeral(idx_ubig(1)?)],
         ),
-        Kind::BitvectorRepeat => (BV_REPEAT, vec![Index::Numeral(idx_u32(0)?)]),
-        Kind::BitvectorZeroExtend => (BV_ZERO_EXTEND, vec![Index::Numeral(idx_u32(0)?)]),
-        Kind::BitvectorSignExtend => (BV_SIGN_EXTEND, vec![Index::Numeral(idx_u32(0)?)]),
-        Kind::BitvectorRotateLeft => (BV_ROTATE_LEFT, vec![Index::Numeral(idx_u32(0)?)]),
-        Kind::BitvectorRotateRight => (BV_ROTATE_RIGHT, vec![Index::Numeral(idx_u32(0)?)]),
-        Kind::IntToBitvector => (INT2BV, vec![Index::Numeral(idx_u32(0)?)]),
-        Kind::RegexpRepeat => (RE_POWER, vec![Index::Numeral(idx_u32(0)?)]),
+        Kind::BitvectorRepeat => (BV_REPEAT, vec![Index::Numeral(idx_ubig(0)?)]),
+        Kind::BitvectorZeroExtend => (BV_ZERO_EXTEND, vec![Index::Numeral(idx_ubig(0)?)]),
+        Kind::BitvectorSignExtend => (BV_SIGN_EXTEND, vec![Index::Numeral(idx_ubig(0)?)]),
+        Kind::BitvectorRotateLeft => (BV_ROTATE_LEFT, vec![Index::Numeral(idx_ubig(0)?)]),
+        Kind::BitvectorRotateRight => (BV_ROTATE_RIGHT, vec![Index::Numeral(idx_ubig(0)?)]),
+        Kind::IntToBitvector => (INT2BV, vec![Index::Numeral(idx_ubig(0)?)]),
+        Kind::RegexpRepeat => (RE_POWER, vec![Index::Numeral(idx_ubig(0)?)]),
         Kind::RegexpLoop => (
             RE_LOOP,
-            vec![Index::Numeral(idx_u32(0)?), Index::Numeral(idx_u32(1)?)],
+            vec![Index::Numeral(idx_ubig(0)?), Index::Numeral(idx_ubig(1)?)],
         ),
         _ => return Ok(None),
     };
