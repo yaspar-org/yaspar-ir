@@ -55,6 +55,7 @@ use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::statics::*;
 use crate::traits::{Contains, Repr};
+use crate::untyped::UntypedAst;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
 use dashu::integer::UBig;
 use std::collections::HashMap;
@@ -531,7 +532,14 @@ fn translate_term_from_cvc5<'tm, 'env>(
     if ct.is_bv_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
         let bits = ct.bv_value(2);
-        let (bytes, len) = parse_binary_str_to_bytes(&bits);
+        let (bytes, len) = match UntypedAst
+            .parse_term_str(&format!("#b{bits}"))
+            .map_err(|e| format!("{e}"))?
+            .repr()
+        {
+            ATerm::Constant(alg::Constant::Binary(bytes, len), _) => (bytes.clone(), *len),
+            _ => return Err(format!("bit vector literal {bits} cannot be parsed!")),
+        };
 
         return Ok(fenv
             .env
@@ -811,7 +819,42 @@ fn translate_term_from_cvc5<'tm, 'env>(
 
             return Ok(fenv.env.matching(scrutinee, arms));
         }
-        // todo: Const and UninterpretedSortValue
+        // ── Const array ──────────────────────────────────────────
+        Kind::ConstArray => {
+            todo!("ConstArray reverse translation")
+        }
+
+        // ── Uninterpreted sort value (from models) ──────────────
+        Kind::UninterpretedSortValue => {
+            todo!("UninterpretedSortValue reverse translation")
+        }
+
+        // ── Lambda ──────────────────────────────────────────────
+        Kind::Lambda => return Err("higher order functions are not supported!".into()),
+
+        // ── Sequences ───────────────────────────────────────────
+        Kind::ConstSequence => return Err("sequence operations are not supported!".into()),
+
+        // ── Sets ────────────────────────────────────────────────
+        Kind::SetEmpty
+        | Kind::SetUniverse
+        | Kind::SetSingleton
+        | Kind::SetUnion
+        | Kind::SetInter
+        | Kind::SetMinus
+        | Kind::SetMember
+        | Kind::SetSubset
+        | Kind::SetComplement
+        | Kind::SetInsert
+        | Kind::SetCard => {
+            return Err("set operations are not supported!".into());
+        }
+
+        // ── Floating point ──────────────────────────────────────
+        Kind::ConstFloatingpoint | Kind::ConstRoundingmode | Kind::FloatingpointFp => {
+            return Err("floating point operations are not supported!".into());
+        }
+
         _ => {}
     }
 
@@ -835,29 +878,6 @@ fn translate_term_from_cvc5<'tm, 'env>(
     }
 
     Err(format!("unsupported cvc5 term kind: {:?}", kind))
-}
-
-/// Parse a binary string (e.g. "10110") into packed bytes and length.
-/// Mirrors the logic of `yaspar::parse_binary_str`.
-fn parse_binary_str_to_bytes(s: &str) -> (Vec<u8>, usize) {
-    let mut ret = Vec::new();
-    let mut r: u8 = 0;
-    let mut i: usize = 1;
-    for c in s.chars().rev() {
-        if c == '1' {
-            r |= i as u8;
-        }
-        i *= 2;
-        if i == 256 {
-            i = 1;
-            ret.push(r);
-            r = 0;
-        }
-    }
-    if i > 1 {
-        ret.push(r);
-    }
-    (ret, s.len())
 }
 
 fn translate_children<'tm, 'env>(
@@ -1015,6 +1035,21 @@ fn translate_indexed_from_cvc5<'tm, 'env>(
             RE_LOOP,
             vec![Index::Numeral(idx_u32(0)?), Index::Numeral(idx_u32(1)?)],
         ),
+        Kind::Divisible => {
+            todo!("Divisible indexed operator reverse translation")
+        }
+        Kind::FloatingpointToFpFromIeeeBv
+        | Kind::FloatingpointToFpFromFp
+        | Kind::FloatingpointToFpFromReal
+        | Kind::FloatingpointToFpFromSbv
+        | Kind::FloatingpointToFpFromUbv
+        | Kind::FloatingpointToUbv
+        | Kind::FloatingpointToSbv => {
+            todo!("Floating point indexed operator reverse translation")
+        }
+        Kind::TupleProject => {
+            todo!("TupleProject indexed operator reverse translation")
+        }
         _ => return Ok(None),
     };
 
