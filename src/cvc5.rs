@@ -679,14 +679,32 @@ fn translate_term_from_cvc5<'tm, 'env>(
         }
         Kind::ApplyConstructor => {
             let head = ct.child(0);
-            let name = head.symbol().to_string();
+            let name = if head.has_symbol() {
+                head.symbol().to_string()
+            } else {
+                // Parametric constructor: get name from the sort's datatype
+                let dt = ct.sort().datatype();
+                let mut found = String::new();
+                for i in 0..dt.num_constructors() {
+                    let ctor = dt.constructor(i);
+                    if ctor.term() == head || ctor.num_selectors() == ct.num_children() - 1 {
+                        found = ctor.name().to_string();
+                        break;
+                    }
+                }
+                found
+            };
             let n = ct.num_children();
             if n == 1 {
                 // Nullary constructor → global
                 let sort = ct.sort().conv_from_cvc5(fenv)?;
                 
                 let sym = fenv.env.allocate_symbol(&name);
-                let qid = QualifiedIdentifier::simple(sym);
+                let qid = if ct.sort().is_dt() && ct.sort().datatype().is_parametric() {
+                    QualifiedIdentifier::simple_sorted(sym, sort.clone())
+                } else {
+                    QualifiedIdentifier::simple(sym)
+                };
                 return Ok(fenv.env.global(qid, Some(sort)));
             }
             let mut args = Vec::with_capacity(n - 1);
@@ -701,7 +719,11 @@ fn translate_term_from_cvc5<'tm, 'env>(
         }
         Kind::ApplySelector => {
             let head = ct.child(0);
-            let name = head.symbol().to_string();
+            let name = if head.has_symbol() {
+                head.symbol().to_string()
+            } else {
+                format!("{head}")
+            };
             let arg = translate_term_from_cvc5(&ct.child(1), fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
             
@@ -711,7 +733,11 @@ fn translate_term_from_cvc5<'tm, 'env>(
         }
         Kind::ApplyTester => {
             let head = ct.child(0);
-            let tester_name = head.symbol().to_string();
+            let tester_name = if head.has_symbol() {
+                head.symbol().to_string()
+            } else {
+                format!("{head}")
+            };
             // cvc5 tester names are "is_<ctor>"; extract the constructor name
             let ctor_name = tester_name.strip_prefix("is_").unwrap_or(&tester_name);
             let arg = translate_term_from_cvc5(&ct.child(1), fenv)?;

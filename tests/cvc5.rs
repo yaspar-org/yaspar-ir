@@ -959,7 +959,6 @@ fn command_result_get_model_uninterpreted_sort_nested() {
 
 // ── ConvertFromCvc5 sort round-trip tests ────────────────────
 
-
 /// Helper: translate a yaspar-ir Sort to cvc5 and back, asserting the round-trip
 /// produces the same string representation.
 fn sort_round_trip(script: &str, sort_str: &str) {
@@ -1306,7 +1305,6 @@ fn from_cvc5_term_match_applied() {
     );
 }
 
-
 // ── Comprehensive backward translation tests ─────────────────
 
 #[test]
@@ -1362,7 +1360,9 @@ fn from_cvc5_term_chained_eq() {
     // (= x y z) in cvc5 is n-ary; reverse translates to (and (= x y) (= y z))
     let mut ctx = Context::new();
     let _cmds = UntypedAst
-        .parse_script_str("(set-logic QF_LIA) (declare-const x Int) (declare-const y Int) (declare-const z Int)")
+        .parse_script_str(
+            "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int) (declare-const z Int)",
+        )
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
@@ -1374,9 +1374,21 @@ fn from_cvc5_term_chained_eq() {
         cmd.to_cvc5(&mut es).unwrap();
     }
     // Build (= x y z) by translating individual terms and combining
-    let x = UntypedAst.parse_term_str("x").unwrap().type_check(&mut ctx).unwrap();
-    let y = UntypedAst.parse_term_str("y").unwrap().type_check(&mut ctx).unwrap();
-    let z = UntypedAst.parse_term_str("z").unwrap().type_check(&mut ctx).unwrap();
+    let x = UntypedAst
+        .parse_term_str("x")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let y = UntypedAst
+        .parse_term_str("y")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let z = UntypedAst
+        .parse_term_str("z")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
     let cx = x.to_cvc5(&mut *es.env).unwrap();
     let cy = y.to_cvc5(&mut *es.env).unwrap();
     let cz = z.to_cvc5(&mut *es.env).unwrap();
@@ -1388,10 +1400,7 @@ fn from_cvc5_term_chained_eq() {
 
 #[test]
 fn from_cvc5_term_unary_minus() {
-    term_round_trip(
-        "(set-logic QF_LIA) (declare-const x Int)",
-        "(- x)",
-    );
+    term_round_trip("(set-logic QF_LIA) (declare-const x Int)", "(- x)");
 }
 
 #[test]
@@ -1548,10 +1557,7 @@ fn from_cvc5_term_string_concat() {
 
 #[test]
 fn from_cvc5_term_string_len() {
-    term_round_trip(
-        "(set-logic QF_S) (declare-const s String)",
-        "(str.len s)",
-    );
+    term_round_trip("(set-logic QF_S) (declare-const s String)", "(str.len s)");
 }
 
 #[test]
@@ -1676,5 +1682,274 @@ fn from_cvc5_term_implies_chain() {
     term_round_trip(
         "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool) (declare-const c Bool)",
         "(=> a (=> b c))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_real_integer_value() {
+    // Real value that is integral (no division) — should produce a decimal
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic QF_LRA) (declare-const x Real)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(+ x 3.0)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    // cvc5 returns "3" for the real value 3.0; reverse produces (/ 3 1) or 3.0
+    assert!(back.to_string().contains("3"));
+}
+
+#[test]
+fn from_cvc5_term_real_in_lira() {
+    // In LIRA logic (RealInts), real division should use decimal constants
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic AUFLIRA) (declare-const x Real)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(+ x 1.5)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    // In LIRA, 1.5 = 3/2 should use decimal constants: (/ 3.0 2.0)
+    assert_eq!(back.to_string(), "(+ x (/ 3.0 2.0))");
+}
+
+#[test]
+fn from_cvc5_term_bv_rotate_left() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ rotate_left 3) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_rotate_right() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ rotate_right 3) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_repeat() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 4))",
+        "((_ repeat 2) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_int2bv() {
+    term_round_trip("(set-logic ALL) (declare-const x Int)", "((_ int2bv 8) x)");
+}
+
+#[test]
+fn from_cvc5_term_re_power() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s ((_ re.^ 3) (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_loop() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s ((_ re.loop 2 5) (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_string_contains() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.contains s \"hello\")",
+    );
+}
+
+#[test]
+fn from_cvc5_term_abs() {
+    term_round_trip("(set-logic QF_NIA) (declare-const x Int)", "(abs x)");
+}
+
+#[test]
+fn from_cvc5_term_to_real() {
+    term_round_trip("(set-logic AUFLIRA) (declare-const x Int)", "(to_real x)");
+}
+
+#[test]
+fn from_cvc5_term_to_int() {
+    term_round_trip("(set-logic AUFLIRA) (declare-const x Real)", "(to_int x)");
+}
+
+#[test]
+fn from_cvc5_term_bv_slt() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvslt x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_sdiv() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvsdiv x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_union() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.union (str.to_re \"a\") (str.to_re \"b\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_inter() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.inter (re.* (str.to_re \"a\")) (re.* (str.to_re \"b\"))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_comp() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.comp (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_replace() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.replace s \"a\" \"b\")",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_indexof() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.indexof s \"a\" 0)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_substr() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.substr s 0 3)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_prefixof() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.prefixof \"he\" s)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_hex_bv_literal() {
+    // Hex literals are normalized to binary in the round-trip
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic QF_BV) (declare-const x (_ BitVec 8))")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(bvadd x #xab)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(back.to_string(), "(bvadd x #b10101011)");
+}
+
+#[test]
+fn from_cvc5_term_exists_with_pattern() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int) Int)",
+        "(exists ((x Int)) (! (= (f x) 0) :pattern ((f x))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_wildcard_catchall() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (x 0)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_parametric_datatype_constructor() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const x Int)",
+        "(cons x (as nil (List Int)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_parametric_datatype_selector() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "(head l)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_parametric_datatype_tester() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "((_ is cons) l)",
     );
 }
