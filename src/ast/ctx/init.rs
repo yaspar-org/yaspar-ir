@@ -351,10 +351,15 @@ impl Context {
         let sort_y = self.simple_sort("Y");
         let array_xy = self.array_sort(sort_x.clone(), sort_y.clone());
 
+        let const_ = self.allocate_symbol(CONST);
         let select = self.allocate_symbol(SELECT);
         let store = self.allocate_symbol(STORE);
 
         let default_symbol_table = HashMap::from([
+            builtin(
+                const_,
+                Sig::ParFunc(vec![], vars.clone(), vec![sort_y.clone()], array_xy.clone()),
+            ),
             builtin(
                 select,
                 Sig::ParFunc(

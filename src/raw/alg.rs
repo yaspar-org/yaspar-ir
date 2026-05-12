@@ -157,6 +157,7 @@ where
                 EQ => Some(IdentifierKind::Eq),
                 DISTINCT => Some(IdentifierKind::Distinct),
                 ITE => Some(IdentifierKind::Ite),
+                CONST => Some(IdentifierKind::Const),
                 SELECT => Some(IdentifierKind::Select),
                 STORE => Some(IdentifierKind::Store),
                 ADD => Some(IdentifierKind::Add),

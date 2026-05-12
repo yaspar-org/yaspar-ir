@@ -1136,6 +1136,14 @@ impl<'tm> Cvc5EnvInner<'tm> {
         {
             return Ok(self.tm.mk_term(Kind::Neg, &cargs).into());
         }
+        // Handle const array: ((as const (Array X Y)) v) → ConstArray
+        if let Some(IdentifierKind::Const) = kind {
+            let arr_sort = rs.to_cvc5(self)?;
+            return Ok(self
+                .tm
+                .mk_const_array(arr_sort, cargs.into_iter().next().unwrap())
+                .into());
+        }
         if let Some(kind) = kind.as_ref().and_then(ident_kind_to_cvc5) {
             return Ok(self.tm.mk_term(kind, &cargs).into());
         }
@@ -1232,8 +1240,8 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm>> for Command {
             AC::SetOption(attr) => {
                 if let Attribute::Symbol(kw, val) = attr {
                     solver.set_option(kw.symbol_of(), val);
-                } else if let Attribute::Constant(kw, Constant::String(s)) = attr {
-                    solver.set_option(kw.symbol_of(), s);
+                } else if let Attribute::Constant(kw, c) = attr {
+                    solver.set_option(kw.symbol_of(), &c.to_string());
                 }
                 Ok(CommandResult::None)
             }

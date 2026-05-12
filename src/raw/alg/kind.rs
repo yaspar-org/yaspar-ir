@@ -20,6 +20,7 @@ pub enum IdentifierKind<Str> {
     Ite,
 
     // ArrayEx
+    Const,
     Select,
     Store,
 
@@ -154,6 +155,7 @@ impl<Str> IdentifierKind<Str> {
             IdentifierKind::Eq => EQ,
             IdentifierKind::Distinct => DISTINCT,
             IdentifierKind::Ite => ITE,
+            IdentifierKind::Const => CONST,
             IdentifierKind::Select => SELECT,
             IdentifierKind::Store => STORE,
             IdentifierKind::Add => ADD,
@@ -273,6 +275,7 @@ impl<Str> IdentifierKind<Str> {
             | IdentifierKind::Eq
             | IdentifierKind::Distinct
             | IdentifierKind::Ite
+            | IdentifierKind::Const
             | IdentifierKind::Select
             | IdentifierKind::Store
             | IdentifierKind::Add

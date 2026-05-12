@@ -52,6 +52,7 @@ pub const TO_INT: &str = "to_int";
 pub const IS_INT: &str = "is_int";
 
 // Array operators
+pub const CONST: &str = "const";
 pub const SELECT: &str = "select";
 pub const STORE: &str = "store";
 

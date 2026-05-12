@@ -1051,3 +1051,39 @@ fn from_cvc5_sort_cache_hit() {
     let back2 = csort.conv_from_cvc5(&mut from_env).unwrap();
     assert_eq!(back1, back2);
 }
+
+#[test]
+fn const_array_translation() {
+    // Verify that ((as const (Array Int Int)) 0) translates to cvc5 successfully
+    run_script(
+        "(set-logic ALL)
+         (set-option :arrays-exp true)
+         (declare-const a (Array Int Int))
+         (assert (= a ((as const (Array Int Int)) 0)))
+         (check-sat)",
+    );
+}
+
+#[test]
+fn const_array_nested() {
+    // Verify const array in a select expression
+    run_script(
+        "(set-logic ALL)
+         (set-option :arrays-exp true)
+         (declare-const x Int)
+         (assert (= x (select ((as const (Array Int Int)) 42) 7)))
+         (check-sat)",
+    );
+}
+
+#[test]
+fn const_array_bool() {
+    // Verify const array with Bool element sort
+    run_script(
+        "(set-logic ALL)
+         (set-option :arrays-exp true)
+         (declare-const a (Array Int Bool))
+         (assert (= a ((as const (Array Int Bool)) true)))
+         (check-sat)",
+    );
+}
