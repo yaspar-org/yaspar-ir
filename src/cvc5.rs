@@ -963,6 +963,25 @@ where
     }
 }
 
+/// Test whether a cvc5 term is a constant
+fn is_const(t: &CTerm) -> bool {
+    // Built-in value types
+    t.is_boolean_value()
+        || t.is_integer_value()
+        || t.is_real_value()
+        || t.is_string_value()
+        || t.is_bv_value()
+        || t.is_const_array()
+        || t.is_ff_value()
+        || t.is_uninterpreted_sort_value()
+        || t.is_fp_value()
+        || t.is_tuple_value()
+        || t.is_sequence_value()
+        // Datatype constructor with all-const args
+        || (t.kind() == Kind::ApplyConstructor
+        && (0..t.num_children()).all(|i| is_const(&t.child(i))))
+}
+
 impl<'tm> Cvc5EnvInner<'tm> {
     fn translate_constant(&self, c: &Constant, s: &Sort) -> Res<WithPattern<'tm>> {
         use alg::Constant::*;
@@ -1125,7 +1144,7 @@ impl<'tm> Cvc5EnvInner<'tm> {
     fn translate_app(
         &mut self,
         qid: &QualifiedIdentifier,
-        cargs: Vec<CTerm<'tm>>,
+        mut cargs: Vec<CTerm<'tm>>,
         rs: &Sort,
     ) -> Res<WithPattern<'tm>> {
         let id = &qid.0;
@@ -1137,12 +1156,19 @@ impl<'tm> Cvc5EnvInner<'tm> {
             return Ok(self.tm.mk_term(Kind::Neg, &cargs).into());
         }
         // Handle const array: ((as const (Array X Y)) v) → ConstArray
-        if let Some(IdentifierKind::Const) = kind {
+        if let Some(IdentifierKind::Const) = kind
+            && cargs.len() == 1
+        {
             let arr_sort = rs.to_cvc5(self)?;
-            return Ok(self
-                .tm
-                .mk_const_array(arr_sort, cargs.into_iter().next().unwrap())
-                .into());
+            let arg = cargs.remove(0);
+            //
+            if is_const(&arg) {
+                return Ok(self.tm.mk_const_array(arr_sort, arg).into());
+            } else {
+                return Err(format!(
+                    "cvc5 kind ConstArray only accepts a constant value but {arg} is given!"
+                ));
+            }
         }
         if let Some(kind) = kind.as_ref().and_then(ident_kind_to_cvc5) {
             return Ok(self.tm.mk_term(kind, &cargs).into());
