@@ -893,7 +893,11 @@ fn translate_term_from_cvc5<'tm, 'env>(
         }
         // ── Const array ──────────────────────────────────────────
         Kind::ConstArray => {
-            todo!("ConstArray reverse translation")
+            let value = ct.const_array_base().conv_from_cvc5(fenv)?;
+            let arr_sort = ct.sort().conv_from_cvc5(fenv)?;
+            let sym = fenv.env.allocate_symbol(CONST);
+            let qid = QualifiedIdentifier::simple_sorted(sym, arr_sort.clone());
+            return Ok(fenv.env.app(qid, vec![value], Some(arr_sort)));
         }
 
         // ── Uninterpreted sort value (from models) ──────────────

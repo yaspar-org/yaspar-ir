@@ -1989,3 +1989,19 @@ fn from_cvc5_term_match_nested() {
         "(match l ((nil 0) ((cons h t) (match t ((nil h) ((cons h2 t2) (+ h h2)))))))",
     );
 }
+
+#[test]
+fn from_cvc5_term_const_array() {
+    term_round_trip(
+        "(set-logic ALL) (set-option :arrays-exp true) (declare-const a (Array Int Int))",
+        "((as const (Array Int Int)) 0)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_const_array_bool() {
+    term_round_trip(
+        "(set-logic ALL) (set-option :arrays-exp true) (declare-const a (Array Int Bool))",
+        "((as const (Array Int Bool)) true)",
+    );
+}
