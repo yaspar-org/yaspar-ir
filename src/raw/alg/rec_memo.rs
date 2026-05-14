@@ -371,11 +371,11 @@ where
 /// [`TermRecursor`] implementation for [`Memoize`].
 ///
 /// All callbacks delegate directly to the inner recursor. The actual caching is performed
-/// by [`MemoizedRecursion`], which wraps `self` during [`recurse_on_term`] and inserts
+/// by `MemoizedRecursion`, which wraps `self` during [`Self::recurse_on_term`] and inserts
 /// results into the cache after each `on_*` callback that produces `Out`.
 ///
 /// This two-layer design means:
-/// - Calling [`recurse_on_term`] on a `Memoize` gives you full memoized traversal.
+/// - Calling [`Self::recurse_on_term`] on a `Memoize` gives you full memoized traversal.
 /// - Calling individual `on_*` methods directly bypasses caching (they are plain delegations).
 impl<Str, So, T, R, M> TermRecursor<Str, So, T> for Memoize<R, M>
 where
