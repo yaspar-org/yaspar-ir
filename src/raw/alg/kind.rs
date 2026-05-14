@@ -108,7 +108,7 @@ pub enum IdentifierKind<Str> {
     Bv2Nat,
     /// non-standard
     Bv2Int,
-    /// non-standard
+    /// standard
     IntToBv(UBig),
     /// non-standard
     Nat2Bv(UBig),

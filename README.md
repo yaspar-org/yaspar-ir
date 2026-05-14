@@ -766,9 +766,9 @@ fn main() {
 
 ## SMTLib compliance
 
-This crate is completely SMTLib-2.7-compliant. Namely, it follows the SMTLib spec and fully supports specified
+This crate is (almost) completely SMTLib-2.7-compliant. Namely, it follows the SMTLib spec and fully supports specified
 features (with exceptions below), including quantifiers and datatypes. Extension theories supported by z3 or cvc5 are
-usually not considered.
+usually not considered, but also with exceptions (specified below).
 
 The following features are intensionally avoided, but we welcome contributors to extend them:
 
@@ -798,6 +798,25 @@ of bitvectors, symbols of the form `bvN` (where `N` is a numeral) are reserved b
 Similarly, symbols like `extract`, `zero_extend`, `sign_extend`, and `rotate_left` are recognized as heads of indexed
 bitvector operators (e.g. `(_ extract 7 4)`). In each case, the symbol has special meaning when it appears as the head
 of an indexed identifier, and reserving it prevents confusion with user-defined names.
+
+#### Non-standard Extensions
+
+This crate supports the following non-standard extensions commonly found in z3 and cvc5:
+
+1. **`is-X` testers (datatypes):** In addition to the standard `(_ is X)` tester syntax, this crate
+   recognizes `is-X` as a tester for constructor `X`. Internally, `is-X` is defined as a function
+   whose body is `(_ is X)`, so the two forms are interchangeable. This is a de facto standard
+   supported by both z3 and cvc5.
+2. **Non-standard bitvector/integer conversion operators:**
+   - `bv2nat` — convert a bitvector to a natural number (non-negative integer). 
+   - `bv2int` — convert a bitvector to an integer (signed interpretation).
+   - `(_ nat2bv N)` — convert a natural number to a bitvector of width `N`.
+   - `(_ int_to_bv N)` — synonym of `(_ int2bv N)`.
+
+   The standard equivalents are `ubv_to_int`,  `sbv_to_int` and `int_to_bv`, which are also supported.
+3. **Constant array construction:** `const` function constructs a constant array of a given value. In SMTLib script,
+   it is written as `((as const (Array X Y)) y)` where `y` has sort `Y`. This function is not in the standard but is
+   convenient and frequently appears in models, so it's useful to support. 
 
 ## Security
 
