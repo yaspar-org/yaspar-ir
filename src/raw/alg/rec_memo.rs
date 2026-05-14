@@ -110,6 +110,10 @@ where
     }
 }
 
+/// Internal trait abstracting cache access for memoized recursion.
+///
+/// Implemented by [`Memoize`] to expose its cache to [`MemoizedRecursion`], which
+/// inserts results after each `on_*` callback.
 pub(crate) trait Memoizing<K, V> {
     type Cache<'a>: DerefMut<Target: InsertableMapping<Key = K, Value = V>>
     where
@@ -118,6 +122,14 @@ pub(crate) trait Memoizing<K, V> {
     fn cache_mut(&mut self) -> Self::Cache<'_>;
 }
 
+/// Internal wrapper that interposes caching logic between the traversal engine and
+/// the user's recursor.
+///
+/// All `on_*` callbacks that produce `Out` delegate to the inner recursor and then
+/// insert the result into the cache. Auxiliary callbacks (`setup_*`, `on_let_binding`,
+/// `on_match_arm`, `on_attribute_*`) delegate directly without caching.
+///
+/// This type is not public — users interact with [`Memoize`] directly.
 pub(crate) struct MemoizedRecursion<'a, R>(&'a mut R);
 
 impl<Str, So, T, R> TermRecursor<Str, So, T> for MemoizedRecursion<'_, R>
@@ -356,6 +368,15 @@ where
     }
 }
 
+/// [`TermRecursor`] implementation for [`Memoize`].
+///
+/// All callbacks delegate directly to the inner recursor. The actual caching is performed
+/// by [`MemoizedRecursion`], which wraps `self` during [`recurse_on_term`] and inserts
+/// results into the cache after each `on_*` callback that produces `Out`.
+///
+/// This two-layer design means:
+/// - Calling [`recurse_on_term`] on a `Memoize` gives you full memoized traversal.
+/// - Calling individual `on_*` methods directly bypasses caching (they are plain delegations).
 impl<Str, So, T, R, M> TermRecursor<Str, So, T> for Memoize<R, M>
 where
     T: Clone,
@@ -373,10 +394,11 @@ where
     where
         T: Contains<T: Repr<T = Term<Str, So, T>>>,
     {
-        MemoizedScheme::term_recursion(&mut MemoizedRecursion(self), t)
+        MemoizedRecursion(self).recurse_on_term(t)
     }
 
     delegate! {
+        #[inline]
         to self.inner {
             fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err>;
             fn on_attribute_constant(&mut self, keyword: &Keyword, constant: &Constant<Str>) -> Result<Self::Attr, Self::Err>;
