@@ -1119,7 +1119,7 @@ fn const_array_negative() {
 /// produces the same string representation.
 fn term_round_trip(script: &str, term_str: &str) {
     let mut ctx = Context::new();
-    let _cmds = UntypedAst
+    let cmds = UntypedAst
         .parse_script_str(script)
         .unwrap()
         .type_check(&mut ctx)
@@ -1128,7 +1128,7 @@ fn term_round_trip(script: &str, term_str: &str) {
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &_cmds {
+    for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
     }
     let term = UntypedAst
@@ -2003,5 +2003,55 @@ fn from_cvc5_term_const_array_bool() {
     term_round_trip(
         "(set-logic ALL) (set-option :arrays-exp true) (declare-const a (Array Int Bool))",
         "((as const (Array Int Bool)) true)",
+    );
+}
+
+// ── Tests for parametric match pattern constructor resolution ─────────
+// These exercise the else branch in translate_match_case_from_cvc5 where
+// ctor_term.has_symbol() is false (parametric/instantiated constructors).
+
+#[test]
+fn from_cvc5_match_parametric_nullary_single() {
+    // Parametric List with nil (nullary) in a match pattern
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "(match l ((nil 0) ((cons h t) 1)))",
+    );
+}
+
+#[test]
+fn from_cvc5_match_parametric_multi_nullary() {
+    // Parametric datatype with multiple nullary constructors — the key regression case.
+    // The old code would always pick the first nullary constructor; this verifies each
+    // nullary constructor is correctly identified.
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((Maybe 1)) ((par (T) ((nothing) (just (val T)) (unknown)))))
+         (declare-const m (Maybe Int))",
+        "(match m ((nothing 0) ((just x) x) (unknown (- 1))))",
+    );
+}
+
+#[test]
+fn from_cvc5_match_parametric_second_nullary() {
+    // Match where the second nullary constructor appears — ensures we don't just pick the first.
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((Maybe 1)) ((par (T) ((nothing) (just (val T)) (unknown)))))
+         (declare-const m (Maybe Int))",
+        "(match m (((just x) x) (nothing 1) (unknown 2)))",
+    );
+}
+
+#[test]
+fn from_cvc5_match_parametric_bool_instantiation() {
+    // Same parametric datatype instantiated at Bool
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Bool))",
+        "(match l ((nil false) ((cons h t) h)))",
     );
 }

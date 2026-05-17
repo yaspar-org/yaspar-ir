@@ -350,7 +350,10 @@ impl<'tm, 'env> FromCvc5Env<'tm, 'env> {
 
     /// Pop the current scope and remove all its bindings from locals.
     fn pop_scope(&mut self) -> Vec<VarBinding<Str, Sort>> {
-        let scope_ids = self.scope_stack.pop().unwrap();
+        let scope_ids = self
+            .scope_stack
+            .pop()
+            .expect("fatal error: unbalanced scope stack!");
         scope_ids
             .iter()
             .filter_map(|id| self.locals.remove(id))
@@ -775,15 +778,22 @@ fn translate_term_from_cvc5<'tm, 'env>(
             } else {
                 // Parametric constructor: get name from the sort's datatype
                 let dt = ct.sort().datatype();
-                let mut found = String::new();
+                let mut found = false;
+                let mut name = String::new();
                 for i in 0..dt.num_constructors() {
                     let ctor = dt.constructor(i);
                     if ctor.term() == head || ctor.num_selectors() == ct.num_children() - 1 {
-                        found = ctor.name().to_string();
+                        name = ctor.name().to_string();
+                        found = true;
                         break;
                     }
                 }
-                found
+                if !found {
+                    return Err(format!(
+                        "fatal error: term {head} cannot find a case for its datatype {dt}!"
+                    ));
+                }
+                name
             };
             let n = ct.num_children();
             if n == 1 {
@@ -987,14 +997,24 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
             let ctor_name = if ctor_term.has_symbol() {
                 ctor_term.symbol().to_string()
             } else {
+                // Parametric constructor: the ctor_term is sort-qualified (e.g. `(as nil (List Int))`).
+                // Compare against instantiated constructor terms from the datatype.
                 let dt = pattern_ct.sort().datatype();
+                let sort = pattern_ct.sort();
+                let mut found = false;
                 let mut name = String::new();
                 for i in 0..dt.num_constructors() {
                     let c = dt.constructor(i);
-                    if c.num_selectors() == 0 {
+                    if c.instantiated_term(sort.clone()) == ctor_term {
                         name = c.name().to_string();
+                        found = true;
                         break;
                     }
+                }
+                if !found {
+                    return Err(format!(
+                        "fatal error: term {ctor_term} cannot find a case for its datatype {dt}!"
+                    ));
                 }
                 name
             };
