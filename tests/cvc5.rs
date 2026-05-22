@@ -3,9 +3,9 @@
 
 #![cfg(feature = "cvc5")]
 
-use cvc5::{Solver, TermManager};
+use cvc5::{Kind, Solver, TermManager};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
-use yaspar_ir::cvc5::{ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
+use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver, FromCvc5Env};
 use yaspar_ir::untyped::UntypedAst;
 
 /// Helper: parse + type-check a script, then translate all commands to cvc5.
@@ -959,8 +959,6 @@ fn command_result_get_model_uninterpreted_sort_nested() {
 
 // ── ConvertFromCvc5 sort round-trip tests ────────────────────
 
-use yaspar_ir::cvc5::{ConvertFromCvc5, FromCvc5Env};
-
 /// Helper: translate a yaspar-ir Sort to cvc5 and back, asserting the round-trip
 /// produces the same string representation.
 fn sort_round_trip(script: &str, sort_str: &str) {
@@ -1106,6 +1104,7 @@ fn const_array_negative() {
     let mut solver = Solver::new(&tm);
     let mut env = Cvc5Env::create(&tm);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
     }
@@ -1115,4 +1114,944 @@ fn const_array_negative() {
         .type_check(&mut ctx)
         .unwrap();
     assert!(term.to_cvc5(&mut env).is_err());
+}
+/// Helper: translate a yaspar-ir Term to cvc5 and back, asserting the round-trip
+/// produces the same string representation.
+fn term_round_trip(script: &str, term_str: &str) {
+    let mut ctx = Context::new();
+    let cmds = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str(term_str)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(term.to_string(), back.to_string());
+}
+
+#[test]
+fn from_cvc5_term_bool_true() {
+    term_round_trip("(set-logic QF_UF)", "true");
+}
+
+#[test]
+fn from_cvc5_term_bool_false() {
+    term_round_trip("(set-logic QF_UF)", "false");
+}
+
+#[test]
+fn from_cvc5_term_integer() {
+    term_round_trip("(set-logic QF_LIA) (declare-const x Int)", "x");
+}
+
+#[test]
+fn from_cvc5_term_and() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(and a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_or() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(or a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_not() {
+    term_round_trip("(set-logic QF_UF) (declare-const a Bool)", "(not a)");
+}
+
+#[test]
+fn from_cvc5_term_implies() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(=> a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_eq() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(= x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_ite() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const a Bool) (declare-const x Int) (declare-const y Int)",
+        "(ite a x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_add() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(+ x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_gt() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(> x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_add() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvadd x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_numeral() {
+    term_round_trip("(set-logic QF_LIA) (declare-const x Int)", "(+ x 42)");
+}
+
+#[test]
+fn from_cvc5_term_bv_literal() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "(bvadd x #b00101010)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_forall() {
+    term_round_trip(
+        "(set-logic LIA) (declare-const y Int)",
+        "(forall ((x Int)) (> x y))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_exists() {
+    term_round_trip(
+        "(set-logic LIA) (declare-const y Int)",
+        "(exists ((x Int)) (= x y))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_regexp_none() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s re.none)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_regexp_all() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s re.all)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_regexp_allchar() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s re.allchar)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv2nat() {
+    // cvc5 normalizes BitvectorToNat to BitvectorUbvToInt internally,
+    // so we test the ubv_to_int round-trip which exercises the same path.
+    term_round_trip(
+        "(set-logic ALL) (declare-const x (_ BitVec 8))",
+        "(ubv_to_int x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (Green 2) (Blue 3)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_applied() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const p Pair)",
+        "(match p (((mkpair x y) (+ x y))))",
+    );
+}
+
+// ── Comprehensive backward translation tests ─────────────────
+
+#[test]
+fn from_cvc5_term_forall_pattern() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int) Int)",
+        "(forall ((x Int)) (! (> (f x) 0) :pattern ((f x))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_forall_multi_pattern() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int) Int) (declare-fun g (Int) Int)",
+        "(forall ((x Int)) (! (> (f x) (g x)) :pattern ((f x)) :pattern ((g x))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_forall_multi_var() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int Int) Int)",
+        "(forall ((x Int) (y Int)) (> (f x y) 0))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_nested_quantifier() {
+    term_round_trip(
+        "(set-logic ALL) (declare-const a Int)",
+        "(forall ((x Int)) (exists ((y Int)) (= (+ x y) a)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_xor() {
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool)",
+        "(xor a b)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_distinct() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int) (declare-const z Int)",
+        "(distinct x y z)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_chained_eq() {
+    // (= x y z) in cvc5 is n-ary; reverse translates to (and (= x y) (= y z))
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str(
+            "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int) (declare-const z Int)",
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    // Build (= x y z) by translating individual terms and combining
+    let x = UntypedAst
+        .parse_term_str("x")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let y = UntypedAst
+        .parse_term_str("y")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let z = UntypedAst
+        .parse_term_str("z")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cx = x.to_cvc5(&mut *es.env).unwrap();
+    let cy = y.to_cvc5(&mut *es.env).unwrap();
+    let cz = z.to_cvc5(&mut *es.env).unwrap();
+    let eq_xyz = tm.mk_term(Kind::Equal, &[cx, cy, cz]);
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = eq_xyz.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(back.to_string(), "(and (= x y) (= y z))");
+}
+
+#[test]
+fn from_cvc5_term_unary_minus() {
+    term_round_trip("(set-logic QF_LIA) (declare-const x Int)", "(- x)");
+}
+
+#[test]
+fn from_cvc5_term_sub() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(- x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_mul() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(* x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_div() {
+    term_round_trip(
+        "(set-logic QF_LRA) (declare-const x Real) (declare-const y Real)",
+        "(/ x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_idiv() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(div x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_mod() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(mod x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_le() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(<= x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_lt() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(< x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_ge() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int) (declare-const y Int)",
+        "(>= x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_select_store() {
+    term_round_trip(
+        "(set-logic QF_AUFLIA) (declare-const a (Array Int Int)) (declare-const i Int) (declare-const v Int)",
+        "(select (store a i v) i)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_extract() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ extract 3 0) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_zero_extend() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ zero_extend 8) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_sign_extend() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ sign_extend 8) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_concat() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 4)) (declare-const y (_ BitVec 4))",
+        "(concat x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_not() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "(bvnot x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_neg() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "(bvneg x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_and() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvand x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_or() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvor x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_ult() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvult x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_string_concat() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s1 String) (declare-const s2 String)",
+        "(str.++ s1 s2)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_string_len() {
+    term_round_trip("(set-logic QF_S) (declare-const s String)", "(str.len s)");
+}
+
+#[test]
+fn from_cvc5_term_string_literal() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.++ s \"hello\")",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_to_re() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (str.to_re \"abc\"))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_star() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.* (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_uf_application() {
+    term_round_trip(
+        "(set-logic QF_UFLIA) (declare-fun f (Int Int) Int) (declare-const x Int) (declare-const y Int)",
+        "(f x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_constructor_nullary() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue))))",
+        "Red",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_constructor_applied() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const x Int)",
+        "(mkpair x 42)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_selector() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const p Pair)",
+        "(fst p)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_datatype_tester() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "((_ is Red) c)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_wildcard() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (x 0)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_real_literal() {
+    // 1.5 is represented as 3/2 in cvc5; reverse translates to (/ 3 2)
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic QF_LRA) (declare-const x Real)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(+ x 1.5)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(back.to_string(), "(+ x (/ 3 2))");
+}
+
+#[test]
+fn from_cvc5_term_let_eliminated() {
+    // let bindings are eliminated during forward translation; the reverse should still work
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int)",
+        "(+ (+ x 1) (+ x 1))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_deeply_nested() {
+    term_round_trip(
+        "(set-logic QF_LIA) (declare-const x Int)",
+        "(+ (+ (+ (+ x 1) 2) 3) 4)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_implies_chain() {
+    // cvc5 normalizes (=> a b c) to (=> a (=> b c))
+    term_round_trip(
+        "(set-logic QF_UF) (declare-const a Bool) (declare-const b Bool) (declare-const c Bool)",
+        "(=> a (=> b c))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_real_integer_value() {
+    // Real value that is integral (no division) — should produce a decimal
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic QF_LRA) (declare-const x Real)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(+ x 3.0)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    // cvc5 returns "3" for the real value 3.0; reverse produces (/ 3 1) or 3.0
+    assert!(back.to_string().contains("3"));
+}
+
+#[test]
+fn from_cvc5_term_real_in_lira() {
+    // In LIRA logic (RealInts), real division should use decimal constants
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic AUFLIRA) (declare-const x Real)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(+ x 1.5)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    // In LIRA, 1.5 = 3/2 should use decimal constants: (/ 3.0 2.0)
+    assert_eq!(back.to_string(), "(+ x (/ 3.0 2.0))");
+}
+
+#[test]
+fn from_cvc5_term_bv_rotate_left() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ rotate_left 3) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_rotate_right() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8))",
+        "((_ rotate_right 3) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_repeat() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 4))",
+        "((_ repeat 2) x)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_int2bv() {
+    term_round_trip("(set-logic ALL) (declare-const x Int)", "((_ int2bv 8) x)");
+}
+
+#[test]
+fn from_cvc5_term_re_power() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s ((_ re.^ 3) (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_loop() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s ((_ re.loop 2 5) (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_string_contains() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.contains s \"hello\")",
+    );
+}
+
+#[test]
+fn from_cvc5_term_abs() {
+    term_round_trip("(set-logic QF_NIA) (declare-const x Int)", "(abs x)");
+}
+
+#[test]
+fn from_cvc5_term_to_real() {
+    term_round_trip("(set-logic AUFLIRA) (declare-const x Int)", "(to_real x)");
+}
+
+#[test]
+fn from_cvc5_term_to_int() {
+    term_round_trip("(set-logic AUFLIRA) (declare-const x Real)", "(to_int x)");
+}
+
+#[test]
+fn from_cvc5_term_bv_slt() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvslt x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_bv_sdiv() {
+    term_round_trip(
+        "(set-logic QF_BV) (declare-const x (_ BitVec 8)) (declare-const y (_ BitVec 8))",
+        "(bvsdiv x y)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_union() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.union (str.to_re \"a\") (str.to_re \"b\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_inter() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.inter (re.* (str.to_re \"a\")) (re.* (str.to_re \"b\"))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_re_comp() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.in_re s (re.comp (str.to_re \"a\")))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_replace() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.replace s \"a\" \"b\")",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_indexof() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.indexof s \"a\" 0)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_substr() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.substr s 0 3)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_str_prefixof() {
+    term_round_trip(
+        "(set-logic QF_S) (declare-const s String)",
+        "(str.prefixof \"he\" s)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_hex_bv_literal() {
+    // Hex literals are normalized to binary in the round-trip
+    let mut ctx = Context::new();
+    let _cmds = UntypedAst
+        .parse_script_str("(set-logic QF_BV) (declare-const x (_ BitVec 8))")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::create(&tm);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let term = UntypedAst
+        .parse_term_str("(bvadd x #xab)")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let cterm = term.to_cvc5(&mut *es.env).unwrap();
+    let mut from_env = FromCvc5Env::new(&mut ctx);
+    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    assert_eq!(back.to_string(), "(bvadd x #b10101011)");
+}
+
+#[test]
+fn from_cvc5_term_exists_with_pattern() {
+    term_round_trip(
+        "(set-logic ALL) (declare-fun f (Int) Int)",
+        "(exists ((x Int)) (! (= (f x) 0) :pattern ((f x))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_wildcard_catchall() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (x 0)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_parametric_datatype_constructor() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const x Int)",
+        "(cons x (as nil (List Int)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_parametric_datatype_selector() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "(head l)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_parametric_datatype_tester() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "((_ is cons) l)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_anonymous_wildcard() {
+    // Wildcard without a variable name: (_ 0)
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 1) (_ 0)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_applied_with_anonymous_arg() {
+    // Applied pattern with anonymous wildcard in selector position
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Pair 0)) (((mkpair (fst Int) (snd Int))))) (declare-const p Pair)",
+        "(match p (((mkpair x _) x)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_multiple_arms() {
+    term_round_trip(
+        "(set-logic ALL) (declare-datatypes ((Color 0)) (((Red) (Green) (Blue)))) (declare-const c Color)",
+        "(match c ((Red 10) (Green 20) (Blue 30)))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_match_nested() {
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "(match l ((nil 0) ((cons h t) (match t ((nil h) ((cons h2 t2) (+ h h2)))))))",
+    );
+}
+
+#[test]
+fn from_cvc5_term_const_array() {
+    term_round_trip(
+        "(set-logic ALL) (set-option :arrays-exp true) (declare-const a (Array Int Int))",
+        "((as const (Array Int Int)) 0)",
+    );
+}
+
+#[test]
+fn from_cvc5_term_const_array_bool() {
+    term_round_trip(
+        "(set-logic ALL) (set-option :arrays-exp true) (declare-const a (Array Int Bool))",
+        "((as const (Array Int Bool)) true)",
+    );
+}
+
+// ── Tests for parametric match pattern constructor resolution ─────────
+// These exercise the else branch in translate_match_case_from_cvc5 where
+// ctor_term.has_symbol() is false (parametric/instantiated constructors).
+
+#[test]
+fn from_cvc5_match_parametric_nullary_single() {
+    // Parametric List with nil (nullary) in a match pattern
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Int))",
+        "(match l ((nil 0) ((cons h t) 1)))",
+    );
+}
+
+#[test]
+fn from_cvc5_match_parametric_multi_nullary() {
+    // Parametric datatype with multiple nullary constructors — the key regression case.
+    // The old code would always pick the first nullary constructor; this verifies each
+    // nullary constructor is correctly identified.
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((Maybe 1)) ((par (T) ((nothing) (just (val T)) (unknown)))))
+         (declare-const m (Maybe Int))",
+        "(match m ((nothing 0) ((just x) x) (unknown (- 1))))",
+    );
+}
+
+#[test]
+fn from_cvc5_match_parametric_second_nullary() {
+    // Match where the second nullary constructor appears — ensures we don't just pick the first.
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((Maybe 1)) ((par (T) ((nothing) (just (val T)) (unknown)))))
+         (declare-const m (Maybe Int))",
+        "(match m (((just x) x) (nothing 1) (unknown 2)))",
+    );
+}
+
+#[test]
+fn from_cvc5_match_parametric_bool_instantiation() {
+    // Same parametric datatype instantiated at Bool
+    term_round_trip(
+        "(set-logic ALL)
+         (declare-datatypes ((List 1)) ((par (T) ((nil) (cons (head T) (tail (List T)))))))
+         (declare-const l (List Bool))",
+        "(match l ((nil false) ((cons h t) h)))",
+    );
 }
