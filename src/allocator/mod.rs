@@ -16,7 +16,7 @@
 //! constructions (e.g. `int_sort()`, `bool_sort()`, `bv_sort(len)`, `array_sort(idx, elem)`).
 
 use crate::raw::alg::*;
-use crate::statics::{ARRAY, BITVEC, BOOL, INT, REAL, REGLAN, STRING};
+use crate::statics::{ARRAY, BITVEC, BOOL, INT, REAL, REGLAN, SET, STRING};
 use dashu::integer::UBig;
 use paste::paste;
 use yaspar::ast::Keyword;
@@ -216,6 +216,12 @@ pub trait ObjectAllocatorExt<So, T>:
             indices: vec![Index::Numeral(len)],
         };
         self.sort(id, vec![])
+    }
+
+    /// Return the sort of a finite set given the element sort.
+    fn fset_sort(&mut self, elem: So) -> So {
+        let sym = self.allocate_symbol(SET);
+        self.allocate_sort(Sort(Identifier::simple(sym), vec![elem]))
     }
 
     /// Return a symbol of sort Bool

@@ -78,6 +78,8 @@ pub enum Theory {
     FloatingPoints,
     Bitvectors,
     Datatypes,
+    #[cfg(feature = "finite-set")]
+    FiniteSets,
 }
 
 impl Theory {
@@ -98,6 +100,8 @@ impl Display for Theory {
             Theory::FloatingPoints => "floating points".fmt(f),
             Theory::Bitvectors => "bit vectors".fmt(f),
             Theory::Datatypes => "datatypes".fmt(f),
+            #[cfg(feature = "finite-set")]
+            Theory::FiniteSets => "finite set".fmt(f),
         }
     }
 }

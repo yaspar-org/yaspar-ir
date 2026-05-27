@@ -24,6 +24,7 @@ pub const STRING: &str = "String";
 pub const REGLAN: &str = "RegLan";
 pub const ARRAY: &str = "Array";
 pub const BITVEC: &str = "BitVec";
+pub const SET: &str = "Set";
 
 // Core logic operators
 pub const AND: &str = "and";
@@ -149,6 +150,18 @@ pub const BV2INT: &str = "bv2int";
 pub const INT_TO_BV: &str = "int_to_bv";
 pub const NAT2BV: &str = "nat2bv";
 pub const INT2BV: &str = "int2bv";
+
+// Finite set operators
+pub const SET_UNION: &str = "set.union";
+pub const SET_INTER: &str = "set.inter";
+pub const SET_MINUS: &str = "set.minus";
+pub const SET_MEMBER: &str = "set.member";
+pub const SET_SUBSET: &str = "set.subset";
+pub const SET_EMPTY: &str = "set.empty";
+pub const SET_SINGLETON: &str = "set.singleton";
+pub const SET_CARD: &str = "set.card";
+pub const SET_COMPLEMENT: &str = "set.complement";
+pub const SET_UNIVERSE: &str = "set.universe";
 
 // Datatype operators
 pub const IS: &str = "is";

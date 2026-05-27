@@ -629,6 +629,73 @@ impl Context {
         }
     }
 
+    #[cfg(feature = "finite-set")]
+    fn extend_theory_finite_sets(&mut self) {
+        let int = self.int_sort();
+        let bool = self.bool_sort();
+        let set_sym = self.allocate_symbol(SET);
+        self.frame.sorts.insert(set_sym, SortDef::Opaque(1));
+
+        let x = self.allocate_symbol("X");
+        let vars = vec![x.clone()];
+        let sort_x = self.simple_sort("X");
+        let set_x = self.fset_sort(sort_x.clone());
+
+        let union = self.allocate_symbol(SET_UNION);
+        let inter = self.allocate_symbol(SET_INTER);
+        let minus = self.allocate_symbol(SET_MINUS);
+        let member = self.allocate_symbol(SET_MEMBER);
+        let subset = self.allocate_symbol(SET_SUBSET);
+        let empty = self.allocate_symbol(SET_EMPTY);
+        let singleton = self.allocate_symbol(SET_SINGLETON);
+        let card = self.allocate_symbol(SET_CARD);
+        let complement = self.allocate_symbol(SET_COMPLEMENT);
+        let universe = self.allocate_symbol(SET_UNIVERSE);
+
+        // (Set X) × (Set X) → (Set X)
+        let bin_set_sig = Sig::ParFunc(
+            vec![],
+            vars.clone(),
+            vec![set_x.clone(), set_x.clone()],
+            set_x.clone(),
+        );
+        // (Set X) → (Set X)
+        let un_set_sig = Sig::ParFunc(vec![], vars.clone(), vec![set_x.clone()], set_x.clone());
+        // X × (Set X) → Bool
+        let member_sig = Sig::ParFunc(
+            vec![],
+            vars.clone(),
+            vec![sort_x.clone(), set_x.clone()],
+            bool.clone(),
+        );
+        // (Set X) × (Set X) → Bool
+        let subset_sig = Sig::ParFunc(
+            vec![],
+            vars.clone(),
+            vec![set_x.clone(), set_x.clone()],
+            bool.clone(),
+        );
+        // → (Set X)
+        let const_set_sig = Sig::ParFunc(vec![], vars.clone(), vec![], set_x.clone());
+        // X → (Set X)
+        let singleton_sig = Sig::ParFunc(vec![], vars.clone(), vec![sort_x.clone()], set_x.clone());
+        // (Set X) → Int
+        let card_sig = Sig::ParFunc(vec![], vars.clone(), vec![set_x.clone()], int.clone());
+        let default_symbol_table = HashMap::from([
+            builtin(union, bin_set_sig.clone()),
+            builtin(inter, bin_set_sig.clone()),
+            builtin(minus, bin_set_sig.clone()),
+            builtin(complement, un_set_sig),
+            builtin(member, member_sig),
+            builtin(subset, subset_sig),
+            builtin(empty, const_set_sig.clone()),
+            builtin(universe, const_set_sig),
+            builtin(singleton, singleton_sig),
+            builtin(card, card_sig),
+        ]);
+        self.frame.symbol_table.extend(default_symbol_table);
+    }
+
     pub fn check_logic(&self) -> Result<(), String> {
         if self.meta.logic.is_none() {
             Err("logic is not set".into())
@@ -666,6 +733,8 @@ impl Context {
                             Theory::FloatingPoints => self.extend_theory_floating_points(),
                             Theory::Bitvectors => self.extend_theory_bitvectors(),
                             Theory::Datatypes => {}
+                            #[cfg(feature = "finite-set")]
+                            Theory::FiniteSets => self.extend_theory_finite_sets(),
                         }
                     }
                     Ok(self)

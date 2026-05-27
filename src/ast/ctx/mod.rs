@@ -69,61 +69,75 @@ use sat_interface::SatSolver;
 
 // See: https://smt-lib.org/logics.shtml and https://zenodo.org/records/15493090
 lazy_static! {
-    static ref LOGICS: HashMap<&'static str, HashSet<Theory>> = HashMap::from([
-        ("IDL", HashSet::from([Theory::Quantifiers, Theory::Ints])),
-        ("LIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
-        ("LRA", HashSet::from([Theory::Quantifiers, Theory::Reals])),
-        ("LIRA", HashSet::from([Theory::Quantifiers, Theory::RealInts])),
-        ("NIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
-        ("NRA", HashSet::from([Theory::Quantifiers, Theory::Reals])),
-        ("NIRA", HashSet::from([Theory::Quantifiers, Theory::RealInts])),
-        (
-            "AUFLIA",
-            HashSet::from([Theory::Quantifiers, Theory::Ints, Theory::ArrayEx])
-        ),
-        (
-            "AUFLIRA",
-            HashSet::from([Theory::Quantifiers, Theory::RealInts, Theory::ArrayEx])
-        ),
-        (
-            "AUFNIRA",
-            HashSet::from([Theory::Quantifiers, Theory::RealInts, Theory::ArrayEx])
-        ),
-        // Note: there are no SMT Comp benchmarks as of 2025 for AUFLRA, AUFNRA
-        ("QF_BV", HashSet::from([Theory::Bitvectors])),
-        ("QF_IDL", HashSet::from([Theory::Ints])),
-        ("QF_LIA", HashSet::from([Theory::Ints])),
-        ("QF_LRA", HashSet::from([Theory::Reals])),
-        ("QF_LIRA", HashSet::from([Theory::RealInts])),
-        ("QF_NIA", HashSet::from([Theory::Ints])),
-        ("QF_NRA", HashSet::from([Theory::Reals])),
-        ("QF_NIRA", HashSet::from([Theory::RealInts])),
-        ("QF_RDL", HashSet::from([Theory::Reals])),
-        ("QF_UF", HashSet::from([])),
-        ("QF_UFIDL", HashSet::from([Theory::Ints])),
-        ("QF_UFLIA", HashSet::from([Theory::Ints])),
-        ("QF_UFLRA", HashSet::from([Theory::Reals])),
-        ("QF_UFNRA", HashSet::from([Theory::Reals])),
-        ("QF_S", HashSet::from([Theory::Strings])),
-        ("QF_SLIA", HashSet::from([Theory::Ints, Theory::Strings])),
-        ("QF_SNIA", HashSet::from([Theory::Ints, Theory::Strings])),
-        ("QF_AUFLIA", HashSet::from([Theory::Ints, Theory::ArrayEx])),
-        ("QF_AX", HashSet::from([Theory::ArrayEx])),
-        ("UFLRA", HashSet::from([Theory::Quantifiers, Theory::Reals])),
-        ("UFNIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
-        (
-            "ALL",
-            HashSet::from([
-                Theory::Quantifiers,
-                Theory::RealInts,
-                Theory::Strings,
-                Theory::ArrayEx,
-                Theory::FloatingPoints,
-                Theory::Bitvectors,
-                Theory::Datatypes
-            ])
-        ),
-    ]);
+    static ref LOGICS: HashMap<&'static str, HashSet<Theory>> = {
+        #[allow(unused_mut)]
+        let mut m = HashMap::from([
+            ("IDL", HashSet::from([Theory::Quantifiers, Theory::Ints])),
+            ("LIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
+            ("LRA", HashSet::from([Theory::Quantifiers, Theory::Reals])),
+            ("LIRA", HashSet::from([Theory::Quantifiers, Theory::RealInts])),
+            ("NIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
+            ("NRA", HashSet::from([Theory::Quantifiers, Theory::Reals])),
+            ("NIRA", HashSet::from([Theory::Quantifiers, Theory::RealInts])),
+            (
+                "AUFLIA",
+                HashSet::from([Theory::Quantifiers, Theory::Ints, Theory::ArrayEx])
+            ),
+            (
+                "AUFLIRA",
+                HashSet::from([Theory::Quantifiers, Theory::RealInts, Theory::ArrayEx])
+            ),
+            (
+                "AUFNIRA",
+                HashSet::from([Theory::Quantifiers, Theory::RealInts, Theory::ArrayEx])
+            ),
+            // Note: there are no SMT Comp benchmarks as of 2025 for AUFLRA, AUFNRA
+            ("QF_BV", HashSet::from([Theory::Bitvectors])),
+            ("QF_IDL", HashSet::from([Theory::Ints])),
+            ("QF_LIA", HashSet::from([Theory::Ints])),
+            ("QF_LRA", HashSet::from([Theory::Reals])),
+            ("QF_LIRA", HashSet::from([Theory::RealInts])),
+            ("QF_NIA", HashSet::from([Theory::Ints])),
+            ("QF_NRA", HashSet::from([Theory::Reals])),
+            ("QF_NIRA", HashSet::from([Theory::RealInts])),
+            ("QF_RDL", HashSet::from([Theory::Reals])),
+            ("QF_UF", HashSet::from([])),
+            ("QF_UFIDL", HashSet::from([Theory::Ints])),
+            ("QF_UFLIA", HashSet::from([Theory::Ints])),
+            ("QF_UFLRA", HashSet::from([Theory::Reals])),
+            ("QF_UFNRA", HashSet::from([Theory::Reals])),
+            ("QF_S", HashSet::from([Theory::Strings])),
+            ("QF_SLIA", HashSet::from([Theory::Ints, Theory::Strings])),
+            ("QF_SNIA", HashSet::from([Theory::Ints, Theory::Strings])),
+            ("QF_AUFLIA", HashSet::from([Theory::Ints, Theory::ArrayEx])),
+            ("QF_AX", HashSet::from([Theory::ArrayEx])),
+            ("UFLRA", HashSet::from([Theory::Quantifiers, Theory::Reals])),
+            ("UFNIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
+            (
+                "ALL",
+                HashSet::from([
+                    Theory::Quantifiers,
+                    Theory::RealInts,
+                    Theory::Strings,
+                    Theory::ArrayEx,
+                    Theory::FloatingPoints,
+                    Theory::Bitvectors,
+                    Theory::Datatypes,
+                    #[cfg(feature = "finite-set")]
+                    Theory::FiniteSets,
+                ])
+            ),
+        ]);
+        #[cfg(feature = "finite-set")]
+        {
+            m.insert("QF_FS", HashSet::from([Theory::Ints, Theory::FiniteSets]));
+            m.insert("QF_UFFS", HashSet::from([Theory::Ints, Theory::FiniteSets]));
+            m.insert("QF_LIAFS", HashSet::from([Theory::Ints, Theory::FiniteSets]));
+            m.insert("QF_UFLIAFS", HashSet::from([Theory::Ints, Theory::FiniteSets]));
+            m.insert("QF_BVFS", HashSet::from([Theory::Ints, Theory::Bitvectors, Theory::FiniteSets]));
+        }
+        m
+    };
     pub(crate) static ref ALL_LOGICS: Vec<&'static str> = LOGICS.keys().cloned().collect();
     static ref EMP_SET: HashSet<Theory> = HashSet::from([]);
     static ref SPECIAL_SYMBOLS: HashSet<&'static str> = {
