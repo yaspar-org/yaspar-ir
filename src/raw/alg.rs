@@ -392,6 +392,16 @@ where
             _ => None,
         }
     }
+
+    /// Return the element sort if the current sort is a `Set`
+    #[cfg(feature = "finite-set")]
+    pub fn is_fset(&self) -> Option<So> {
+        if self.0.is_simple(SET) && self.1.len() == 1 {
+            Some(self.1[0].clone())
+        } else {
+            None
+        }
+    }
 }
 
 /// This type provides a spec of indices to be used in a signature
