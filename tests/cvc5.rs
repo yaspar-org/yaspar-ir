@@ -1630,7 +1630,7 @@ fn from_cvc5_term_match_wildcard() {
 
 #[test]
 fn from_cvc5_term_real_literal() {
-    // 1.5 is represented as 3/2 in cvc5; reverse translates to (/ 3 2)
+    // The forward-cached round-trip returns the original Term unchanged.
     let mut ctx = Context::new();
     let _cmds = UntypedAst
         .parse_script_str("(set-logic QF_LRA) (declare-const x Real)")
@@ -1651,7 +1651,7 @@ fn from_cvc5_term_real_literal() {
     }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
     let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
-    assert_eq!(back.to_string(), "(+ x (/ 3 2))");
+    assert_eq!(back.to_string(), "(+ x 1.5)");
 }
 
 #[test]
@@ -1709,7 +1709,7 @@ fn from_cvc5_term_real_integer_value() {
 
 #[test]
 fn from_cvc5_term_real_in_lira() {
-    // In LIRA logic (RealInts), real division should use decimal constants
+    // The forward-cached round-trip returns the original Term unchanged.
     let mut ctx = Context::new();
     let _cmds = UntypedAst
         .parse_script_str("(set-logic AUFLIRA) (declare-const x Real)")
@@ -1730,8 +1730,7 @@ fn from_cvc5_term_real_in_lira() {
     }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
     let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
-    // In LIRA, 1.5 = 3/2 should use decimal constants: (/ 3.0 2.0)
-    assert_eq!(back.to_string(), "(+ x (/ 3.0 2.0))");
+    assert_eq!(back.to_string(), "(+ x 1.5)");
 }
 
 #[test]
@@ -1876,7 +1875,7 @@ fn from_cvc5_term_str_prefixof() {
 
 #[test]
 fn from_cvc5_term_hex_bv_literal() {
-    // Hex literals are normalized to binary in the round-trip
+    // The forward-cached round-trip returns the original Term unchanged.
     let mut ctx = Context::new();
     let _cmds = UntypedAst
         .parse_script_str("(set-logic QF_BV) (declare-const x (_ BitVec 8))")
@@ -1897,7 +1896,7 @@ fn from_cvc5_term_hex_bv_literal() {
     }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
     let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
-    assert_eq!(back.to_string(), "(bvadd x #b10101011)");
+    assert_eq!(back.to_string(), "(bvadd x #xab)");
 }
 
 #[test]

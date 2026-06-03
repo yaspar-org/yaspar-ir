@@ -69,6 +69,7 @@
 
 use crate::ast::alg::VarBinding;
 use crate::ast::*;
+use crate::containers::{InsertableMapping, Mapping};
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::raw::alg::rec::TermRecursionScheme;
@@ -76,6 +77,7 @@ use crate::raw::alg::rec_memo::{MemoizedRecursion, MemoizedScheme, Memoizing};
 use crate::statics::*;
 use crate::traits::{Contains, Repr};
 use crate::untyped::UntypedAst;
+use bimap::BiHashMap;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
 use dashu::integer::UBig;
 use std::collections::{HashMap, HashSet};
@@ -223,20 +225,22 @@ pub struct Cvc5Env<'tm, 'env> {
     globals: HashMap<String, CTerm<'tm>>,
     /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
     locals: HashMap<usize, WithPattern<'tm>>,
-    /// Cache from yaspar-ir [`Sort`] to translated [`CSort`], avoiding redundant work.
-    sort_cache: HashMap<Sort, CSort<'tm>>,
+    /// Bidirectional cache between yaspar-ir [`Sort`] and translated [`CSort`].
+    /// Used for both forward and reverse sort translation.
+    sort_cache: BiHashMap<Sort, CSort<'tm>>,
     /// Datatype sorts mapping from names to their corresponding potentially polymorphic representations.
     dt_sorts: HashMap<String, CSort<'tm>>,
     /// Stack of bound-variable lists for scope management in quantifiers and match arms (forward direction).
     scope_stack: Vec<Vec<CTerm<'tm>>>,
     /// Cached sort-parameter substitutions for parametric datatype match translation.
     sort_subst_map: HashMap<Term, SortSubst<'tm>>,
-    /// Forward memoization cache: yaspar-ir [`Term`] → translated cvc5 term (with patterns).
-    term_cache: HashMap<Term, WithPattern<'tm>>,
-    /// Reverse cache from [`CSort`] to yaspar-ir [`Sort`], avoiding redundant work.
-    sort_cache_from: HashMap<CSort<'tm>, Sort>,
-    /// Reverse cache from [`CTerm`] to yaspar-ir [`Term`], avoiding redundant work.
-    term_cache_from: HashMap<CTerm<'tm>, Term>,
+    /// Bidirectional cache between yaspar-ir [`Term`] and translated [`WithPattern`].
+    /// Used for forward memoization and reverse term lookup. For reverse lookups, the
+    /// [`CTerm`] is wrapped into a `WithPattern` with empty patterns before looking up
+    /// on the right side. Quantifier translation produces a `WithPattern` whose patterns
+    /// have already been consumed into the quantifier itself, so the cached `WithPattern`
+    /// on a quantifier key has empty patterns (preserving the bijection on quantifiers).
+    term_cache: BiHashMap<Term, WithPattern<'tm>>,
     /// Backward-direction bound variable map: cvc5 term id → VarBinding.
     locals_from: HashMap<u64, VarBinding<Str, Sort>>,
     /// Stack of bound variable cvc5 ids for scope cleanup (backward direction).
@@ -254,13 +258,11 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
             sort: HashMap::new(),
             globals: HashMap::new(),
             locals: HashMap::new(),
-            sort_cache: HashMap::new(),
+            sort_cache: BiHashMap::new(),
             dt_sorts: HashMap::new(),
             scope_stack: vec![],
             sort_subst_map: Default::default(),
-            term_cache: HashMap::new(),
-            sort_cache_from: HashMap::new(),
-            term_cache_from: HashMap::new(),
+            term_cache: BiHashMap::new(),
             locals_from: HashMap::new(),
             scope_stack_from: Vec::new(),
             uninterpreted_values: HashSet::new(),
@@ -295,9 +297,35 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
     }
 }
 
+// `BiHashMap` is treated as a left-keyed mapping for memoization purposes:
+// `lookup` finds the right value by left key, and `insert` populates the bijection
+// in both directions.
+impl<L, R> Mapping for BiHashMap<L, R>
+where
+    L: Eq + std::hash::Hash,
+    R: Eq + std::hash::Hash + Clone,
+{
+    type Key = L;
+    type Value = R;
+
+    fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
+        self.get_by_left(key).cloned()
+    }
+}
+
+impl<L, R> InsertableMapping for BiHashMap<L, R>
+where
+    L: Eq + std::hash::Hash,
+    R: Eq + std::hash::Hash + Clone,
+{
+    fn insert(&mut self, key: Self::Key, value: Self::Value) {
+        BiHashMap::insert(self, key, value);
+    }
+}
+
 impl<'tm, 'env> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, 'env> {
     type Cache<'a>
-        = &'a mut HashMap<Term, WithPattern<'tm>>
+        = &'a mut BiHashMap<Term, WithPattern<'tm>>
     where
         Self: 'a;
 
@@ -345,7 +373,7 @@ impl<'tm, 'env> ConvertToCvc5<Cvc5Env<'tm, 'env>> for Sort {
     type Output = CSort<'tm>;
 
     fn to_cvc5(&self, env: &mut Cvc5Env<'tm, 'env>) -> Res<CSort<'tm>> {
-        if let Some(cs) = env.sort_cache.get(self) {
+        if let Some(cs) = env.sort_cache.get_by_left(self) {
             return Ok(cs.clone());
         }
         let cs = translate_sort_inner(self, env)?;
@@ -412,56 +440,56 @@ impl<'tm, 'env> ConvertFromCvc5<Cvc5Env<'tm, 'env>> for CSort<'tm> {
     type Output = Sort;
 
     fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, 'env>) -> Res<Sort> {
-        if let Some(s) = fenv.sort_cache_from.get(self) {
+        if let Some(s) = fenv.sort_cache.get_by_right(self) {
             return Ok(s.clone());
         }
-        let s = translate_sort_from_cvc5(self, fenv.ctx.arena())?;
-        fenv.sort_cache_from.insert(self.clone(), s.clone());
+        let s = translate_sort_from_cvc5(self, fenv)?;
+        fenv.sort_cache.insert(s.clone(), self.clone());
         Ok(s)
     }
 }
 
-fn translate_sort_from_cvc5<'tm>(cs: &CSort<'tm>, arena: &mut Arena) -> Res<Sort> {
+fn translate_sort_from_cvc5<'tm, 'env>(
+    cs: &CSort<'tm>,
+    fenv: &mut Cvc5Env<'tm, 'env>,
+) -> Res<Sort> {
     if cs.is_boolean() {
-        return Ok(arena.bool_sort());
+        return Ok(fenv.ctx.bool_sort());
     }
     if cs.is_integer() {
-        return Ok(arena.int_sort());
+        return Ok(fenv.ctx.int_sort());
     }
     if cs.is_real() {
-        return Ok(arena.real_sort());
+        return Ok(fenv.ctx.real_sort());
     }
     if cs.is_string() {
-        return Ok(arena.string_sort());
+        return Ok(fenv.ctx.string_sort());
     }
     if cs.is_regexp() {
-        return Ok(arena.reglan_sort());
+        return Ok(fenv.ctx.reglan_sort());
     }
     if cs.is_bv() {
-        return Ok(arena.bv_sort(cs.bv_size().into()));
+        return Ok(fenv.ctx.bv_sort(cs.bv_size().into()));
     }
     if cs.is_array() {
-        let idx = translate_sort_from_cvc5(&cs.array_index_sort(), arena)?;
-        let elem = translate_sort_from_cvc5(&cs.array_element_sort(), arena)?;
-        return Ok(arena.array_sort(idx, elem));
+        let idx = cs.array_index_sort().conv_from_cvc5(fenv)?;
+        let elem = cs.array_element_sort().conv_from_cvc5(fenv)?;
+        return Ok(fenv.ctx.array_sort(idx, elem));
     }
     // Instantiated parametric datatype (e.g. (List Int))
     if cs.is_dt() && cs.is_instantiated() {
         let dt = cs.datatype();
         let name = dt.name();
         let params = cs.instantiated_parameters();
-        let ir_params: Vec<Sort> = params
-            .iter()
-            .map(|p| translate_sort_from_cvc5(p, arena))
-            .collect::<Res<_>>()?;
-        let sym = arena.allocate_symbol(name);
-        return Ok(arena.sort_n(sym, ir_params));
+        let ir_params: Vec<Sort> = params.conv_from_cvc5(fenv)?;
+        let sym = fenv.ctx.allocate_symbol(name);
+        return Ok(fenv.ctx.sort_n(sym, ir_params));
     }
     // Monomorphic datatype sort
     if cs.is_dt() {
         let dt = cs.datatype();
         let name = dt.name();
-        return Ok(arena.simple_sort(name));
+        return Ok(fenv.ctx.simple_sort(name));
     }
     // Instantiated parametric uninterpreted sort (e.g. (Pair A B))
     if cs.is_instantiated() {
@@ -470,15 +498,15 @@ fn translate_sort_from_cvc5<'tm>(cs: &CSort<'tm>, arena: &mut Arena) -> Res<Sort
         let params = cs.instantiated_parameters();
         let ir_params: Vec<Sort> = params
             .iter()
-            .map(|p| translate_sort_from_cvc5(p, arena))
+            .map(|p| p.conv_from_cvc5(fenv))
             .collect::<Res<_>>()?;
-        let sym = arena.allocate_symbol(name);
-        return Ok(arena.sort_n(sym, ir_params));
+        let sym = fenv.ctx.allocate_symbol(name);
+        return Ok(fenv.ctx.sort_n(sym, ir_params));
     }
     // Uninterpreted sort
     if cs.is_uninterpreted_sort() {
         let name = cs.symbol();
-        return Ok(arena.simple_sort(name));
+        return Ok(fenv.ctx.simple_sort(name));
     }
     Err(format!("unsupported cvc5 sort: {cs}"))
 }
@@ -500,11 +528,14 @@ impl<'tm, 'env> ConvertFromCvc5<Cvc5Env<'tm, 'env>> for CTerm<'tm> {
     type Output = Term;
 
     fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, 'env>) -> Res<Term> {
-        if let Some(t) = fenv.term_cache_from.get(self) {
+        // Reverse lookup: a plain CTerm corresponds to a `WithPattern` with empty
+        // patterns (the quantifier case never reaches us as a standalone CTerm).
+        let key = WithPattern::from(self.clone());
+        if let Some(t) = fenv.term_cache.get_by_right(&key) {
             return Ok(t.clone());
         }
         let t = translate_term_from_cvc5(self, fenv)?;
-        fenv.term_cache_from.insert(self.clone(), t.clone());
+        fenv.term_cache.insert(t.clone(), key);
         Ok(t)
     }
 }
@@ -675,30 +706,60 @@ fn translate_term_from_cvc5<'tm, 'env>(
                 scope_ids.push(cvc5_id);
             }
             fenv.push_scope_from(scope_ids);
-            let result = body_ct.conv_from_cvc5(fenv).and_then(|body| {
-                // Translate :pattern annotations if present (child 2 is INST_PATTERN_LIST)
-                if ct.num_children() > 2 {
-                    let plist = ct.child(2);
-                    let mut attrs = Vec::new();
-                    for i in 0..plist.num_children() {
-                        let pat = plist.child(i);
-                        if pat.kind() == Kind::InstPattern {
-                            let mut pat_terms = Vec::new();
-                            for j in 0..pat.num_children() {
-                                pat_terms.push(pat.child(j).conv_from_cvc5(fenv)?);
-                            }
-                            attrs.push(Attribute::Pattern(pat_terms));
+
+            // Collect cvc5 patterns first (without translating to ir Terms yet).
+            // This lets us probe the bimap with `WithPattern { body_ct, cvc5_patterns }`
+            // on the right side and short-circuit body translation on a hit.
+            let cvc5_patterns: Vec<Vec<CTerm<'tm>>> = if ct.num_children() > 2 {
+                let plist = ct.child(2);
+                let mut pats = Vec::with_capacity(plist.num_children());
+                for i in 0..plist.num_children() {
+                    let pat = plist.child(i);
+                    if pat.kind() == Kind::InstPattern {
+                        let mut pat_cterms = Vec::with_capacity(pat.num_children());
+                        for j in 0..pat.num_children() {
+                            pat_cterms.push(pat.child(j));
                         }
+                        pats.push(pat_cterms);
                     }
-                    if attrs.is_empty() {
-                        Ok(body)
-                    } else {
-                        Ok(fenv.ctx.annotated(body, attrs))
-                    }
-                } else {
-                    Ok(body)
                 }
-            });
+                pats
+            } else {
+                vec![]
+            };
+
+            let result = 'inner: {
+                let probe = WithPattern {
+                    term: body_ct.clone(),
+                    patterns: cvc5_patterns.clone(),
+                };
+                if let Some(cached) = fenv.term_cache.get_by_right(&probe) {
+                    break 'inner Ok(cached.clone());
+                }
+                body_ct.conv_from_cvc5(fenv).and_then(|body| {
+                    if cvc5_patterns.is_empty() {
+                        return Ok(body);
+                    }
+                    let attrs = cvc5_patterns
+                        .iter()
+                        .map(|pats| {
+                            Ok(Attribute::Pattern(
+                                pats.iter()
+                                    .map(|t| t.conv_from_cvc5(fenv))
+                                    .collect::<Res<Vec<_>>>()?,
+                            ))
+                        })
+                        .collect::<Res<Vec<_>>>()?;
+                    let annotated = fenv.ctx.annotated(body, attrs);
+                    // Mirror the forward-direction shape: `Annotated(body, [:pattern …])`
+                    // maps to a `WithPattern` whose `term` is the body's CTerm and whose
+                    // `patterns` carry the pattern triggers (later absorbed into
+                    // `INST_PATTERN_LIST`).
+                    fenv.term_cache.insert(annotated.clone(), probe);
+                    Ok(annotated)
+                })
+            };
+
             let bindings = fenv.pop_scope_from();
             let body = result?;
 
@@ -941,10 +1002,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
     Err(format!("unsupported cvc5 term kind: {:?}", kind))
 }
 
-fn translate_children<'tm, 'env>(
-    ct: &CTerm<'tm>,
-    fenv: &mut Cvc5Env<'tm, 'env>,
-) -> Res<Vec<Term>> {
+fn translate_children<'tm, 'env>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, 'env>) -> Res<Vec<Term>> {
     let n = ct.num_children();
     let mut children = Vec::with_capacity(n);
     for i in 0..n {
@@ -1055,7 +1113,8 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                         let vs = arg.sort().conv_from_cvc5(fenv)?;
                         let id = fenv.ctx.new_local();
                         let sym = fenv.ctx.allocate_symbol(&name);
-                        fenv.locals_from.insert(cvc5_id, VarBinding(sym.clone(), id, vs));
+                        fenv.locals_from
+                            .insert(cvc5_id, VarBinding(sym.clone(), id, vs));
                         arguments.push(Some((sym, id)));
                     } else {
                         arguments.push(None);
@@ -2148,7 +2207,7 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, '_>> for Command {
                     .cloned()
                     .chain(
                         env.sort_cache
-                            .values()
+                            .right_values()
                             .filter(|s| s.is_uninterpreted_sort())
                             .cloned(),
                     )

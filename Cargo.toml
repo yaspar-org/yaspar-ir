@@ -38,6 +38,7 @@ either = "1.15"
 num-traits = "0.2.19"
 num-order = "1.2.0"
 delegate = "0.13"
+bimap = "0.6"
 
 [lib]
 name = "yaspar_ir"
