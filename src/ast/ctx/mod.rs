@@ -592,7 +592,8 @@ impl Context {
                 // scan all signatures for one that has a defined body
                 sigs.iter()
                     .filter_map(|(_, def)| {
-                        if matches!(def, FunctionMeta::Defined { .. }) {
+                        if matches!(def, FunctionMeta::Defined { .. }
+                            | FunctionMeta::Datatype { kind: DatatypeFunction::TesterDefined(_), .. }) {
                             Some(name.clone())
                         } else {
                             None
