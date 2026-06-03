@@ -130,7 +130,7 @@ pub(crate) trait Memoizing<K, V> {
 /// `on_match_arm`, `on_attribute_*`) delegate directly without caching.
 ///
 /// This type is not public — users interact with [`Memoize`] directly.
-pub(crate) struct MemoizedRecursion<'a, R>(&'a mut R);
+pub(crate) struct MemoizedRecursion<'a, R>(pub(crate) &'a mut R);
 
 impl<Str, So, T, R> TermRecursor<Str, So, T> for MemoizedRecursion<'_, R>
 where

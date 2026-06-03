@@ -5,7 +5,7 @@
 
 use cvc5::{Kind, Solver, TermManager};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
-use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver, FromCvc5Env};
+use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 use yaspar_ir::untyped::UntypedAst;
 
 /// Helper: parse + type-check a script, then translate all commands to cvc5.
@@ -18,7 +18,7 @@ fn run_script(script: &str) {
         .unwrap();
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
@@ -36,7 +36,7 @@ fn check_sat(script: &str) -> bool {
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
     solver.set_option("produce-models", "true");
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
@@ -276,7 +276,7 @@ fn translate_term_standalone() {
         .unwrap();
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
@@ -294,7 +294,7 @@ fn error_unknown_global() {
     let int_sort = ctx.int_sort();
     let x = ctx.simple_sorted_symbol("x", int_sort);
     let tm = TermManager::new();
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     assert!(x.to_cvc5(&mut env).is_err());
 }
 
@@ -305,7 +305,7 @@ fn error_unsupported_sort() {
     // A custom sort that cvc5 doesn't know about
     let custom = ctx.simple_sort("MyCustomSort");
     let tm = TermManager::new();
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     assert!(custom.to_cvc5(&mut env).is_err());
 }
 
@@ -328,7 +328,7 @@ fn locals_cleaned_up_after_quantifier_error() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
 
     // Translate set-logic only — skip declare-const y
     cmds[0]
@@ -368,7 +368,7 @@ fn locals_cleaned_up_after_let_error() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     cmds[0].to_cvc5(&mut es).unwrap();
     // Skip declare-const y
@@ -397,7 +397,7 @@ fn locals_cleaned_up_after_define_fun_error() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     cmds[0].to_cvc5(&mut es).unwrap();
     // Skip declare-const y
@@ -428,7 +428,7 @@ fn named_annotation_registers_global() {
 
     let tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     // All commands should succeed — "pos" from :named must be usable in the second assert
     for cmd in &cmds {
@@ -634,7 +634,7 @@ fn with_script_results(script: &str, options: &[(&str, &str)], f: impl FnOnce(&[
     for (k, v) in options {
         solver.set_option(k, v);
     }
-    let mut env = Cvc5Env::create(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
     let results: Vec<_> = cmds
         .iter()
@@ -968,21 +968,20 @@ fn sort_round_trip(script: &str, sort_str: &str) {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &_cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
     let sort = UntypedAst
         .parse_sort_str(sort_str)
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     let csort = sort.to_cvc5(&mut *es.env).unwrap();
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back = csort.conv_from_cvc5(&mut from_env).unwrap();
+    let back = csort.conv_from_cvc5(&mut *es.env).unwrap();
     assert_eq!(sort.to_string(), back.to_string());
 }
 
@@ -1044,9 +1043,9 @@ fn from_cvc5_sort_cache_hit() {
     let tm = TermManager::new();
     let csort = tm.integer_sort();
     let mut ctx = Context::new();
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back1 = csort.conv_from_cvc5(&mut from_env).unwrap();
-    let back2 = csort.conv_from_cvc5(&mut from_env).unwrap();
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let back1 = csort.conv_from_cvc5(&mut env).unwrap();
+    let back2 = csort.conv_from_cvc5(&mut env).unwrap();
     assert_eq!(back1, back2);
 }
 
@@ -1100,19 +1099,19 @@ fn const_array_negative() {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-
-    for cmd in &cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
     let term = UntypedAst
         .parse_term_str("(= a ((as const (Array Int Bool)) b))")
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+
+    for cmd in &cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     assert!(term.to_cvc5(&mut env).is_err());
 }
 /// Helper: translate a yaspar-ir Term to cvc5 and back, asserting the round-trip
@@ -1124,21 +1123,20 @@ fn term_round_trip(script: &str, term_str: &str) {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
     let term = UntypedAst
         .parse_term_str(term_str)
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
     assert_eq!(term.to_string(), back.to_string());
 }
 
@@ -1366,14 +1364,6 @@ fn from_cvc5_term_chained_eq() {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &_cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
-    // Build (= x y z) by translating individual terms and combining
     let x = UntypedAst
         .parse_term_str("x")
         .unwrap()
@@ -1389,12 +1379,18 @@ fn from_cvc5_term_chained_eq() {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     let cx = x.to_cvc5(&mut *es.env).unwrap();
     let cy = y.to_cvc5(&mut *es.env).unwrap();
     let cz = z.to_cvc5(&mut *es.env).unwrap();
     let eq_xyz = tm.mk_term(Kind::Equal, &[cx, cy, cz]);
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back = eq_xyz.conv_from_cvc5(&mut from_env).unwrap();
+    let back = eq_xyz.conv_from_cvc5(&mut *es.env).unwrap();
     assert_eq!(back.to_string(), "(and (= x y) (= y z))");
 }
 
@@ -1641,21 +1637,20 @@ fn from_cvc5_term_real_literal() {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &_cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
     let term = UntypedAst
         .parse_term_str("(+ x 1.5)")
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
     assert_eq!(back.to_string(), "(+ x (/ 3 2))");
 }
 
@@ -1694,21 +1689,20 @@ fn from_cvc5_term_real_integer_value() {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &_cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
     let term = UntypedAst
         .parse_term_str("(+ x 3.0)")
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
     // cvc5 returns "3" for the real value 3.0; reverse produces (/ 3 1) or 3.0
     assert!(back.to_string().contains("3"));
 }
@@ -1722,21 +1716,20 @@ fn from_cvc5_term_real_in_lira() {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &_cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
     let term = UntypedAst
         .parse_term_str("(+ x 1.5)")
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
     // In LIRA, 1.5 = 3/2 should use decimal constants: (/ 3.0 2.0)
     assert_eq!(back.to_string(), "(+ x (/ 3.0 2.0))");
 }
@@ -1890,21 +1883,20 @@ fn from_cvc5_term_hex_bv_literal() {
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
-    let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::create(&tm);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
-    for cmd in &_cmds {
-        cmd.to_cvc5(&mut es).unwrap();
-    }
     let term = UntypedAst
         .parse_term_str("(bvadd x #xab)")
         .unwrap()
         .type_check(&mut ctx)
         .unwrap();
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    for cmd in &_cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
     let cterm = term.to_cvc5(&mut *es.env).unwrap();
-    let mut from_env = FromCvc5Env::new(&mut ctx);
-    let back = cterm.conv_from_cvc5(&mut from_env).unwrap();
+    let back = cterm.conv_from_cvc5(&mut *es.env).unwrap();
     assert_eq!(back.to_string(), "(bvadd x #b10101011)");
 }
 
