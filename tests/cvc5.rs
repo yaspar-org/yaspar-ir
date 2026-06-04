@@ -851,7 +851,7 @@ fn command_result_get_assertions_preserves_terms() {
 }
 
 #[test]
-fn command_result_get_unsat_core_returns_assertion_bodies() {
+fn command_result_get_unsat_core_returns_named_labels() {
     with_script_results(
         "(set-logic QF_LIA)
          (declare-const x Int)
@@ -864,10 +864,8 @@ fn command_result_get_unsat_core_returns_assertion_bodies() {
             CommandResult::Terms(ts) => {
                 assert_eq!(ts.len(), 2);
                 let s: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
-                // cvc5's get-unsat-core returns the assertion bodies, not the
-                // SMT-LIB `:named` labels.
-                let a = "(> x 0)";
-                let b = "(< x 0)";
+                let a = "a1";
+                let b = "a2";
                 assert!(
                     (s[0] == a && s[1] == b) || (s[0] == b && s[1] == a),
                     "expected {{ {a:?}, {b:?} }} in some order, got {s:?}"

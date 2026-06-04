@@ -247,6 +247,10 @@ pub struct Cvc5Env<'tm, Ctx> {
     scope_stack_from: Vec<Vec<u64>>,
     /// Allocated symbols for uninterpreted sort values encountered during reverse translation.
     uninterpreted_values: HashSet<Str>,
+    /// Reverse map from a translated assertion's [`CTerm`] back to the SMT-LIB `:named`
+    /// label(s) declared on its enclosing `(assert (! ... :named X))` form.
+    /// Used to recover names when cvc5 returns terms in `get-unsat-core` etc.
+    named_assertions: HashMap<CTerm<'tm>, Str>,
 }
 
 impl<'tm, Ctx> Cvc5Env<'tm, Ctx>
@@ -269,6 +273,7 @@ where
             locals_from: HashMap::new(),
             scope_stack_from: Vec::new(),
             uninterpreted_values: HashSet::new(),
+            named_assertions: HashMap::new(),
         }
     }
 
@@ -276,6 +281,23 @@ where
     pub fn check_uninterpreted_value<S: AllocatableString<Arena>>(&mut self, name: S) -> bool {
         let sym = name.allocate(self.ctx.ref_mut().arena());
         self.uninterpreted_values.contains(&sym)
+    }
+
+    /// Backward-translate a list of cvc5 terms, substituting any `:named` label
+    /// recorded for an asserted formula in place of that formula's translation.
+    fn conv_terms_with_names(&mut self, cts: &[CTerm<'tm>]) -> Res<Vec<Term>> {
+        cts.iter()
+            .map(|ct| {
+                if let Some(name) = self.named_assertions.get(ct).cloned() {
+                    let mut rf = self.ctx.ref_mut();
+                    let bool_sort = rf.bool_sort();
+                    let qid = QualifiedIdentifier::simple(name);
+                    Ok(rf.global(qid, Some(bool_sort)))
+                } else {
+                    ct.conv_from_cvc5(self)
+                }
+            })
+            .collect()
     }
 }
 
@@ -2213,8 +2235,9 @@ where
                 let ct = cur.to_cvc5(env)?;
                 for name in names {
                     env.globals.insert(name.clone(), ct.clone());
+                    env.named_assertions.insert(ct.clone(), name);
                 }
-                solver.assert_formula(CTerm::clone(&ct));
+                solver.assert_formula(ct);
                 Ok(CommandResult::None)
             }
             AC::CheckSat => {
@@ -2257,17 +2280,17 @@ where
             }
             AC::GetAssertions => {
                 let cts = solver.get_assertions();
-                let ts = cts.conv_from_cvc5(env)?;
+                let ts = env.conv_terms_with_names(&cts)?;
                 Ok(CommandResult::Terms(ts))
             }
             AC::GetUnsatCore => {
                 let cts = solver.get_unsat_core();
-                let ts = cts.conv_from_cvc5(env)?;
+                let ts = env.conv_terms_with_names(&cts)?;
                 Ok(CommandResult::Terms(ts))
             }
             AC::GetUnsatAssumptions => {
                 let cts = solver.get_unsat_assumptions();
-                let ts = cts.conv_from_cvc5(env)?;
+                let ts = env.conv_terms_with_names(&cts)?;
                 Ok(CommandResult::Terms(ts))
             }
             AC::GetInfo(kw) => {
