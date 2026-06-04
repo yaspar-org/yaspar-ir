@@ -583,7 +583,7 @@ impl Context {
     /// Get all the symbols with a definition body
     ///
     /// This function is different from [Self::user_defined_symbols] in that it only returns the symbols
-    /// defined through `define-const` or `define-fun`.
+    /// defined through `define-const` or `define-fun` or datatype testers of the form `is-X`.
     pub fn defined_symbols(&self) -> HashSet<Str> {
         self.frame
             .symbol_table
