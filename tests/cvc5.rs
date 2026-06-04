@@ -877,6 +877,32 @@ fn command_result_get_unsat_core_returns_named_labels() {
 }
 
 #[test]
+fn command_result_get_unsat_core_mixes_named_and_unnamed() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (! (> x 0) :named pos))
+         (assert (< x 0))
+         (check-sat)
+         (get-unsat-core)",
+        &[("produce-unsat-cores", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::Terms(ts) => {
+                assert_eq!(ts.len(), 2);
+                let s: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                let a = "pos";
+                let b = "(< x 0)";
+                assert!(
+                    (s[0] == a && s[1] == b) || (s[0] == b && s[1] == a),
+                    "expected {{ {a:?}, {b:?} }} in some order, got {s:?}"
+                );
+            }
+            other => panic!("expected Terms, got {other:?}"),
+        },
+    );
+}
+
+#[test]
 fn command_result_get_unsat_assumptions_returns_terms() {
     with_script_results(
         "(set-logic QF_LIA)

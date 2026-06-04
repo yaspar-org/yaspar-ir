@@ -13,9 +13,10 @@
 //! # Forward translation
 //!
 //! - [`ConvertToCvc5<Env>`] — the core trait, implemented for [`Sort`], [`Term`], and [`Command`].
-//! - [`Cvc5Env`] — holds a [`cvc5::TermManager`], a mutable reference to a [`Context`], and
-//!   caches for sort/term/symbol translation in both directions. Used as the environment
-//!   for `Sort::to_cvc5`, `Term::to_cvc5`, `CSort::conv_from_cvc5`, and `CTerm::conv_from_cvc5`.
+//! - [`Cvc5Env<'tm, Ctx>`] — holds a [`cvc5::TermManager`], a [`Context`] handle (any
+//!   `Ctx: HasMutRef<Context>` — e.g. `&mut Context`, `Rc<RefCell<Context>>`), and caches
+//!   for sort/term/symbol translation in both directions. Used as the environment for
+//!   `Sort::to_cvc5`, `Term::to_cvc5`, `CSort::conv_from_cvc5`, and `CTerm::conv_from_cvc5`.
 //! - [`Cvc5EnvSolver`] — wraps a [`Cvc5Env`] and a [`Solver`]. Used as the environment
 //!   for `Command::to_cvc5`, since commands may interact with the solver (e.g. `assert`,
 //!   `check-sat`, `define-fun`).
@@ -23,13 +24,17 @@
 //! # Backward translation
 //!
 //! - [`ConvertFromCvc5<Env>`] — the core trait, implemented for [`CSort`] and [`CTerm`].
-//! - [`Cvc5Env`] — also serves as the environment for backward translation, holding the
-//!   `Context` reference, scoped variable bindings, sort/term reverse caches, and a record
-//!   of uninterpreted sort values encountered.
+//! - [`Cvc5Env`] — also serves as the environment for backward translation, sharing the
+//!   sort/term caches with the forward direction, and additionally holding scoped variable
+//!   bindings and a record of uninterpreted sort values encountered.
 //!
 //! The backward translation handles constants, logical connectives, quantifiers (including
 //! `:pattern` annotations), arithmetic/bitvector/string operators, indexed operators,
 //! datatype constructors/selectors/testers, match expressions, and uninterpreted sort values.
+//!
+//! Command results that carry terms ([`CommandResult::GetValue`] and [`CommandResult::Terms`])
+//! are backward-translated into yaspar-ir [`Term`] values before being returned, so callers
+//! never see raw [`CTerm`] handles.
 //!
 //! # Example
 //!
@@ -57,15 +62,22 @@
 //!
 //! # Caching
 //!
-//! [`Cvc5Env`] caches translated sorts and terms in both directions so that repeated
-//! translations of the same hash-consed object (forward) or cvc5 object (backward)
-//! return the cached counterpart directly.
+//! [`Cvc5Env`] keeps a single [`BiHashMap`] for sorts and a single one for terms, shared by
+//! both directions: a forward translation that produces a `(yaspar, cvc5)` pair populates
+//! the cache, and a subsequent reverse translation of the same cvc5 object hits it without
+//! recomputing.
 //!
 //! # Annotations
 //!
 //! Quantifier `:pattern` annotations are preserved in both directions: translated to cvc5
 //! `INST_PATTERN` / `INST_PATTERN_LIST` terms in the forward direction, and reconstructed as
 //! `Attribute::Pattern` annotations in the backward direction.
+//!
+//! `:named` annotations on `assert` are recorded in a `CTerm → name` table during forward
+//! translation. When cvc5 returns terms that match a named assertion (e.g. via
+//! `get-unsat-core`, `get-assertions`, or `get-unsat-assumptions`), the recorded name is
+//! returned as a yaspar-ir global identifier rather than the assertion body — recovering
+//! the SMT-LIB label that cvc5's solver-level API would otherwise drop.
 
 use crate::ast::alg::VarBinding;
 use crate::ast::*;
@@ -102,11 +114,15 @@ pub enum CommandResult<'tm> {
     None,
     /// Result of `check-sat` or `check-sat-assuming`.
     CheckSat(CResult<'tm>),
-    /// Result of `get-value`: a list of terms.
+    /// Result of `get-value`: a list of yaspar-ir terms (each cvc5-returned value
+    /// is backward-translated into [`Term`]).
     GetValue(Vec<Term>),
     /// Result of `get-model`: the model as a string.
     GetModel(String),
-    /// Result of `get-assertions`, `get-unsat-core`, or `get-unsat-assumptions`: a list of terms.
+    /// Result of `get-assertions`, `get-unsat-core`, or `get-unsat-assumptions`: a list
+    /// of yaspar-ir terms. For each cvc5-returned formula, if its `CTerm` was registered
+    /// via an `(assert (! ... :named X))` form, `X` is returned as a global identifier;
+    /// otherwise the formula is backward-translated into a [`Term`].
     Terms(Vec<Term>),
     /// Result of `get-info` or `get-option`: a string response.
     Info(String),
@@ -189,18 +205,16 @@ type SortSubst<'tm> = Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>;
 
 /// The unified environment for bidirectional translation between yaspar-ir and cvc5.
 ///
-/// This struct holds the [`TermManager`] reference, a mutable reference to a [`Context`],
-/// and all translation state for both directions:
+/// This struct holds the [`TermManager`] reference, a [`Context`] handle (any
+/// `Ctx: HasMutRef<Context>`, e.g. `&mut Context` or `Rc<RefCell<Context>>`), and all
+/// translation state for both directions:
 ///
-/// - **Forward (yaspar-ir → cvc5)**: sort/term caches, global and local symbol tables,
-///   datatype bookkeeping, and a memoization cache for hashconsed term translation.
-/// - **Backward (cvc5 → yaspar-ir)**: sort/term reverse caches, scoped variable bindings,
-///   and tracking of uninterpreted sort values.
-///
-/// It implements [`TermRecursor`] for stack-safe, memoized term translation. Because
-/// yaspar-ir terms are hashconsed, structurally identical sub-terms share the same
-/// pointer — the memoization layer (via the [`Memoizing`](crate::raw::alg::rec_memo)
-/// trait, pointing to `term_cache`) ensures each unique sub-term is translated at most once.
+/// - **Shared**: bidirectional [`BiHashMap`] caches for sorts and terms, plus a `CTerm →
+///   :named` table for recovering SMT-LIB labels in command results.
+/// - **Forward (yaspar-ir → cvc5)**: global and local symbol tables, datatype
+///   bookkeeping, scope stacks, and parametric-match substitutions.
+/// - **Backward (cvc5 → yaspar-ir)**: scoped variable bindings keyed by cvc5 ids and
+///   tracking of uninterpreted sort values.
 ///
 /// # Construction
 ///
@@ -214,43 +228,45 @@ type SortSubst<'tm> = Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>;
 /// let mut env = Cvc5Env::new(&tm, &mut ctx);
 /// ```
 pub struct Cvc5Env<'tm, Ctx> {
+    // ── Shared (used by both forward and reverse translation) ────────────
     /// The cvc5 term manager that owns all created sorts and terms.
     tm: &'tm TermManager,
     /// The backing yaspar-ir context, used during reverse translation for arena
     /// allocation and theory-aware constant construction.
     ctx: Ctx,
+    /// Bidirectional cache between yaspar-ir [`Sort`] and translated [`CSort`].
+    /// Used for both forward and reverse sort translation.
+    sort_cache: BiHashMap<Sort, CSort<'tm>>,
+    /// Bidirectional cache between yaspar-ir [`Term`] and translated [`WithPattern`].
+    /// Used for forward memoization and reverse term lookup.
+    term_cache: BiHashMap<Term, WithPattern<'tm>>,
+    /// Reverse map from a translated assertion's [`CTerm`] back to the SMT-LIB `:named`
+    /// label(s) declared on its enclosing `(assert (! ... :named X))` form. Populated
+    /// during forward translation of `assert` commands and consulted during reverse
+    /// translation of cvc5-returned terms (e.g. `get-unsat-core`).
+    named_assertions: HashMap<CTerm<'tm>, Str>,
+
+    // ── Forward direction (yaspar-ir → cvc5) ─────────────────────────────
     /// Named sorts registered by `declare-sort` or datatype declarations.
     sort: HashMap<Str, CSort<'tm>>,
     /// Global symbols (constants, functions, constructors, selectors, testers).
     globals: HashMap<Str, CTerm<'tm>>,
-    /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
-    locals: HashMap<usize, WithPattern<'tm>>,
-    /// Bidirectional cache between yaspar-ir [`Sort`] and translated [`CSort`].
-    /// Used for both forward and reverse sort translation.
-    sort_cache: BiHashMap<Sort, CSort<'tm>>,
     /// Datatype sorts mapping from names to their corresponding potentially polymorphic representations.
     dt_sorts: HashMap<Str, CSort<'tm>>,
+    /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
+    locals: HashMap<usize, WithPattern<'tm>>,
     /// Stack of bound-variable lists for scope management in quantifiers and match arms (forward direction).
     scope_stack: Vec<Vec<CTerm<'tm>>>,
     /// Cached sort-parameter substitutions for parametric datatype match translation.
     sort_subst_map: HashMap<Term, SortSubst<'tm>>,
-    /// Bidirectional cache between yaspar-ir [`Term`] and translated [`WithPattern`].
-    /// Used for forward memoization and reverse term lookup. For reverse lookups, the
-    /// [`CTerm`] is wrapped into a `WithPattern` with empty patterns before looking up
-    /// on the right side. Quantifier translation produces a `WithPattern` whose patterns
-    /// have already been consumed into the quantifier itself, so the cached `WithPattern`
-    /// on a quantifier key has empty patterns (preserving the bijection on quantifiers).
-    term_cache: BiHashMap<Term, WithPattern<'tm>>,
+
+    // ── Reverse direction (cvc5 → yaspar-ir) ─────────────────────────────
     /// Backward-direction bound variable map: cvc5 term id → VarBinding.
     locals_from: HashMap<u64, VarBinding<Str, Sort>>,
     /// Stack of bound variable cvc5 ids for scope cleanup (backward direction).
     scope_stack_from: Vec<Vec<u64>>,
     /// Allocated symbols for uninterpreted sort values encountered during reverse translation.
     uninterpreted_values: HashSet<Str>,
-    /// Reverse map from a translated assertion's [`CTerm`] back to the SMT-LIB `:named`
-    /// label(s) declared on its enclosing `(assert (! ... :named X))` form.
-    /// Used to recover names when cvc5 returns terms in `get-unsat-core` etc.
-    named_assertions: HashMap<CTerm<'tm>, Str>,
 }
 
 impl<'tm, Ctx> Cvc5Env<'tm, Ctx>
@@ -262,18 +278,18 @@ where
         Self {
             tm,
             ctx,
+            sort_cache: BiHashMap::new(),
+            term_cache: BiHashMap::new(),
+            named_assertions: HashMap::new(),
             sort: HashMap::new(),
             globals: HashMap::new(),
-            locals: HashMap::new(),
-            sort_cache: BiHashMap::new(),
             dt_sorts: HashMap::new(),
+            locals: HashMap::new(),
             scope_stack: vec![],
             sort_subst_map: Default::default(),
-            term_cache: BiHashMap::new(),
             locals_from: HashMap::new(),
             scope_stack_from: Vec::new(),
             uninterpreted_values: HashSet::new(),
-            named_assertions: HashMap::new(),
         }
     }
 
