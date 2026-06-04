@@ -765,6 +765,143 @@ fn command_result_get_unsat_core() {
 }
 
 #[test]
+fn command_result_get_value_returns_term_value() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (= x 42))
+         (check-sat)
+         (get-value (x))",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetValue(vals) => {
+                assert_eq!(vals.len(), 1);
+                assert_eq!(vals[0].to_string(), "42");
+            }
+            other => panic!("expected GetValue, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_value_multiple() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (declare-const y Int)
+         (assert (= x 7))
+         (assert (= y 13))
+         (check-sat)
+         (get-value (x y (+ x y)))",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetValue(vals) => {
+                assert_eq!(vals.len(), 3);
+                assert_eq!(vals[0].to_string(), "7");
+                assert_eq!(vals[1].to_string(), "13");
+                assert_eq!(vals[2].to_string(), "20");
+            }
+            other => panic!("expected GetValue, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_value_bool() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const p Bool)
+         (assert p)
+         (check-sat)
+         (get-value (p))",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetValue(vals) => {
+                assert_eq!(vals.len(), 1);
+                assert_eq!(vals[0].to_string(), "true");
+            }
+            other => panic!("expected GetValue, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_assertions_preserves_terms() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (> x 0))
+         (assert (< x 10))
+         (get-assertions)",
+        &[("produce-assertions", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::Terms(ts) => {
+                assert_eq!(ts.len(), 2);
+                let s: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                let a = "(> x 0)";
+                let b = "(< x 10)";
+                assert!(
+                    (s[0] == a && s[1] == b) || (s[0] == b && s[1] == a),
+                    "expected {{ {a:?}, {b:?} }} in some order, got {s:?}"
+                );
+            }
+            other => panic!("expected Terms, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_unsat_core_returns_assertion_bodies() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (! (> x 0) :named a1))
+         (assert (! (< x 0) :named a2))
+         (check-sat)
+         (get-unsat-core)",
+        &[("produce-unsat-cores", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::Terms(ts) => {
+                assert_eq!(ts.len(), 2);
+                let s: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                // cvc5's get-unsat-core returns the assertion bodies, not the
+                // SMT-LIB `:named` labels.
+                let a = "(> x 0)";
+                let b = "(< x 0)";
+                assert!(
+                    (s[0] == a && s[1] == b) || (s[0] == b && s[1] == a),
+                    "expected {{ {a:?}, {b:?} }} in some order, got {s:?}"
+                );
+            }
+            other => panic!("expected Terms, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn command_result_get_unsat_assumptions_returns_terms() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (declare-const p Bool)
+         (declare-const q Bool)
+         (assert (=> p (> x 0)))
+         (assert (=> q (< x 0)))
+         (check-sat-assuming (p q))
+         (get-unsat-assumptions)",
+        &[("produce-unsat-assumptions", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::Terms(ts) => {
+                assert!(!ts.is_empty(), "expected at least one assumption");
+                let names: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                assert!(names.iter().all(|n| n == "p" || n == "q"));
+            }
+            other => panic!("expected Terms, got {other:?}"),
+        },
+    );
+}
+
+#[test]
 fn command_result_get_info() {
     with_script_results(
         "(set-logic QF_LIA)

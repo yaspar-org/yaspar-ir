@@ -103,11 +103,11 @@ pub enum CommandResult<'tm> {
     /// Result of `check-sat` or `check-sat-assuming`.
     CheckSat(CResult<'tm>),
     /// Result of `get-value`: a list of terms.
-    GetValue(Vec<CTerm<'tm>>),
+    GetValue(Vec<Term>),
     /// Result of `get-model`: the model as a string.
     GetModel(String),
     /// Result of `get-assertions`, `get-unsat-core`, or `get-unsat-assumptions`: a list of terms.
-    Terms(Vec<CTerm<'tm>>),
+    Terms(Vec<Term>),
     /// Result of `get-info` or `get-option`: a string response.
     Info(String),
     /// Result of `get-proof`: the full proof tree.
@@ -218,7 +218,7 @@ pub struct Cvc5Env<'tm, Ctx> {
     tm: &'tm TermManager,
     /// The backing yaspar-ir context, used during reverse translation for arena
     /// allocation and theory-aware constant construction.
-    pub ctx: Ctx,
+    ctx: Ctx,
     /// Named sorts registered by `declare-sort` or datatype declarations.
     sort: HashMap<Str, CSort<'tm>>,
     /// Global symbols (constants, functions, constructors, selectors, testers).
@@ -2229,7 +2229,8 @@ where
             AC::GetValue(terms) => {
                 let cts = terms.to_cvc5(env)?;
                 let vals = solver.get_values(&cts);
-                Ok(CommandResult::GetValue(vals))
+                let ts: Vec<Term> = vals.as_slice().conv_from_cvc5(env)?;
+                Ok(CommandResult::GetValue(ts))
             }
             AC::GetModel => {
                 let sorts = env
@@ -2255,15 +2256,18 @@ where
                 Ok(CommandResult::GetModel(m))
             }
             AC::GetAssertions => {
-                let ts = solver.get_assertions();
+                let cts = solver.get_assertions();
+                let ts = cts.conv_from_cvc5(env)?;
                 Ok(CommandResult::Terms(ts))
             }
             AC::GetUnsatCore => {
-                let ts = solver.get_unsat_core();
+                let cts = solver.get_unsat_core();
+                let ts = cts.conv_from_cvc5(env)?;
                 Ok(CommandResult::Terms(ts))
             }
             AC::GetUnsatAssumptions => {
-                let ts = solver.get_unsat_assumptions();
+                let cts = solver.get_unsat_assumptions();
+                let ts = cts.conv_from_cvc5(env)?;
                 Ok(CommandResult::Terms(ts))
             }
             AC::GetInfo(kw) => {
