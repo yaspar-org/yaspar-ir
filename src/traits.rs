@@ -19,6 +19,10 @@
 
 use crate::allocator::StrAllocator;
 use crate::ast::{HasArenaAlt, Str};
+use std::cell::{RefCell, RefMut};
+use std::ops::DerefMut;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A unifying trait to pull content from a wrapper type
 ///
@@ -58,6 +62,15 @@ pub trait Allocatable<Env> {
     type Out;
 
     fn allocate(&self, env: &mut Env) -> Self::Out;
+}
+
+/// a trait that specifies a mutable reference of `Target` can be extract from `Self`
+pub trait HasMutRef<Target> {
+    type RefMut<'a>: DerefMut<Target = Target>
+    where
+        Self: 'a;
+
+    fn ref_mut(&mut self) -> Self::RefMut<'_>;
 }
 
 impl Contains for str {
@@ -161,3 +174,47 @@ where
 pub trait AllocatableString<Env>: Allocatable<Env, Out = Str> + MetaData {}
 
 impl<Env, T> AllocatableString<Env> for T where T: Allocatable<Env, Out = Str> + MetaData {}
+
+impl<X> HasMutRef<X> for X {
+    type RefMut<'a>
+        = &'a mut X
+    where
+        X: 'a;
+
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self
+    }
+}
+
+impl<X> HasMutRef<X> for &mut X {
+    type RefMut<'a>
+        = &'a mut X
+    where
+        Self: 'a;
+
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self
+    }
+}
+
+impl<X> HasMutRef<X> for Rc<RefCell<X>> {
+    type RefMut<'a>
+        = RefMut<'a, X>
+    where
+        X: 'a;
+
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.borrow_mut()
+    }
+}
+
+impl<X> HasMutRef<X> for Arc<Mutex<X>> {
+    type RefMut<'a>
+        = MutexGuard<'a, X>
+    where
+        Self: 'a;
+
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.lock().unwrap()
+    }
+}

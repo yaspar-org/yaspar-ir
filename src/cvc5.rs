@@ -75,7 +75,7 @@ use crate::raw::alg::CheckIdentifier;
 use crate::raw::alg::rec::TermRecursionScheme;
 use crate::raw::alg::rec_memo::{MemoizedRecursion, MemoizedScheme, Memoizing};
 use crate::statics::*;
-use crate::traits::{Contains, Repr};
+use crate::traits::{AllocatableString, Contains, HasMutRef, Repr};
 use crate::untyped::UntypedAst;
 use bimap::BiHashMap;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
@@ -213,23 +213,23 @@ type SortSubst<'tm> = Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>;
 /// let mut ctx = Context::new();
 /// let mut env = Cvc5Env::new(&tm, &mut ctx);
 /// ```
-pub struct Cvc5Env<'tm, 'env> {
+pub struct Cvc5Env<'tm, Ctx> {
     /// The cvc5 term manager that owns all created sorts and terms.
     tm: &'tm TermManager,
     /// The backing yaspar-ir context, used during reverse translation for arena
     /// allocation and theory-aware constant construction.
-    pub ctx: &'env mut Context,
+    pub ctx: Ctx,
     /// Named sorts registered by `declare-sort` or datatype declarations.
-    sort: HashMap<String, CSort<'tm>>,
+    sort: HashMap<Str, CSort<'tm>>,
     /// Global symbols (constants, functions, constructors, selectors, testers).
-    globals: HashMap<String, CTerm<'tm>>,
+    globals: HashMap<Str, CTerm<'tm>>,
     /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
     locals: HashMap<usize, WithPattern<'tm>>,
     /// Bidirectional cache between yaspar-ir [`Sort`] and translated [`CSort`].
     /// Used for both forward and reverse sort translation.
     sort_cache: BiHashMap<Sort, CSort<'tm>>,
     /// Datatype sorts mapping from names to their corresponding potentially polymorphic representations.
-    dt_sorts: HashMap<String, CSort<'tm>>,
+    dt_sorts: HashMap<Str, CSort<'tm>>,
     /// Stack of bound-variable lists for scope management in quantifiers and match arms (forward direction).
     scope_stack: Vec<Vec<CTerm<'tm>>>,
     /// Cached sort-parameter substitutions for parametric datatype match translation.
@@ -246,12 +246,15 @@ pub struct Cvc5Env<'tm, 'env> {
     /// Stack of bound variable cvc5 ids for scope cleanup (backward direction).
     scope_stack_from: Vec<Vec<u64>>,
     /// Allocated symbols for uninterpreted sort values encountered during reverse translation.
-    uninterpreted_values: HashSet<String>,
+    uninterpreted_values: HashSet<Str>,
 }
 
-impl<'tm, 'env> Cvc5Env<'tm, 'env> {
+impl<'tm, Ctx> Cvc5Env<'tm, Ctx>
+where
+    Ctx: HasMutRef<Context>,
+{
     /// Create a new translation environment backed by the given [`TermManager`] and [`Context`].
-    pub fn new(tm: &'tm TermManager, ctx: &'env mut Context) -> Self {
+    pub fn new(tm: &'tm TermManager, ctx: Ctx) -> Self {
         Self {
             tm,
             ctx,
@@ -270,12 +273,15 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
     }
 
     /// Returns whether the given symbol is an uninterpreted sort value.
-    pub fn is_uninterpreted_value(&self, name: &str) -> bool {
-        self.uninterpreted_values.contains(name)
+    pub fn check_uninterpreted_value<S: AllocatableString<Arena>>(&mut self, name: S) -> bool {
+        let sym = name.allocate(self.ctx.ref_mut().arena());
+        self.uninterpreted_values.contains(&sym)
     }
+}
 
+impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
     /// Returns the set of uninterpreted sort value names encountered.
-    pub fn uninterpreted_values(&self) -> &HashSet<String> {
+    pub fn uninterpreted_values(&self) -> &HashSet<Str> {
         &self.uninterpreted_values
     }
 
@@ -323,7 +329,7 @@ where
     }
 }
 
-impl<'tm, 'env> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, 'env> {
+impl<'tm, Ctx> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, Ctx> {
     type Cache<'a>
         = &'a mut BiHashMap<Term, WithPattern<'tm>>
     where
@@ -354,25 +360,25 @@ impl<'tm, 'env> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, 'env> {
 /// let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
 /// // now use es.to_cvc5() on Command values
 /// ```
-pub struct Cvc5EnvSolver<'a, 'tm, 'env> {
+pub struct Cvc5EnvSolver<'a, 'tm, Ctx> {
     /// The translation environment for sorts and terms.
-    pub env: &'a mut Cvc5Env<'tm, 'env>,
+    pub env: &'a mut Cvc5Env<'tm, Ctx>,
     /// The cvc5 solver instance.
     pub solver: &'a mut Solver<'tm>,
 }
 
-impl<'a, 'tm, 'env> Cvc5EnvSolver<'a, 'tm, 'env> {
+impl<'a, 'tm, Ctx> Cvc5EnvSolver<'a, 'tm, Ctx> {
     /// Create a new command-translation environment from a [`Cvc5Env`] and a [`Solver`].
-    pub fn new(env: &'a mut Cvc5Env<'tm, 'env>, solver: &'a mut Solver<'tm>) -> Self {
+    pub fn new(env: &'a mut Cvc5Env<'tm, Ctx>, solver: &'a mut Solver<'tm>) -> Self {
         Self { env, solver }
     }
 }
 
 // ── Sort translation ─────────────────────────────────────────
-impl<'tm, 'env> ConvertToCvc5<Cvc5Env<'tm, 'env>> for Sort {
+impl<'tm, Ctx> ConvertToCvc5<Cvc5Env<'tm, Ctx>> for Sort {
     type Output = CSort<'tm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, 'env>) -> Res<CSort<'tm>> {
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<CSort<'tm>> {
         if let Some(cs) = env.sort_cache.get_by_left(self) {
             return Ok(cs.clone());
         }
@@ -382,9 +388,9 @@ impl<'tm, 'env> ConvertToCvc5<Cvc5Env<'tm, 'env>> for Sort {
     }
 }
 
-fn translate_sort_inner<'tm, 'env>(sort: &Sort, env: &mut Cvc5Env<'tm, 'env>) -> Res<CSort<'tm>> {
+fn translate_sort_inner<'tm, Ctx>(sort: &Sort, env: &mut Cvc5Env<'tm, Ctx>) -> Res<CSort<'tm>> {
     let s = sort.repr();
-    let name = &s.sort_name().to_string();
+    let name = s.sort_name();
     if let Some(n) = s.is_bv() {
         let w: u32 = n
             .clone()
@@ -436,10 +442,13 @@ fn translate_sort_inner<'tm, 'env>(sort: &Sort, env: &mut Cvc5Env<'tm, 'env>) ->
 
 // ── Reverse sort translation (CSort → Sort) ─────────────────
 
-impl<'tm, 'env> ConvertFromCvc5<Cvc5Env<'tm, 'env>> for CSort<'tm> {
+impl<'tm, Ctx> ConvertFromCvc5<Cvc5Env<'tm, Ctx>> for CSort<'tm>
+where
+    Ctx: HasMutRef<Context>,
+{
     type Output = Sort;
 
-    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, 'env>) -> Res<Sort> {
+    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort> {
         if let Some(s) = fenv.sort_cache.get_by_right(self) {
             return Ok(s.clone());
         }
@@ -449,32 +458,32 @@ impl<'tm, 'env> ConvertFromCvc5<Cvc5Env<'tm, 'env>> for CSort<'tm> {
     }
 }
 
-fn translate_sort_from_cvc5<'tm, 'env>(
-    cs: &CSort<'tm>,
-    fenv: &mut Cvc5Env<'tm, 'env>,
-) -> Res<Sort> {
+fn translate_sort_from_cvc5<'tm, Ctx>(cs: &CSort<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort>
+where
+    Ctx: HasMutRef<Context>,
+{
     if cs.is_boolean() {
-        return Ok(fenv.ctx.bool_sort());
+        return Ok(fenv.ctx.ref_mut().bool_sort());
     }
     if cs.is_integer() {
-        return Ok(fenv.ctx.int_sort());
+        return Ok(fenv.ctx.ref_mut().int_sort());
     }
     if cs.is_real() {
-        return Ok(fenv.ctx.real_sort());
+        return Ok(fenv.ctx.ref_mut().real_sort());
     }
     if cs.is_string() {
-        return Ok(fenv.ctx.string_sort());
+        return Ok(fenv.ctx.ref_mut().string_sort());
     }
     if cs.is_regexp() {
-        return Ok(fenv.ctx.reglan_sort());
+        return Ok(fenv.ctx.ref_mut().reglan_sort());
     }
     if cs.is_bv() {
-        return Ok(fenv.ctx.bv_sort(cs.bv_size().into()));
+        return Ok(fenv.ctx.ref_mut().bv_sort(cs.bv_size().into()));
     }
     if cs.is_array() {
         let idx = cs.array_index_sort().conv_from_cvc5(fenv)?;
         let elem = cs.array_element_sort().conv_from_cvc5(fenv)?;
-        return Ok(fenv.ctx.array_sort(idx, elem));
+        return Ok(fenv.ctx.ref_mut().array_sort(idx, elem));
     }
     // Instantiated parametric datatype (e.g. (List Int))
     if cs.is_dt() && cs.is_instantiated() {
@@ -482,14 +491,15 @@ fn translate_sort_from_cvc5<'tm, 'env>(
         let name = dt.name();
         let params = cs.instantiated_parameters();
         let ir_params: Vec<Sort> = params.conv_from_cvc5(fenv)?;
-        let sym = fenv.ctx.allocate_symbol(name);
-        return Ok(fenv.ctx.sort_n(sym, ir_params));
+        let mut rf = fenv.ctx.ref_mut();
+        let sym = rf.allocate_symbol(name);
+        return Ok(rf.sort_n(sym, ir_params));
     }
     // Monomorphic datatype sort
     if cs.is_dt() {
         let dt = cs.datatype();
         let name = dt.name();
-        return Ok(fenv.ctx.simple_sort(name));
+        return Ok(fenv.ctx.ref_mut().simple_sort(name));
     }
     // Instantiated parametric uninterpreted sort (e.g. (Pair A B))
     if cs.is_instantiated() {
@@ -500,34 +510,38 @@ fn translate_sort_from_cvc5<'tm, 'env>(
             .iter()
             .map(|p| p.conv_from_cvc5(fenv))
             .collect::<Res<_>>()?;
-        let sym = fenv.ctx.allocate_symbol(name);
-        return Ok(fenv.ctx.sort_n(sym, ir_params));
+        let mut rf = fenv.ctx.ref_mut();
+        let sym = rf.allocate_symbol(name);
+        return Ok(rf.sort_n(sym, ir_params));
     }
     // Uninterpreted sort
     if cs.is_uninterpreted_sort() {
         let name = cs.symbol();
-        return Ok(fenv.ctx.simple_sort(name));
+        return Ok(fenv.ctx.ref_mut().simple_sort(name));
     }
     Err(format!("unsupported cvc5 sort: {cs}"))
 }
 
 // ── Term: cvc5 → yaspar-ir ───────────────────────────────────
 
-impl<'tm, 'env, T> ConvertFromCvc5<Cvc5Env<'tm, 'env>> for [T]
+impl<'tm, Ctx, T> ConvertFromCvc5<Cvc5Env<'tm, Ctx>> for [T]
 where
-    T: ConvertFromCvc5<Cvc5Env<'tm, 'env>>,
+    T: ConvertFromCvc5<Cvc5Env<'tm, Ctx>>,
 {
     type Output = Vec<T::Output>;
 
-    fn conv_from_cvc5(&self, env: &mut Cvc5Env<'tm, 'env>) -> Res<Self::Output> {
+    fn conv_from_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Self::Output> {
         self.iter().map(|s| s.conv_from_cvc5(env)).collect()
     }
 }
 
-impl<'tm, 'env> ConvertFromCvc5<Cvc5Env<'tm, 'env>> for CTerm<'tm> {
+impl<'tm, Ctx> ConvertFromCvc5<Cvc5Env<'tm, Ctx>> for CTerm<'tm>
+where
+    Ctx: HasMutRef<Context>,
+{
     type Output = Term;
 
-    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, 'env>) -> Res<Term> {
+    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term> {
         // Reverse lookup: a plain CTerm corresponds to a `WithPattern` with empty
         // patterns (the quantifier case never reaches us as a standalone CTerm).
         let key = WithPattern::from(self.clone());
@@ -540,18 +554,17 @@ impl<'tm, 'env> ConvertFromCvc5<Cvc5Env<'tm, 'env>> for CTerm<'tm> {
     }
 }
 
-fn translate_term_from_cvc5<'tm, 'env>(
-    ct: &CTerm<'tm>,
-    fenv: &mut Cvc5Env<'tm, 'env>,
-) -> Res<Term> {
+fn translate_term_from_cvc5<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term>
+where
+    Ctx: HasMutRef<Context>,
+{
     let kind = ct.kind();
 
     // ── Constants ────────────────────────────────────────────
     if ct.is_boolean_value() {
-        let sort = Some(fenv.ctx.bool_sort());
-        return Ok(fenv
-            .ctx
-            .allocate_term(ATerm::Constant(Constant::Bool(ct.boolean_value()), sort)));
+        let mut rf = fenv.ctx.ref_mut();
+        let sort = Some(rf.bool_sort());
+        return Ok(rf.allocate_term(ATerm::Constant(Constant::Bool(ct.boolean_value()), sort)));
     }
     if ct.is_integer_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -561,46 +574,39 @@ fn translate_term_from_cvc5<'tm, 'env>(
             .map_err(|e| format!("Big integer parse error: {e}"))?;
         return Ok(fenv
             .ctx
+            .ref_mut()
             .allocate_term(ATerm::Constant(Constant::Numeral(n), Some(sort))));
     }
     if ct.is_real_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
         let s = ct.real_value();
-        let has_ints = fenv.ctx.get_theories().iter().any(|t| t.has_int());
+        let mut rf = fenv.ctx.ref_mut();
+        let has_ints = rf.get_theories().iter().any(|t| t.has_int());
         // cvc5 returns rationals as "num/den" or just "num"
         if let Some((num_s, den_s)) = s.split_once('/') {
             let (numer, denom) = if has_ints {
                 // In RealInts, numerals are Int; use Decimal constants for Real division
                 let n = Constant::Decimal(format!("{num_s}.0").parse().unwrap());
                 let d = Constant::Decimal(format!("{den_s}.0").parse().unwrap());
-                let numer = fenv
-                    .ctx
-                    .allocate_term(ATerm::Constant(n, Some(sort.clone())));
-                let denom = fenv
-                    .ctx
-                    .allocate_term(ATerm::Constant(d, Some(sort.clone())));
+                let numer = rf.allocate_term(ATerm::Constant(n, Some(sort.clone())));
+                let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
                 (numer, denom)
             } else {
                 let num: UBig = num_s.parse().map_err(|e| format!("{e}"))?;
                 let den: UBig = den_s.parse().map_err(|e| format!("{e}"))?;
-                let int = fenv.ctx.int_sort();
-                let numer = fenv
-                    .ctx
-                    .allocate_term(ATerm::Constant(Constant::Numeral(num), Some(int.clone())));
-                let denom = fenv
-                    .ctx
-                    .allocate_term(ATerm::Constant(Constant::Numeral(den), Some(int)));
+                let int = rf.int_sort();
+                let numer =
+                    rf.allocate_term(ATerm::Constant(Constant::Numeral(num), Some(int.clone())));
+                let denom = rf.allocate_term(ATerm::Constant(Constant::Numeral(den), Some(int)));
                 (numer, denom)
             };
-            let sym = fenv.ctx.allocate_symbol(RDIV);
+            let sym = rf.allocate_symbol(RDIV);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.app(qid, vec![numer, denom], Some(sort)));
+            return Ok(rf.app(qid, vec![numer, denom], Some(sort)));
         }
         // No division — parse as a single decimal
         let n: dashu::float::DBig = format!("{s}.0").parse().map_err(|e| format!("{e}"))?;
-        return Ok(fenv
-            .ctx
-            .allocate_term(ATerm::Constant(Constant::Decimal(n), Some(sort))));
+        return Ok(rf.allocate_term(ATerm::Constant(Constant::Decimal(n), Some(sort))));
     }
     if ct.is_string_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -610,10 +616,9 @@ fn translate_term_from_cvc5<'tm, 'env>(
             .map(|&c| char::from_u32(c).unwrap_or('\u{FFFD}'))
             .collect();
 
-        let str_val = fenv.ctx.allocate_str(&s);
-        return Ok(fenv
-            .ctx
-            .allocate_term(ATerm::Constant(Constant::String(str_val), Some(sort))));
+        let mut rf = fenv.ctx.ref_mut();
+        let str_val = rf.allocate_str(&s);
+        return Ok(rf.allocate_term(ATerm::Constant(Constant::String(str_val), Some(sort))));
     }
     if ct.is_bv_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -629,6 +634,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
 
         return Ok(fenv
             .ctx
+            .ref_mut()
             .allocate_term(ATerm::Constant(Constant::Binary(bytes, len), Some(sort))));
     }
 
@@ -636,23 +642,19 @@ fn translate_term_from_cvc5<'tm, 'env>(
     match kind {
         Kind::And => {
             let children = translate_children(ct, fenv)?;
-
-            return Ok(fenv.ctx.and(children));
+            return Ok(fenv.ctx.ref_mut().and(children));
         }
         Kind::Or => {
             let children = translate_children(ct, fenv)?;
-
-            return Ok(fenv.ctx.or(children));
+            return Ok(fenv.ctx.ref_mut().or(children));
         }
         Kind::Xor => {
             let children = translate_children(ct, fenv)?;
-
-            return Ok(fenv.ctx.xor(children));
+            return Ok(fenv.ctx.ref_mut().xor(children));
         }
         Kind::Not => {
             let child = ct.child(0).conv_from_cvc5(fenv)?;
-
-            return Ok(fenv.ctx.not(child));
+            return Ok(fenv.ctx.ref_mut().not(child));
         }
         Kind::Implies => {
             let n = ct.num_children();
@@ -662,32 +664,33 @@ fn translate_term_from_cvc5<'tm, 'env>(
             }
             let concl = ct.child(n - 1).conv_from_cvc5(fenv)?;
 
-            return Ok(fenv.ctx.implies(premises, concl));
+            return Ok(fenv.ctx.ref_mut().implies(premises, concl));
         }
         Kind::Equal => {
             let children = translate_children(ct, fenv)?;
+            let mut rf = fenv.ctx.ref_mut();
 
             if children.len() == 2 {
-                return Ok(fenv.ctx.eq(children[0].clone(), children[1].clone()));
+                return Ok(rf.eq(children[0].clone(), children[1].clone()));
             }
             // Chain: (= a b c) → (and (= a b) (= b c))
             let mut eqs = Vec::with_capacity(children.len() - 1);
             for i in 0..children.len() - 1 {
-                eqs.push(fenv.ctx.eq(children[i].clone(), children[i + 1].clone()));
+                eqs.push(rf.eq(children[i].clone(), children[i + 1].clone()));
             }
-            return Ok(fenv.ctx.and(eqs));
+            return Ok(rf.and(eqs));
         }
         Kind::Distinct => {
             let children = translate_children(ct, fenv)?;
 
-            return Ok(fenv.ctx.distinct(children));
+            return Ok(fenv.ctx.ref_mut().distinct(children));
         }
         Kind::Ite => {
             let b = ct.child(0).conv_from_cvc5(fenv)?;
             let t = ct.child(1).conv_from_cvc5(fenv)?;
             let e = ct.child(2).conv_from_cvc5(fenv)?;
 
-            return Ok(fenv.ctx.ite(b, t, e));
+            return Ok(fenv.ctx.ref_mut().ite(b, t, e));
         }
         // ── Quantifiers ─────────────────────────────────────────
         Kind::Forall | Kind::Exists => {
@@ -700,8 +703,9 @@ fn translate_term_from_cvc5<'tm, 'env>(
                 let name = v.symbol().to_string();
                 let vs = v.sort().conv_from_cvc5(fenv)?;
 
-                let id = fenv.ctx.new_local();
-                let sym = fenv.ctx.allocate_symbol(&name);
+                let mut rf = fenv.ctx.ref_mut();
+                let id = rf.new_local();
+                let sym = rf.allocate_symbol(&name);
                 fenv.locals_from.insert(cvc5_id, VarBinding(sym, id, vs));
                 scope_ids.push(cvc5_id);
             }
@@ -750,7 +754,7 @@ fn translate_term_from_cvc5<'tm, 'env>(
                             ))
                         })
                         .collect::<Res<Vec<_>>>()?;
-                    let annotated = fenv.ctx.annotated(body, attrs);
+                    let annotated = fenv.ctx.ref_mut().annotated(body, attrs);
                     // Mirror the forward-direction shape: `Annotated(body, [:pattern …])`
                     // maps to a `WithPattern` whose `term` is the body's CTerm and whose
                     // `patterns` carry the pattern triggers (later absorbed into
@@ -764,9 +768,9 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let body = result?;
 
             return if kind == Kind::Forall {
-                Ok(fenv.ctx.forall(bindings, body))
+                Ok(fenv.ctx.ref_mut().forall(bindings, body))
             } else {
-                Ok(fenv.ctx.exists(bindings, body))
+                Ok(fenv.ctx.ref_mut().exists(bindings, body))
             };
         }
         // ── Negation (unary minus) ──────────────────────────────
@@ -774,9 +778,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let child = ct.child(0).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(SUB);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(SUB);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.app(qid, vec![child], Some(sort)));
+            return Ok(rf.app(qid, vec![child], Some(sort)));
         }
 
         // ── Function application (UF, constructors, selectors, testers) ──
@@ -785,9 +790,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let name = ct.symbol().to_string();
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(&name);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.global(qid, Some(sort)));
+            return Ok(rf.global(qid, Some(sort)));
         }
         Kind::ApplyUf => {
             let head = ct.child(0);
@@ -798,9 +804,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
             }
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(&name);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.app(qid, args, Some(sort)));
+            return Ok(rf.app(qid, args, Some(sort)));
         }
         Kind::ApplyConstructor => {
             let head = ct.child(0);
@@ -831,13 +838,14 @@ fn translate_term_from_cvc5<'tm, 'env>(
                 // Nullary constructor → global
                 let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-                let sym = fenv.ctx.allocate_symbol(&name);
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(&name);
                 let qid = if ct.sort().is_dt() && ct.sort().datatype().is_parametric() {
                     QualifiedIdentifier::simple_sorted(sym, sort.clone())
                 } else {
                     QualifiedIdentifier::simple(sym)
                 };
-                return Ok(fenv.ctx.global(qid, Some(sort)));
+                return Ok(rf.global(qid, Some(sort)));
             }
             let mut args = Vec::with_capacity(n - 1);
             for i in 1..n {
@@ -845,9 +853,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
             }
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(&name);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.app(qid, args, Some(sort)));
+            return Ok(rf.app(qid, args, Some(sort)));
         }
         Kind::ApplySelector => {
             let head = ct.child(0);
@@ -859,9 +868,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let arg = ct.child(1).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(&name);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(&name);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.app(qid, vec![arg], Some(sort)));
+            return Ok(rf.app(qid, vec![arg], Some(sort)));
         }
         Kind::ApplyTester => {
             let head = ct.child(0);
@@ -875,21 +885,22 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let arg = ct.child(1).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let is_sym = fenv.ctx.allocate_symbol(IS);
-            let ctor_sym = fenv.ctx.allocate_symbol(ctor_name);
+            let mut rf = fenv.ctx.ref_mut();
+            let is_sym = rf.allocate_symbol(IS);
+            let ctor_sym = rf.allocate_symbol(ctor_name);
             let id = alg::Identifier {
                 symbol: is_sym,
                 indices: vec![Index::Symbol(ctor_sym)],
             };
             let qid = QualifiedIdentifier::from(id);
-            return Ok(fenv.ctx.app(qid, vec![arg], Some(sort)));
+            return Ok(rf.app(qid, vec![arg], Some(sort)));
         }
 
         // ── Variable (bound) ────────────────────────────────────
         Kind::Variable => {
             let cvc5_id = ct.id();
             if let Some(vb) = fenv.locals_from.get(&cvc5_id) {
-                return Ok(fenv.ctx.local(alg::Local {
+                return Ok(fenv.ctx.ref_mut().local(alg::Local {
                     id: vb.1,
                     symbol: vb.0.clone(),
                     sort: vb.2.clone(),
@@ -904,9 +915,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let ik = cvc5_kind_to_ident_kind(kind).unwrap();
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(ik.name());
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(ik.name());
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.global(qid, Some(sort)));
+            return Ok(rf.global(qid, Some(sort)));
         }
 
         // ── BitvectorToNat ──────────────────────────────────────
@@ -914,9 +926,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
             let child = ct.child(0).conv_from_cvc5(fenv)?;
             let sort = ct.sort().conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(BV2NAT);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(BV2NAT);
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.app(qid, vec![child], Some(sort)));
+            return Ok(rf.app(qid, vec![child], Some(sort)));
         }
 
         // ── Match expressions ───────────────────────────────────
@@ -930,25 +943,27 @@ fn translate_term_from_cvc5<'tm, 'env>(
                 arms.push(arm);
             }
 
-            return Ok(fenv.ctx.matching(scrutinee, arms));
+            return Ok(fenv.ctx.ref_mut().matching(scrutinee, arms));
         }
         // ── Const array ──────────────────────────────────────────
         Kind::ConstArray => {
             let value = ct.const_array_base().conv_from_cvc5(fenv)?;
             let arr_sort = ct.sort().conv_from_cvc5(fenv)?;
-            let sym = fenv.ctx.allocate_symbol(CONST);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(CONST);
             let qid = QualifiedIdentifier::simple_sorted(sym, arr_sort.clone());
-            return Ok(fenv.ctx.app(qid, vec![value], Some(arr_sort)));
+            return Ok(rf.app(qid, vec![value], Some(arr_sort)));
         }
 
         // ── Uninterpreted sort value (from models) ──────────────
         Kind::UninterpretedSortValue => {
             let name = ct.uninterpreted_sort_value();
             let sort = ct.sort().conv_from_cvc5(fenv)?;
-            fenv.uninterpreted_values.insert(name.clone());
-            let sym = fenv.ctx.allocate_symbol(&name);
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(&name);
+            fenv.uninterpreted_values.insert(sym.clone());
             let qid = QualifiedIdentifier::simple(sym);
-            return Ok(fenv.ctx.global(qid, Some(sort)));
+            return Ok(rf.global(qid, Some(sort)));
         }
 
         // ── Lambda ──────────────────────────────────────────────
@@ -986,9 +1001,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
         let sort = ct.sort().conv_from_cvc5(fenv)?;
 
         let name = ik.name();
-        let sym = fenv.ctx.allocate_symbol(name);
+        let mut rf = fenv.ctx.ref_mut();
+        let sym = rf.allocate_symbol(name);
         let qid = QualifiedIdentifier::simple(sym);
-        return Ok(fenv.ctx.app(qid, children, Some(sort)));
+        return Ok(rf.app(qid, children, Some(sort)));
     }
 
     // ── Indexed operators ───────────────────────────────────
@@ -1002,7 +1018,10 @@ fn translate_term_from_cvc5<'tm, 'env>(
     Err(format!("unsupported cvc5 term kind: {:?}", kind))
 }
 
-fn translate_children<'tm, 'env>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, 'env>) -> Res<Vec<Term>> {
+fn translate_children<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Vec<Term>>
+where
+    Ctx: HasMutRef<Context>,
+{
     let n = ct.num_children();
     let mut children = Vec::with_capacity(n);
     for i in 0..n {
@@ -1011,10 +1030,13 @@ fn translate_children<'tm, 'env>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, 'env>)
     Ok(children)
 }
 
-fn translate_match_case_from_cvc5<'tm, 'env>(
+fn translate_match_case_from_cvc5<'tm, Ctx>(
     case: &CTerm<'tm>,
-    fenv: &mut Cvc5Env<'tm, 'env>,
-) -> Res<alg::PatternArm<Str, Term>> {
+    fenv: &mut Cvc5Env<'tm, Ctx>,
+) -> Res<alg::PatternArm<Str, Term>>
+where
+    Ctx: HasMutRef<Context>,
+{
     let case_kind = case.kind();
     match case_kind {
         Kind::MatchCase => {
@@ -1048,7 +1070,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
             };
             let body = case.child(1).conv_from_cvc5(fenv)?;
 
-            let sym = fenv.ctx.allocate_symbol(&ctor_name);
+            let sym = fenv.ctx.ref_mut().allocate_symbol(&ctor_name);
             Ok(alg::PatternArm {
                 pattern: Pattern::Ctor(sym),
                 body,
@@ -1070,8 +1092,10 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
 
                 if v.has_symbol() {
                     let name = v.symbol().to_string();
-                    let id = fenv.ctx.new_local();
-                    let sym = fenv.ctx.allocate_symbol(&name);
+                    let mut rf = fenv.ctx.ref_mut();
+                    let id = rf.new_local();
+                    let sym = rf.allocate_symbol(&name);
+                    drop(rf);
                     let vb = VarBinding(sym.clone(), id, vs);
                     fenv.locals_from.insert(cvc5_id, vb);
                     fenv.push_scope_from(vec![cvc5_id]);
@@ -1111,8 +1135,9 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                     if arg.has_symbol() {
                         let name = arg.symbol().to_string();
                         let vs = arg.sort().conv_from_cvc5(fenv)?;
-                        let id = fenv.ctx.new_local();
-                        let sym = fenv.ctx.allocate_symbol(&name);
+                        let mut rf = fenv.ctx.ref_mut();
+                        let id = rf.new_local();
+                        let sym = rf.allocate_symbol(&name);
                         fenv.locals_from
                             .insert(cvc5_id, VarBinding(sym.clone(), id, vs));
                         arguments.push(Some((sym, id)));
@@ -1126,7 +1151,7 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
                 fenv.pop_scope_from();
                 let body = result?;
 
-                let ctor_sym = fenv.ctx.allocate_symbol(&ctor_name);
+                let ctor_sym = fenv.ctx.ref_mut().allocate_symbol(&ctor_name);
                 Ok(alg::PatternArm {
                     pattern: Pattern::Applied {
                         ctor: ctor_sym,
@@ -1140,11 +1165,14 @@ fn translate_match_case_from_cvc5<'tm, 'env>(
     }
 }
 
-fn translate_indexed_from_cvc5<'tm, 'env>(
+fn translate_indexed_from_cvc5<'tm, Ctx>(
     ct: &CTerm<'tm>,
     op: &cvc5::Op<'tm>,
-    fenv: &mut Cvc5Env<'tm, 'env>,
-) -> Res<Option<Term>> {
+    fenv: &mut Cvc5Env<'tm, Ctx>,
+) -> Res<Option<Term>>
+where
+    Ctx: HasMutRef<Context>,
+{
     let op_kind = op.kind();
     let children = translate_children(ct, fenv)?;
     let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -1176,13 +1204,14 @@ fn translate_indexed_from_cvc5<'tm, 'env>(
         _ => return Ok(None),
     };
 
-    let sym = fenv.ctx.allocate_symbol(name);
+    let mut rf = fenv.ctx.ref_mut();
+    let sym = rf.allocate_symbol(name);
     let id = alg::Identifier {
         symbol: sym,
         indices,
     };
     let qid = QualifiedIdentifier::from(id);
-    Ok(Some(fenv.ctx.app(qid, children, Some(sort))))
+    Ok(Some(rf.app(qid, children, Some(sort))))
 }
 
 /// Reverse mapping from cvc5 Kind to yaspar-ir IdentifierKind.
@@ -1380,10 +1409,10 @@ fn ident_kind_to_cvc5(k: &IdentifierKind) -> Option<Kind> {
 }
 
 // ── Term translation ─────────────────────────────────────────
-impl<'tm, 'env> ConvertToCvc5<Cvc5Env<'tm, 'env>> for Term {
+impl<'tm, Ctx> ConvertToCvc5<Cvc5Env<'tm, Ctx>> for Term {
     type Output = CTerm<'tm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, 'env>) -> Res<Self::Output> {
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Self::Output> {
         let mut wrapped = MemoizedRecursion(env);
         MemoizedScheme::term_recursion(&mut wrapped, self).map(|t| t.into())
     }
@@ -1393,7 +1422,7 @@ fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
     terms.into_iter().map(|t| t.into()).collect()
 }
 
-impl<'tm, 'env> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, 'env> {
+impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
     type Out = WithPattern<'tm>;
     type Attr = Vec<Vec<CTerm<'tm>>>;
     type Binding = (usize, WithPattern<'tm>);
@@ -1797,7 +1826,7 @@ impl<'tm, 'env> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, 'env> {
     }
 }
 
-impl<'tm, 'env> TypedTermRecursor for Cvc5Env<'tm, 'env> {}
+impl<'tm, Ctx> TypedTermRecursor for Cvc5Env<'tm, Ctx> {}
 
 impl<T, Env, E> ConvertToCvc5<Env> for [T]
 where
@@ -1829,7 +1858,7 @@ fn is_const(t: &CTerm) -> bool {
         && (0..t.num_children()).all(|i| is_const(&t.child(i))))
 }
 
-impl<'tm, 'env> Cvc5Env<'tm, 'env> {
+impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
     fn translate_constant(&self, c: &Constant, s: &Sort) -> Res<WithPattern<'tm>> {
         use alg::Constant::*;
         match c {
@@ -1877,7 +1906,7 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
     /// instantiated term if the datatype is parametric. Returns `None` when the sort
     /// is not in the sort table, the datatype is not parametric, or no constructor matches.
     fn resolve_parametric_ctor(&mut self, name: &str, sort: &Sort) -> Res<Option<CTerm<'tm>>> {
-        let sort_name = &sort.sort_name().to_string();
+        let sort_name = sort.sort_name();
         if let Some(base_sort) = self.sort.get(sort_name).cloned() {
             let dt = base_sort.datatype();
             if dt.is_parametric() {
@@ -1899,7 +1928,7 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
         sort: &Sort,
     ) -> Res<WithPattern<'tm>> {
         use alg::IdentifierKind::*;
-        let name = &qid.id_str().to_string();
+        let name = qid.id_str();
         match qid.get_kind() {
             Some(Char(hex, _)) => Ok(self
                 .tm
@@ -1923,7 +1952,7 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
                     .ok_or_else(|| format!("unknown global symbol: {name}"))?;
                 let is_ctor = t.sort().is_dt_constructor();
                 if is_ctor {
-                    if let Some(ct) = self.resolve_parametric_ctor(name, sort)? {
+                    if let Some(ct) = self.resolve_parametric_ctor(name.as_str(), sort)? {
                         Ok(self.tm.mk_term(Kind::ApplyConstructor, &[ct]).into())
                     } else {
                         Ok(self.tm.mk_term(Kind::ApplyConstructor, &[t]).into())
@@ -2026,11 +2055,11 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
         if let Some(ref ik) = kind {
             return self.translate_indexed_app(ik, cargs);
         }
-        let name = &id.symbol.to_string();
+        let name = &id.symbol;
         if let Some(f) = self.globals.get(name).cloned() {
             let fs = f.sort();
             if fs.is_dt_constructor() {
-                if let Some(ct) = self.resolve_parametric_ctor(name, rs)? {
+                if let Some(ct) = self.resolve_parametric_ctor(name.as_str(), rs)? {
                     Ok(self.mk_applied(Kind::ApplyConstructor, ct, cargs))
                 } else {
                     Ok(self.mk_applied(Kind::ApplyConstructor, f, cargs))
@@ -2093,10 +2122,13 @@ impl<'tm, 'env> Cvc5Env<'tm, 'env> {
 }
 
 // ── Command translation ──────────────────────────────────────
-impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, '_>> for Command {
+impl<'tm, Ctx> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, Ctx>> for Command
+where
+    Ctx: HasMutRef<Context>,
+{
     type Output = CommandResult<'tm>;
 
-    fn to_cvc5(&self, es: &mut Cvc5EnvSolver<'_, 'tm, '_>) -> Res<Self::Output> {
+    fn to_cvc5(&self, es: &mut Cvc5EnvSolver<'_, 'tm, Ctx>) -> Res<Self::Output> {
         use alg::Command as AC;
         let env = &mut *es.env;
         let solver = &mut *es.solver;
@@ -2124,19 +2156,19 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, '_>> for Command {
             AC::DeclareConst(name, sort) => {
                 let cs = sort.to_cvc5(env)?;
                 let ct = env.tm.mk_const(cs, name);
-                env.globals.insert(name.to_string(), ct);
+                env.globals.insert(name.clone(), ct);
                 Ok(CommandResult::None)
             }
             AC::DeclareFun(name, inp, out) => {
                 let co = out.to_cvc5(env)?;
                 if inp.is_empty() {
                     let ct = env.tm.mk_const(co, name);
-                    env.globals.insert(name.to_string(), ct);
+                    env.globals.insert(name.clone(), ct);
                 } else {
                     let ci = inp.to_cvc5(env)?;
                     let fs = env.tm.mk_fun_sort(&ci, co);
                     let ct = env.tm.mk_const(fs, name);
-                    env.globals.insert(name.to_string(), ct);
+                    env.globals.insert(name.clone(), ct);
                 }
                 Ok(CommandResult::None)
             }
@@ -2146,7 +2178,7 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, '_>> for Command {
                 } else {
                     env.tm.mk_uninterpreted_sort_constructor_sort(*arity, name)
                 };
-                env.sort.insert(name.to_string(), cs);
+                env.sort.insert(name.clone(), cs);
                 Ok(CommandResult::None)
             }
             AC::DefineSort(..) => {
@@ -2155,7 +2187,7 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, '_>> for Command {
             }
             AC::DefineConst(name, _sort, body) => {
                 let cbody = body.to_cvc5(env)?;
-                env.globals.insert(name.to_string(), cbody);
+                env.globals.insert(name.clone(), cbody);
                 Ok(CommandResult::None)
             }
             AC::DefineFun(fd) => es.translate_define_fun(fd, false),
@@ -2180,7 +2212,7 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, '_>> for Command {
                 }
                 let ct = cur.to_cvc5(env)?;
                 for name in names {
-                    env.globals.insert(name.to_string(), ct.clone());
+                    env.globals.insert(name.clone(), ct.clone());
                 }
                 solver.assert_formula(CTerm::clone(&ct));
                 Ok(CommandResult::None)
@@ -2263,7 +2295,10 @@ impl<'tm> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, '_>> for Command {
 }
 
 // ── Command helper methods ───────────────────────────────────
-impl<'tm> Cvc5EnvSolver<'_, 'tm, '_> {
+impl<'tm, Ctx> Cvc5EnvSolver<'_, 'tm, Ctx>
+where
+    Ctx: HasMutRef<Context>,
+{
     fn translate_define_fun(
         &mut self,
         fd: &alg::FunctionDef<Str, Sort, Term>,
@@ -2280,7 +2315,7 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm, '_> {
         } else {
             self.solver.define_fun(&fd.name, &vars, out, body, true)
         };
-        self.env.globals.insert(fd.name.to_string(), ct);
+        self.env.globals.insert(fd.name.clone(), ct);
         Ok(CommandResult::None)
     }
 
@@ -2305,7 +2340,7 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm, '_> {
                 env.tm.mk_fun_sort(&inp, out)
             };
             let ct = env.tm.mk_const(fs, &fd.name);
-            env.globals.insert(fd.name.to_string(), ct.clone());
+            env.globals.insert(fd.name.clone(), ct.clone());
             funs.push(ct);
         }
         // Second pass: translate bodies
@@ -2332,19 +2367,19 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm, '_> {
         for def in defs {
             let arity = def.dec.params.len();
             let us = env.tm.mk_unresolved_dt_sort(&def.name, arity);
-            env.dt_sorts.insert(def.name.to_string(), us);
+            env.dt_sorts.insert(def.name.clone(), us);
         }
         let result = Self::build_dt_decls(env, defs);
         env.dt_sorts.clear();
         let decls = result?;
         if decls.len() == 1 {
             let cs = env.tm.mk_dt_sort(&decls[0]);
-            env.sort.insert(defs[0].name.to_string(), cs.clone());
+            env.sort.insert(defs[0].name.clone(), cs.clone());
             Self::register_dt_functions(env, cs, &defs[0].dec);
         } else {
             let sorts = env.tm.mk_dt_sorts(&decls);
             for (def, cs) in defs.iter().zip(sorts) {
-                env.sort.insert(def.name.to_string(), cs.clone());
+                env.sort.insert(def.name.clone(), cs.clone());
                 Self::register_dt_functions(env, cs, &def.dec);
             }
         }
@@ -2352,7 +2387,7 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm, '_> {
     }
 
     fn build_dt_decls(
-        env: &mut Cvc5Env<'tm, '_>,
+        env: &mut Cvc5Env<'tm, Ctx>,
         defs: &[alg::DatatypeDef<Str, Sort>],
     ) -> Res<Vec<cvc5::DatatypeDecl<'tm>>> {
         let mut decls = Vec::with_capacity(defs.len());
@@ -2361,7 +2396,7 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm, '_> {
             let cvc5_params: Vec<CSort<'tm>> =
                 params.iter().map(|p| env.tm.mk_param_sort(p)).collect();
             for (p, cs) in params.iter().zip(&cvc5_params) {
-                env.dt_sorts.insert(p.to_string(), cs.clone());
+                env.dt_sorts.insert(p.clone(), cs.clone());
             }
             let mut dt_decl = if cvc5_params.is_empty() {
                 env.tm.mk_dt_decl(&def.name, false)
@@ -2378,23 +2413,25 @@ impl<'tm> Cvc5EnvSolver<'_, 'tm, '_> {
                 dt_decl.add_constructor(&ctor_decl);
             }
             for p in params {
-                env.dt_sorts.remove(p.as_str());
+                env.dt_sorts.remove(p);
             }
             decls.push(dt_decl);
         }
         Ok(decls)
     }
 
-    fn register_dt_functions(env: &mut Cvc5Env<'tm, '_>, sort: CSort<'tm>, dec: &DatatypeDec) {
+    fn register_dt_functions(env: &mut Cvc5Env<'tm, Ctx>, sort: CSort<'tm>, dec: &DatatypeDec) {
         let dt = sort.datatype();
+        let mut rf = env.ctx.ref_mut();
         for (i, ctor_dec) in dec.constructors.iter().enumerate() {
             let ctor = dt.constructor(i);
-            env.globals.insert(ctor_dec.ctor.to_string(), ctor.term());
+            env.globals.insert(ctor_dec.ctor.clone(), ctor.term());
             let tester = ctor.tester_term();
-            env.globals.insert(format!("is-{}", ctor.name()), tester);
+            let sym = rf.allocate_symbol(&format!("is-{}", ctor.name()));
+            env.globals.insert(sym, tester);
             for (j, sel_dec) in ctor_dec.args.iter().enumerate() {
                 let sel = ctor.selector(j);
-                env.globals.insert(sel_dec.0.to_string(), sel.term());
+                env.globals.insert(sel_dec.0.clone(), sel.term());
             }
         }
     }
