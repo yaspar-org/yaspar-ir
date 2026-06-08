@@ -18,10 +18,12 @@
 
 use crate::statics::*;
 use crate::traits::Contains;
+use dashu::base::Sign;
 use dashu::float::DBig;
 use dashu::integer::UBig;
 pub use kind::IdentifierKind;
 use num_order::NumHash;
+use num_traits::Signed;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
@@ -1061,11 +1063,17 @@ impl<Str: Display + StrQuote<String>> Display for Constant<Str> {
         match self {
             Constant::Numeral(n) => write!(f, "{}", n),
             Constant::Decimal(r) => {
-                if r.floor() == *r {
-                    // need to hard code .0 if r doesn't have a decimal
-                    write!(f, "{}.0", r)
+                let abs = r.abs();
+                let body = if r.floor() == *r {
+                    format!("{}.0", abs)
                 } else {
-                    write!(f, "{}", r)
+                    format!("{}", abs)
+                };
+
+                if r.sign() == Sign::Negative {
+                    write!(f, "(- {})", body)
+                } else {
+                    write!(f, "{}", body)
                 }
             }
             Constant::String(s) => write!(f, "{}", s.quote()),
