@@ -1388,7 +1388,13 @@ where
             Term::Constant(c, _) => c.fmt(f),
             Term::Global(id, _) => id.fmt(f),
             Term::Local(id) => write!(f, "{}", id.symbol.sym_quote()),
-            Term::App(id, args, _) => fmt_app(f, id, args),
+            Term::App(id, args, _) => {
+                if args.is_empty() {
+                    write!(f, "{}", id)
+                } else {
+                    fmt_app(f, id, args)
+                }
+            }
             Term::Let(vs, body) => fmt_binder(f, "let", vs, body),
             Term::Annotated(t, at) => {
                 write!(f, "(! {} ", t)?;
