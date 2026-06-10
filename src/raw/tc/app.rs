@@ -754,7 +754,7 @@ where
     let symbol = &f.0.symbol;
 
     // 1. Make sure that the application is not nullary
-    if args.len() == 0 {
+    if args.is_empty() {
         return Err(format!(
             "TC: Applications cannot be nullary; identifier {f}{id_meta} either is an identifier or should accept more arguments!"
         ));
