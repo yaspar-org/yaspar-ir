@@ -1,3 +1,5 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
 use yaspar_ir::ast::{CheckedApi, Context, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
 

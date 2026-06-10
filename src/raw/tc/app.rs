@@ -755,7 +755,9 @@ where
 
     // 1. Make sure that the application is not nullary
     if args.len() == 0 {
-        return Err(format!("TC: Applications cannot be nullary; identifier {f}{id_meta} either is an identifier or should accept more arguments!"))
+        return Err(format!(
+            "TC: Applications cannot be nullary; identifier {f}{id_meta} either is an identifier or should accept more arguments!"
+        ));
     }
     // 2. we fetch the list of signatures of f (a list because of overloading).
     let sigs = match env.frame.symbol_table.get(symbol) {
