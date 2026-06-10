@@ -1,8 +1,6 @@
 use yaspar_ir::ast::{CheckedApi, Context, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
 
-/// Regression test: when a nullary constructor is applied via `typed_simp_app`,
-/// Display must emit just the symbol name, not `(Name )` with a trailing space.
 #[test]
 fn nullary_constructor_app_no_trailing_space() {
     let mut ctx = Context::new();
