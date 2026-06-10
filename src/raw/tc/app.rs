@@ -753,7 +753,11 @@ where
 {
     let symbol = &f.0.symbol;
 
-    // 1. we fetch the list of signatures of f (a list because of overloading).
+    // 1. Make sure that the application is not nullary
+    if args.len() == 0 {
+        return Err(format!("TC: Applications cannot be nullary, use a Global instead"))
+    }
+    // 2. we fetch the list of signatures of f (a list because of overloading).
     let sigs = match env.frame.symbol_table.get(symbol) {
         None => super::identifier_not_found(symbol, id_meta),
         Some(sigs) => Ok(sigs),
@@ -761,7 +765,7 @@ where
 
     let print_struct = alg::AppFmt::new(&f, &args);
 
-    // 2. we check each signature using this closure.
+    // 3. we check each signature using this closure.
     if sigs.len() == 1 {
         type_check_with_func_sig(
             &print_struct,
@@ -773,7 +777,7 @@ where
             app_meta,
         )
     } else {
-        // 3. if the function is overloaded, we try all signatures.
+        // 4. if the function is overloaded, we try all signatures.
         let mut tc_res = Err(format!(
             "TC: overloaded function {f}{id_meta} does not have a case to match its list of arguments! '{print_struct}'",
         ));
