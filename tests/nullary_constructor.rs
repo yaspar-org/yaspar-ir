@@ -4,7 +4,7 @@ use yaspar_ir::ast::{CheckedApi, Context, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
 
 #[test]
-fn nullary_constructor_app_no_trailing_space() {
+fn nullary_constructor() {
     let mut ctx = Context::new();
     ctx.ensure_logic();
 
