@@ -5,7 +5,7 @@
 
 use cvc5::{Kind, Solver, TermManager};
 use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
-use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
+use yaspar_ir::cvc5::{CTerm, ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 use yaspar_ir::untyped::UntypedAst;
 
 /// Helper: parse + type-check a script, then translate all commands to cvc5.
@@ -2206,4 +2206,470 @@ fn from_cvc5_match_parametric_bool_instantiation() {
          (declare-const l (List Bool))",
         "(match l ((nil false) ((cons h t) h)))",
     );
+}
+
+// ── Backward translation built directly from cvc5 APIs ───────
+//
+// These tests construct cvc5 terms using only cvc5's own builders
+// (no yaspar-ir parsing or term construction), then back-translate via
+// `conv_from_cvc5` and compare the resulting yaspar-ir term's
+// SMT-LIB-formatted `to_string()` against an expected literal.
+
+/// Build a cvc5 environment, run a closure that constructs a CTerm using cvc5
+/// APIs only, and assert that the back-translated yaspar-ir term's string
+/// representation matches `expected`.
+fn assert_back_eq<F>(expected: &str, build: F)
+where
+    F: for<'tm> FnOnce(&'tm TermManager) -> CTerm<'tm>,
+{
+    let tm = TermManager::new();
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let cterm = build(&tm);
+    let back = cterm.conv_from_cvc5(&mut env).unwrap();
+    assert_eq!(back.to_string(), expected);
+}
+
+#[test]
+fn back_from_cvc5_api_bool_true() {
+    assert_back_eq("true", |tm| tm.mk_true());
+}
+
+#[test]
+fn back_from_cvc5_api_bool_false() {
+    assert_back_eq("false", |tm| tm.mk_false());
+}
+
+#[test]
+fn back_from_cvc5_api_integer_literal() {
+    assert_back_eq("42", |tm| tm.mk_integer(42));
+}
+
+#[test]
+fn back_from_cvc5_api_const_int() {
+    assert_back_eq("x", |tm| tm.mk_const(tm.integer_sort(), "x"));
+}
+
+#[test]
+fn back_from_cvc5_api_add() {
+    assert_back_eq("(+ x 1)", |tm| {
+        let x = tm.mk_const(tm.integer_sort(), "x");
+        let one = tm.mk_integer(1);
+        tm.mk_term(Kind::Add, &[x, one])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_sub() {
+    assert_back_eq("(- x y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Sub, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_mul() {
+    assert_back_eq("(* x y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Mult, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_neg() {
+    assert_back_eq("(- x)", |tm| {
+        let x = tm.mk_const(tm.integer_sort(), "x");
+        tm.mk_term(Kind::Neg, &[x])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_lt() {
+    assert_back_eq("(< x y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Lt, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_le() {
+    assert_back_eq("(<= x y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Leq, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_gt() {
+    assert_back_eq("(> x y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Gt, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_ge() {
+    assert_back_eq("(>= x y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Geq, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_and() {
+    assert_back_eq("(and a b)", |tm| {
+        let bool_sort = tm.boolean_sort();
+        let a = tm.mk_const(bool_sort.clone(), "a");
+        let b = tm.mk_const(bool_sort, "b");
+        tm.mk_term(Kind::And, &[a, b])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_or() {
+    assert_back_eq("(or a b)", |tm| {
+        let bool_sort = tm.boolean_sort();
+        let a = tm.mk_const(bool_sort.clone(), "a");
+        let b = tm.mk_const(bool_sort, "b");
+        tm.mk_term(Kind::Or, &[a, b])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_not() {
+    assert_back_eq("(not a)", |tm| {
+        let a = tm.mk_const(tm.boolean_sort(), "a");
+        tm.mk_term(Kind::Not, &[a])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_xor() {
+    assert_back_eq("(xor a b)", |tm| {
+        let bool_sort = tm.boolean_sort();
+        let a = tm.mk_const(bool_sort.clone(), "a");
+        let b = tm.mk_const(bool_sort, "b");
+        tm.mk_term(Kind::Xor, &[a, b])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_implies() {
+    assert_back_eq("(=> a b)", |tm| {
+        let bool_sort = tm.boolean_sort();
+        let a = tm.mk_const(bool_sort.clone(), "a");
+        let b = tm.mk_const(bool_sort, "b");
+        tm.mk_term(Kind::Implies, &[a, b])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_eq() {
+    assert_back_eq("(= x y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Equal, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_eq_chain_three() {
+    // n-ary cvc5 equality back-translates to a conjunction of pairwise equalities
+    assert_back_eq("(and (= x y) (= y z))", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int.clone(), "y");
+        let z = tm.mk_const(int, "z");
+        tm.mk_term(Kind::Equal, &[x, y, z])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_distinct() {
+    assert_back_eq("(distinct x y z)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int.clone(), "y");
+        let z = tm.mk_const(int, "z");
+        tm.mk_term(Kind::Distinct, &[x, y, z])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_ite() {
+    assert_back_eq("(ite a x y)", |tm| {
+        let int = tm.integer_sort();
+        let a = tm.mk_const(tm.boolean_sort(), "a");
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::Ite, &[a, x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_uf_application() {
+    assert_back_eq("(f x y)", |tm| {
+        let int = tm.integer_sort();
+        let fun_sort = tm.mk_fun_sort(&[int.clone(), int.clone()], int.clone());
+        let f = tm.mk_const(fun_sort, "f");
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        tm.mk_term(Kind::ApplyUf, &[f, x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_select_store() {
+    assert_back_eq("(select (store a i v) i)", |tm| {
+        let int = tm.integer_sort();
+        let arr = tm.mk_array_sort(int.clone(), int.clone());
+        let a = tm.mk_const(arr, "a");
+        let i = tm.mk_const(int.clone(), "i");
+        let v = tm.mk_const(int, "v");
+        let store = tm.mk_term(Kind::Store, &[a, i.clone(), v]);
+        tm.mk_term(Kind::Select, &[store, i])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_bv_add() {
+    assert_back_eq("(bvadd x y)", |tm| {
+        let bv8 = tm.mk_bv_sort(8);
+        let x = tm.mk_const(bv8.clone(), "x");
+        let y = tm.mk_const(bv8, "y");
+        tm.mk_term(Kind::BitvectorAdd, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_bv_not() {
+    assert_back_eq("(bvnot x)", |tm| {
+        let x = tm.mk_const(tm.mk_bv_sort(8), "x");
+        tm.mk_term(Kind::BitvectorNot, &[x])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_bv_concat() {
+    assert_back_eq("(concat x y)", |tm| {
+        let bv4 = tm.mk_bv_sort(4);
+        let x = tm.mk_const(bv4.clone(), "x");
+        let y = tm.mk_const(bv4, "y");
+        tm.mk_term(Kind::BitvectorConcat, &[x, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_bv_extract() {
+    assert_back_eq("((_ extract 3 0) x)", |tm| {
+        let x = tm.mk_const(tm.mk_bv_sort(8), "x");
+        let op = tm.mk_op(Kind::BitvectorExtract, &[3, 0]);
+        tm.mk_term_from_op(op, &[x])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_bv_zero_extend() {
+    assert_back_eq("((_ zero_extend 8) x)", |tm| {
+        let x = tm.mk_const(tm.mk_bv_sort(8), "x");
+        let op = tm.mk_op(Kind::BitvectorZeroExtend, &[8]);
+        tm.mk_term_from_op(op, &[x])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_bv_repeat() {
+    assert_back_eq("((_ repeat 2) x)", |tm| {
+        let x = tm.mk_const(tm.mk_bv_sort(4), "x");
+        let op = tm.mk_op(Kind::BitvectorRepeat, &[2]);
+        tm.mk_term_from_op(op, &[x])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_bv_rotate_left() {
+    assert_back_eq("((_ rotate_left 3) x)", |tm| {
+        let x = tm.mk_const(tm.mk_bv_sort(8), "x");
+        let op = tm.mk_op(Kind::BitvectorRotateLeft, &[3]);
+        tm.mk_term_from_op(op, &[x])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_string_concat() {
+    assert_back_eq("(str.++ s1 s2)", |tm| {
+        let str_sort = tm.string_sort();
+        let s1 = tm.mk_const(str_sort.clone(), "s1");
+        let s2 = tm.mk_const(str_sort, "s2");
+        tm.mk_term(Kind::StringConcat, &[s1, s2])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_string_len() {
+    assert_back_eq("(str.len s)", |tm| {
+        let s = tm.mk_const(tm.string_sort(), "s");
+        tm.mk_term(Kind::StringLength, &[s])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_re_none() {
+    assert_back_eq("re.none", |tm| tm.mk_regexp_none());
+}
+
+#[test]
+fn back_from_cvc5_api_re_all() {
+    assert_back_eq("re.all", |tm| tm.mk_regexp_all());
+}
+
+#[test]
+fn back_from_cvc5_api_re_allchar() {
+    assert_back_eq("re.allchar", |tm| tm.mk_regexp_allchar());
+}
+
+#[test]
+fn back_from_cvc5_api_forall() {
+    assert_back_eq("(forall ((x Int)) (> x 0))", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_var(int, "x");
+        let zero = tm.mk_integer(0);
+        let body = tm.mk_term(Kind::Gt, &[x.clone(), zero]);
+        let bound = tm.mk_term(Kind::VariableList, std::slice::from_ref(&x));
+        tm.mk_term(Kind::Forall, &[bound, body])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_exists() {
+    assert_back_eq("(exists ((x Int)) (= x 0))", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_var(int, "x");
+        let zero = tm.mk_integer(0);
+        let body = tm.mk_term(Kind::Equal, &[x.clone(), zero]);
+        let bound = tm.mk_term(Kind::VariableList, std::slice::from_ref(&x));
+        tm.mk_term(Kind::Exists, &[bound, body])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_nested_arithmetic() {
+    assert_back_eq("(+ (* x 2) y)", |tm| {
+        let int = tm.integer_sort();
+        let x = tm.mk_const(int.clone(), "x");
+        let y = tm.mk_const(int, "y");
+        let two = tm.mk_integer(2);
+        let mul = tm.mk_term(Kind::Mult, &[x, two]);
+        tm.mk_term(Kind::Add, &[mul, y])
+    });
+}
+
+#[test]
+fn back_from_cvc5_api_datatype_nullary_constructor() {
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    solver.set_logic("ALL");
+    let red = tm.mk_dt_cons_decl("Red");
+    let green = tm.mk_dt_cons_decl("Green");
+    let blue = tm.mk_dt_cons_decl("Blue");
+    let color_sort = solver.declare_dt("Color", &[red, green, blue]);
+    let dt = color_sort.datatype();
+    let ctor = dt.constructor(0).term();
+    let red_term = tm.mk_term(Kind::ApplyConstructor, &[ctor]);
+
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let back = red_term.conv_from_cvc5(&mut env).unwrap();
+    assert_eq!(back.to_string(), "Red");
+}
+
+#[test]
+fn back_from_cvc5_api_datatype_applied_constructor() {
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    solver.set_logic("ALL");
+    let int = tm.integer_sort();
+    let mut mkpair = tm.mk_dt_cons_decl("mkpair");
+    mkpair.add_selector("fst", int.clone());
+    mkpair.add_selector("snd", int.clone());
+    let pair_sort = solver.declare_dt("Pair", &[mkpair]);
+    let dt = pair_sort.datatype();
+    let ctor = dt.constructor(0).term();
+    let one = tm.mk_integer(1);
+    let two = tm.mk_integer(2);
+    let pair = tm.mk_term(Kind::ApplyConstructor, &[ctor, one, two]);
+
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let back = pair.conv_from_cvc5(&mut env).unwrap();
+    assert_eq!(back.to_string(), "(mkpair 1 2)");
+}
+
+#[test]
+fn back_from_cvc5_api_datatype_selector() {
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    solver.set_logic("ALL");
+    let int = tm.integer_sort();
+    let mut mkpair = tm.mk_dt_cons_decl("mkpair");
+    mkpair.add_selector("fst", int.clone());
+    mkpair.add_selector("snd", int.clone());
+    let pair_sort = solver.declare_dt("Pair", &[mkpair]);
+    let dt = pair_sort.datatype();
+    let sel = dt.constructor(0).selector(0).term();
+    let p = tm.mk_const(pair_sort, "p");
+    let fst_p = tm.mk_term(Kind::ApplySelector, &[sel, p]);
+
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let back = fst_p.conv_from_cvc5(&mut env).unwrap();
+    assert_eq!(back.to_string(), "(fst p)");
+}
+
+#[test]
+fn back_from_cvc5_api_datatype_tester() {
+    let tm = TermManager::new();
+    let mut solver = Solver::new(&tm);
+    solver.set_logic("ALL");
+    let red = tm.mk_dt_cons_decl("Red");
+    let green = tm.mk_dt_cons_decl("Green");
+    let blue = tm.mk_dt_cons_decl("Blue");
+    let color_sort = solver.declare_dt("Color", &[red, green, blue]);
+    let dt = color_sort.datatype();
+    let tester = dt.constructor(0).tester_term();
+    let c = tm.mk_const(color_sort, "c");
+    let is_red = tm.mk_term(Kind::ApplyTester, &[tester, c]);
+
+    let mut ctx = Context::new();
+    ctx.ensure_logic();
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let back = is_red.conv_from_cvc5(&mut env).unwrap();
+    assert_eq!(back.to_string(), "((_ is Red) c)");
+}
+
+#[test]
+fn back_from_cvc5_api_const_array() {
+    assert_back_eq("((as const (Array Int Int)) 0)", |tm| {
+        let int = tm.integer_sort();
+        let arr = tm.mk_array_sort(int.clone(), int);
+        let zero = tm.mk_integer(0);
+        tm.mk_const_array(arr, zero)
+    });
 }
