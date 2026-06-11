@@ -474,6 +474,11 @@ fn translate_sort_inner<'tm, Ctx>(sort: &Sort, env: &mut Cvc5Env<'tm, Ctx>) -> R
         let ce = elem.to_cvc5(env)?;
         return Ok(env.tm.mk_array_sort(ci, ce));
     }
+    #[cfg(feature = "finite-set")]
+    if let Some(elem) = sort.is_fset() {
+        let ce = elem.to_cvc5(env)?;
+        return Ok(env.tm.mk_set_sort(ce));
+    }
 
     Err(format!("unsupported sort: {sort}"))
 }
@@ -522,6 +527,11 @@ where
         let idx = cs.array_index_sort().conv_from_cvc5(fenv)?;
         let elem = cs.array_element_sort().conv_from_cvc5(fenv)?;
         return Ok(fenv.ctx.ref_mut().array_sort(idx, elem));
+    }
+    #[cfg(feature = "finite-set")]
+    if cs.is_set() {
+        let elem = cs.set_element_sort().conv_from_cvc5(fenv)?;
+        return Ok(fenv.ctx.ref_mut().fset_sort(elem));
     }
     // Instantiated parametric datatype (e.g. (List Int))
     if cs.is_dt() && cs.is_instantiated() {
@@ -1011,6 +1021,23 @@ where
         Kind::ConstSequence => return Err("sequence operations are not supported!".into()),
 
         // ── Sets ────────────────────────────────────────────────
+        // Nullary set constants need the result sort to emit `(as set.empty …)`
+        // / `(as set.universe …)`; the n-ary connectives flow through the
+        // generic `cvc5_kind_to_ident_kind` path below.
+        #[cfg(feature = "finite-set")]
+        Kind::SetEmpty | Kind::SetUniverse => {
+            let name = if kind == Kind::SetEmpty {
+                SET_EMPTY
+            } else {
+                SET_UNIVERSE
+            };
+            let sort = ct.sort().conv_from_cvc5(fenv)?;
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(name);
+            let qid = QualifiedIdentifier::simple_sorted(sym, sort.clone());
+            return Ok(rf.global(qid, Some(sort)));
+        }
+        #[cfg(not(feature = "finite-set"))]
         Kind::SetEmpty
         | Kind::SetUniverse
         | Kind::SetSingleton
@@ -1020,9 +1047,11 @@ where
         | Kind::SetMember
         | Kind::SetSubset
         | Kind::SetComplement
-        | Kind::SetInsert
         | Kind::SetCard => {
             return Err("set operations are not supported!".into());
+        }
+        Kind::SetInsert => {
+            return Err("the set.insert operation is not supported!".into());
         }
 
         // ── Floating point ──────────────────────────────────────
@@ -1344,6 +1373,22 @@ fn cvc5_kind_to_ident_kind(kind: Kind) -> Option<IdentifierKind> {
         Kind::BitvectorUsubo => BvUsubo,
         Kind::BitvectorSsubo => BvSsubo,
         Kind::BitvectorSdivo => BvSdivo,
+        #[cfg(feature = "finite-set")]
+        Kind::SetUnion => SetUnion,
+        #[cfg(feature = "finite-set")]
+        Kind::SetInter => SetInter,
+        #[cfg(feature = "finite-set")]
+        Kind::SetMinus => SetMinus,
+        #[cfg(feature = "finite-set")]
+        Kind::SetMember => SetMember,
+        #[cfg(feature = "finite-set")]
+        Kind::SetSubset => SetSubset,
+        #[cfg(feature = "finite-set")]
+        Kind::SetSingleton => SetSingleton,
+        #[cfg(feature = "finite-set")]
+        Kind::SetCard => SetCard,
+        #[cfg(feature = "finite-set")]
+        Kind::SetComplement => SetComplement,
         _ => return None,
     })
 }
@@ -1442,6 +1487,22 @@ fn ident_kind_to_cvc5(k: &IdentifierKind) -> Option<Kind> {
         BvUsubo => Kind::BitvectorUsubo,
         BvSsubo => Kind::BitvectorSsubo,
         BvSdivo => Kind::BitvectorSdivo,
+        #[cfg(feature = "finite-set")]
+        SetUnion => Kind::SetUnion,
+        #[cfg(feature = "finite-set")]
+        SetInter => Kind::SetInter,
+        #[cfg(feature = "finite-set")]
+        SetMinus => Kind::SetMinus,
+        #[cfg(feature = "finite-set")]
+        SetMember => Kind::SetMember,
+        #[cfg(feature = "finite-set")]
+        SetSubset => Kind::SetSubset,
+        #[cfg(feature = "finite-set")]
+        SetSingleton => Kind::SetSingleton,
+        #[cfg(feature = "finite-set")]
+        SetCard => Kind::SetCard,
+        #[cfg(feature = "finite-set")]
+        SetComplement => Kind::SetComplement,
         _ => return None,
     })
 }
@@ -1977,6 +2038,19 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
                     false,
                 )
                 .into()),
+            // Sort-ascribed nullary set constants: (as set.empty (Set X)) and
+            // (as set.universe (Set X)) need the instantiated set sort to build
+            // the corresponding cvc5 constants.
+            #[cfg(feature = "finite-set")]
+            Some(SetEmpty) => {
+                let cs = sort.to_cvc5(self)?;
+                Ok(self.tm.mk_empty_set(cs).into())
+            }
+            #[cfg(feature = "finite-set")]
+            Some(SetUniverse) => {
+                let cs = sort.to_cvc5(self)?;
+                Ok(self.tm.mk_universe_set(cs).into())
+            }
             Some(ref ik) if let Some(k) = ident_kind_to_cvc5(ik) => {
                 Ok(self.tm.mk_term(k, &[]).into())
             }

@@ -250,6 +250,26 @@ where
                 BV_SLE => Some(IdentifierKind::BvSle),
                 BV_SGT => Some(IdentifierKind::BvSgt),
                 BV_SGE => Some(IdentifierKind::BvSge),
+                #[cfg(feature = "finite-set")]
+                SET_UNION => Some(IdentifierKind::SetUnion),
+                #[cfg(feature = "finite-set")]
+                SET_INTER => Some(IdentifierKind::SetInter),
+                #[cfg(feature = "finite-set")]
+                SET_MINUS => Some(IdentifierKind::SetMinus),
+                #[cfg(feature = "finite-set")]
+                SET_MEMBER => Some(IdentifierKind::SetMember),
+                #[cfg(feature = "finite-set")]
+                SET_SUBSET => Some(IdentifierKind::SetSubset),
+                #[cfg(feature = "finite-set")]
+                SET_SINGLETON => Some(IdentifierKind::SetSingleton),
+                #[cfg(feature = "finite-set")]
+                SET_CARD => Some(IdentifierKind::SetCard),
+                #[cfg(feature = "finite-set")]
+                SET_COMPLEMENT => Some(IdentifierKind::SetComplement),
+                #[cfg(feature = "finite-set")]
+                SET_EMPTY => Some(IdentifierKind::SetEmpty),
+                #[cfg(feature = "finite-set")]
+                SET_UNIVERSE => Some(IdentifierKind::SetUniverse),
                 _ => None,
             },
             [Index::Hexadecimal(bytes, l)] => match self.symbol.inner().as_str() {
