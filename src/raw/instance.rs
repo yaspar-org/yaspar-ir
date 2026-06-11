@@ -74,8 +74,6 @@ pub enum Theory {
     RealInts,
     Strings,
     ArrayEx,
-    /// Floating point support is only partial
-    FloatingPoints,
     Bitvectors,
     Datatypes,
     #[cfg(feature = "finite-set")]
@@ -97,7 +95,6 @@ impl Display for Theory {
             Theory::RealInts => "reals and ints".fmt(f),
             Theory::Strings => "strings".fmt(f),
             Theory::ArrayEx => "arrays".fmt(f),
-            Theory::FloatingPoints => "floating points".fmt(f),
             Theory::Bitvectors => "bit vectors".fmt(f),
             Theory::Datatypes => "datatypes".fmt(f),
             #[cfg(feature = "finite-set")]

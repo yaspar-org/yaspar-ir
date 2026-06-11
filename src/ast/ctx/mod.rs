@@ -120,7 +120,6 @@ lazy_static! {
                     Theory::RealInts,
                     Theory::Strings,
                     Theory::ArrayEx,
-                    Theory::FloatingPoints,
                     Theory::Bitvectors,
                     Theory::Datatypes,
                     #[cfg(feature = "finite-set")]
