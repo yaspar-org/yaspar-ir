@@ -113,6 +113,23 @@ lazy_static! {
             ("QF_AX", HashSet::from([Theory::ArrayEx])),
             ("UFLRA", HashSet::from([Theory::Quantifiers, Theory::Reals])),
             ("UFNIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
+            ("UFLIA", HashSet::from([Theory::Quantifiers, Theory::Ints])),
+            (
+                "UFDTLIA",
+                HashSet::from([Theory::Quantifiers, Theory::Ints, Theory::Datatypes])
+            ),
+            (
+                "UFDTNIA",
+                HashSet::from([Theory::Quantifiers, Theory::Ints, Theory::Datatypes])
+            ),
+            (
+                "UFBVDTLIA",
+                HashSet::from([Theory::Quantifiers, Theory::Ints, Theory::Bitvectors, Theory::Datatypes])
+            ),
+            (
+                "UFBVDTNIA",
+                HashSet::from([Theory::Quantifiers, Theory::Ints, Theory::Bitvectors, Theory::Datatypes])
+            ),
             (
                 "ALL",
                 HashSet::from([
@@ -120,7 +137,6 @@ lazy_static! {
                     Theory::RealInts,
                     Theory::Strings,
                     Theory::ArrayEx,
-                    Theory::FloatingPoints,
                     Theory::Bitvectors,
                     Theory::Datatypes,
                     #[cfg(feature = "finite-set")]
