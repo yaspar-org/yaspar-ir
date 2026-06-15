@@ -138,25 +138,26 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
                 // we know from parsing that ts is non-empty.
                 let bs = env.arena.bool_sort();
                 let s = ts[0].get_sort(env.arena);
-                // 1. we check if ts are booleans
-                if bs != s {
-                    // 2. if not, then this term is considered atomic.
-                    if polarity {
-                        self.clone()
-                    } else {
-                        env.arena.not(self.clone())
+                match ts.len() {
+                    1 => env.arena.get_true().nnf_impl(env, polarity), // a single term is always distinct
+                    2 => {
+                        // If there are two terms, then they must be unequal
+                        let eq = env.arena.eq(ts[0].clone(), ts[1].clone());
+                        let eqf = env.arena.not(eq);
+                        eqf.nnf_impl(env, polarity)
                     }
-                } else {
-                    // otherwise, we translate it into a boolean formula
-                    match ts.len() {
-                        1 => ts[0].nnf_impl(env, polarity), // if there is only one term, there is not need for comparison
-                        2 => {
-                            // if there are two terms, then these two must be unequal.
-                            let eq = env.arena.eq(ts[0].clone(), ts[1].clone());
-                            let eqf = env.arena.not(eq);
-                            eqf.nnf_impl(env, polarity)
+                    _ => {
+                        // If the terms are booleans, then more than two terms cannot be distinct
+                        if bs == s {
+                            env.arena.get_false().nnf_impl(env, polarity)
+                        } else {
+                            // Otherwise, we treat the whole Distinct term as atomic
+                            if polarity {
+                                self.clone()
+                            } else {
+                                env.arena.not(self.clone())
+                            }
                         }
-                        _ => env.arena.get_false().nnf_impl(env, polarity), // more than two distinct booleans are not possible.
                     }
                 }
             }

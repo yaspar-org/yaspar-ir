@@ -142,6 +142,28 @@ pub enum IdentifierKind<Str> {
 
     // datatypes
     Is(Str),
+
+    // Finite sets
+    #[cfg(feature = "finite-set")]
+    SetUnion,
+    #[cfg(feature = "finite-set")]
+    SetInter,
+    #[cfg(feature = "finite-set")]
+    SetMinus,
+    #[cfg(feature = "finite-set")]
+    SetMember,
+    #[cfg(feature = "finite-set")]
+    SetSubset,
+    #[cfg(feature = "finite-set")]
+    SetSingleton,
+    #[cfg(feature = "finite-set")]
+    SetCard,
+    #[cfg(feature = "finite-set")]
+    SetComplement,
+    #[cfg(feature = "finite-set")]
+    SetEmpty,
+    #[cfg(feature = "finite-set")]
+    SetUniverse,
 }
 
 impl<Str> IdentifierKind<Str> {
@@ -259,6 +281,26 @@ impl<Str> IdentifierKind<Str> {
             IdentifierKind::BvSgt => BV_SGT,
             IdentifierKind::BvSge => BV_SGE,
             IdentifierKind::Is(_) => IS,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetUnion => SET_UNION,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetInter => SET_INTER,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetMinus => SET_MINUS,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetMember => SET_MEMBER,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetSubset => SET_SUBSET,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetSingleton => SET_SINGLETON,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetCard => SET_CARD,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetComplement => SET_COMPLEMENT,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetEmpty => SET_EMPTY,
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetUniverse => SET_UNIVERSE,
         }
     }
 
@@ -366,6 +408,19 @@ impl<Str> IdentifierKind<Str> {
             | IdentifierKind::BvSle
             | IdentifierKind::BvSgt
             | IdentifierKind::BvSge => {
+                vec![]
+            }
+            #[cfg(feature = "finite-set")]
+            IdentifierKind::SetUnion
+            | IdentifierKind::SetInter
+            | IdentifierKind::SetMinus
+            | IdentifierKind::SetMember
+            | IdentifierKind::SetSubset
+            | IdentifierKind::SetSingleton
+            | IdentifierKind::SetCard
+            | IdentifierKind::SetComplement
+            | IdentifierKind::SetEmpty
+            | IdentifierKind::SetUniverse => {
                 vec![]
             }
             IdentifierKind::RePower(n)

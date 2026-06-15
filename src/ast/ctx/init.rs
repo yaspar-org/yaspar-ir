@@ -4,7 +4,7 @@
 //! This module is responsible for initializing the [Context] with theories. Modify this module
 //! for other extensions.
 
-use crate::allocator::{ObjectAllocatorExt, SortAllocator, StrAllocator};
+use crate::allocator::{ObjectAllocatorExt, StrAllocator};
 use crate::ast::FunctionMeta;
 use crate::ast::alg::BvLenExpr;
 #[cfg(feature = "cnf")]
@@ -382,50 +382,6 @@ impl Context {
         self.frame.symbol_table.extend(default_symbol_table);
     }
 
-    fn extend_theory_floating_points(&mut self) {
-        // todo: the floating point theory is incomplete
-
-        let rm = self.allocate_symbol("RoundingMode");
-        let float16 = self.allocate_symbol("Float16");
-        let float32 = self.allocate_symbol("Float32");
-        let float64 = self.allocate_symbol("Float64");
-        let float128 = self.allocate_symbol("Float128");
-        self.frame.sorts.insert(rm.clone(), SortDef::Opaque(0));
-        self.frame.sorts.insert(float16.clone(), SortDef::Opaque(0));
-        self.frame.sorts.insert(float32.clone(), SortDef::Opaque(0));
-        self.frame.sorts.insert(float64.clone(), SortDef::Opaque(0));
-        self.frame
-            .sorts
-            .insert(float128.clone(), SortDef::Opaque(0));
-
-        let rm = self.sort0(rm);
-        let rm = Sig::sort(rm);
-        let rnte = self.allocate_symbol("roundNearestTiesToEven");
-        let rnta = self.allocate_symbol("roundNearestTiesToAway");
-        let rntp = self.allocate_symbol("roundTowardPositive");
-        let rntn = self.allocate_symbol("roundTowardNegative");
-        let rntz = self.allocate_symbol("roundTowardZero");
-        let rne = self.allocate_symbol("RNE");
-        let rna = self.allocate_symbol("RNA");
-        let rtp = self.allocate_symbol("RTP");
-        let rtn = self.allocate_symbol("RTN");
-        let rtz = self.allocate_symbol("RTZ");
-
-        let default_symbol_table = HashMap::from([
-            builtin(rnte, rm.clone()),
-            builtin(rnta, rm.clone()),
-            builtin(rntp, rm.clone()),
-            builtin(rntn, rm.clone()),
-            builtin(rntz, rm.clone()),
-            builtin(rne, rm.clone()),
-            builtin(rna, rm.clone()),
-            builtin(rtp, rm.clone()),
-            builtin(rtn, rm.clone()),
-            builtin(rtz, rm.clone()),
-        ]);
-        self.frame.symbol_table.extend(default_symbol_table);
-    }
-
     /// c.f. <https://smt-lib.org/logics-all.shtml#QF_BV> and <https://smt-lib.org/theories-FixedSizeBitVectors.shtml>
     fn extend_theory_bitvectors(&mut self) {
         let int = self.int_sort();
@@ -730,7 +686,6 @@ impl Context {
                             Theory::RealInts => self.extend_theory_real_ints(),
                             Theory::Strings => self.extend_theory_strings(),
                             Theory::ArrayEx => self.extend_theory_array_ex(),
-                            Theory::FloatingPoints => self.extend_theory_floating_points(),
                             Theory::Bitvectors => self.extend_theory_bitvectors(),
                             Theory::Datatypes => {}
                             #[cfg(feature = "finite-set")]
