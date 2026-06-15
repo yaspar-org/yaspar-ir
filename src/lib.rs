@@ -50,6 +50,8 @@
 //! - `implicant-generation` — enables implicant computation (see `ast::implicant` module).
 //! - `cache` — enables caching infrastructure for CNF and other algorithms.
 //! - `cvc5` — enables translation to cvc5 (see `cvc5` module and the `ConvertToCvc5` trait).
+//! - `finite-set` — enables the theory of finite sets (`Set` sort and `set.*` operators) and the
+//!   logics that include it.
 //!
 //! # Modules
 //!
