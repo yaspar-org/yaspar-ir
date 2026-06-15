@@ -9,10 +9,10 @@
 
 use crate::allocator::{SortAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
-use crate::ast::subst::SubstituteV2;
+use crate::ast::subst::Substitute;
 use crate::ast::{
     Arena, Attribute, Constant, Context, FetchSort, FunctionDef, HasArena, Local, Memoize,
-    Monomorphization, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, SubstitutionV2, Term,
+    Monomorphization, Pattern, PatternArm, QualifiedIdentifier, Sort, Str, Substitution, Term,
     TypedBuilder,
 };
 use crate::ast::{TermRecursor, TypedTermRecursor};
@@ -285,7 +285,7 @@ impl TermRecursor<Str, Sort, Term> for GlobalSubstituterInner<'_> {
             // The cache was just populated
             let def = self.global_def_cache.get(sym).unwrap();
             let sorts: Vec<Sort> = recs.iter().map(|t| t.get_sort(&mut self.inner)).collect();
-            let subst = SubstitutionV2::new(def.vars.iter().map(|v| v.clone().into()).zip(recs));
+            let subst = Substitution::new(def.vars.iter().map(|v| v.clone().into()).zip(recs));
             if def.sort_params.is_empty() {
                 Ok(def.body.subst(&subst, &mut self.inner))
             } else {

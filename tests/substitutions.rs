@@ -4,7 +4,7 @@
 use dashu::integer::UBig;
 use yaspar_ir::ast::{
     CheckedApi, Context, GlobalSubst, LetElim, Local, LocalVarAllocator, ObjectAllocatorExt,
-    StrAllocator, SubstituteV2, SubstitutionV2, Typecheck,
+    StrAllocator, Substitute, Substitution, Typecheck,
 };
 use yaspar_ir::untyped::UntypedAst;
 
@@ -31,7 +31,7 @@ fn test_substitutions() {
         .unwrap()
         .type_check(&mut q_ctx)
         .unwrap();
-    let mut subst = SubstitutionV2::new([(x_local, plus)]);
+    let mut subst = Substitution::new([(x_local, plus)]);
     let z_sym = q_ctx.allocate_symbol("z");
     let z_id = q_ctx.new_local(); // a non-existent local id
     let loc = Local {
@@ -80,7 +80,7 @@ fn test_substitutions_shadow() {
         .unwrap()
         .type_check(&mut q_ctx)
         .unwrap();
-    let subst = SubstitutionV2::new([(x_local, plus)]);
+    let subst = Substitution::new([(x_local, plus)]);
     let t = UntypedAst
         .parse_term_str("(forall ((x Int)) (= x 10))")
         .unwrap()
