@@ -840,6 +840,13 @@ This crate supports the following non-standard extensions commonly found in z3 a
    it is written as `((as const (Array X Y)) y)` where `y` has sort `Y`. This function is not in the standard but is
    convenient and frequently appears in models, so it's useful to support. 
 
+### Finite sets
+
+A non-standard theory of finite sets (`Set` sort and `set.*` operators) is available behind the
+`finite-set` Cargo feature, along with the logics that include it (`QF_FS`, `QF_UFFS`, `QF_LIAFS`,
+`QF_UFLIAFS`, `QF_BVFS`). See the `finite_sets` module documentation for the full operator table,
+sort syntax, and cvc5 translation notes.
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
