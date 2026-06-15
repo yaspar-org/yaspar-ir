@@ -37,7 +37,7 @@ pub(crate) mod rec;
 pub(crate) mod rec_memo;
 
 /// Represent a literal constant in SMTLib
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Constant<Str> {
     /// numerals are non-negative
     Numeral(UBig),
@@ -90,7 +90,7 @@ where
 }
 
 /// Represent an index object that appear in an identifier
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Index<Str> {
     Numeral(UBig),
     Symbol(Str),
@@ -111,7 +111,7 @@ impl<Str> Index<Str> {
 }
 
 /// Represent an identifier in SMTLib
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Identifier<Str> {
     pub symbol: Str,
     pub indices: Vec<Index<Str>>,
@@ -303,7 +303,7 @@ where
 }
 
 /// Represent local variables
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Local<Str, So> {
     /// This is a special number to keep track of the variable, so that it is distinguished from
     /// other variables of the same name.
@@ -336,7 +336,7 @@ impl<Str, So> From<VarBinding<Str, So>> for Local<Str, So> {
 }
 
 /// Represent attributes in SMTLib
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Attribute<Str, T> {
     /// A keyword attribute without a value
     Keyword(Keyword),
@@ -351,7 +351,7 @@ pub enum Attribute<Str, T> {
 }
 
 /// Represent sorts in SMTLib
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Sort<Str, So>(pub Identifier<Str>, pub Vec<So>);
 
 impl<Str, So> Sort<Str, So> {
@@ -427,7 +427,7 @@ where
 }
 
 /// This type provides a spec of indices to be used in a signature
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SigIndex<Str> {
     Numeral,
     Symbol(Str),
@@ -437,7 +437,7 @@ pub enum SigIndex<Str> {
 /// An expression to express the calculation of bit vector lengths in the signature
 ///
 /// c.f. [BvOutSort] and [Sig]
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum BvLenExpr {
     Fixed(UBig),
     /// De Bruijn level
@@ -526,7 +526,7 @@ impl Mul for BvLenExpr {
 /// An input sort involved in a bit-vector-related signature
 ///
 /// Input sorts can only refer to a bv length variable, so it has to be more restricted than [BvOutSort].
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum BvInSort<So> {
     /// BitVec(n) where n is the index of corresponding length variable
     BitVec(usize),
@@ -536,7 +536,7 @@ pub enum BvInSort<So> {
 /// An output sort involved in a bit-vector-related signature
 ///
 /// It is possible to provide a bit vector, the length of which is a result of computation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum BvOutSort<So> {
     BitVec(BvLenExpr),
     Sort(So),
@@ -549,7 +549,7 @@ impl<So> BvOutSort<So> {
 }
 
 /// Signature for functions
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Sig<Str, So> {
     /// ParFunc(sig_indices, sort_vars, input_sorts, output_sorts)
     ///
@@ -615,7 +615,7 @@ impl<Str, So> From<So> for Sig<Str, So> {
 }
 
 /// Qualified identifier with an optional sort qualification
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct QualifiedIdentifier<Str, So>(pub Identifier<Str>, pub Option<So>);
 
 impl<Str, So> From<Identifier<Str>> for QualifiedIdentifier<Str, So> {
@@ -662,7 +662,7 @@ where
 ///
 /// The second field is a special number that uniquely tracks the variable to avoid unintentional
 /// variable clashing.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct VarBinding<Str, T>(pub Str, pub usize, pub T);
 
 impl<Str, So> From<Local<Str, So>> for VarBinding<Str, So> {
@@ -674,7 +674,7 @@ impl<Str, So> From<Local<Str, So>> for VarBinding<Str, So> {
 /// Represent terms in SMTLib
 ///
 /// Invariants below only apply for typed ASTs.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Term<Str, So, T> {
     /// A constant literal
     ///
@@ -816,7 +816,7 @@ impl<Str, So, T> From<Constant<Str>> for Term<Str, So, T> {
 }
 
 /// Pattern representation in a match expression
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Pattern<Str> {
     /// Represents a wildcard case
     ///
@@ -886,14 +886,14 @@ impl<Str> Pattern<Str> {
 }
 
 /// An arm in a match expression; there is a pattern and a body
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PatternArm<Str, T> {
     pub pattern: Pattern<Str>,
     pub body: T,
 }
 
 /// A definition of sorts; introduced by `declare-sort` or `define-sort`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SortDef<Str, So> {
     /// Arity; the sort is opaque
     Opaque(usize),
@@ -927,7 +927,7 @@ impl<Str, So> SortDef<Str, So> {
 }
 
 /// The declaration of a constructor of a datatype
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ConstructorDec<Str, So> {
     /// The name of the constructor
     pub ctor: Str,
@@ -937,7 +937,7 @@ pub struct ConstructorDec<Str, So> {
 
 /// The declaration of an individual datatype; it is possible for it to be defined recursively with
 /// other datatypes.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DatatypeDec<Str, So> {
     /// Sort parameters introduced by `par`
     ///
@@ -948,7 +948,7 @@ pub struct DatatypeDec<Str, So> {
 }
 
 /// The definition of a datatype
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DatatypeDef<Str, So> {
     /// Name of the datatype; sort
     ///
@@ -959,7 +959,7 @@ pub struct DatatypeDef<Str, So> {
 }
 
 /// The definition of a function
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FunctionDef<Str, So, T> {
     /// Name of the function
     pub name: Str,
@@ -976,7 +976,7 @@ pub struct FunctionDef<Str, So, T> {
 }
 
 /// Represent all SMTLib commands
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Command<Str, So, T> {
     Assert(T),
     CheckSat,
