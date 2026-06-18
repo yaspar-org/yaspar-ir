@@ -714,10 +714,11 @@ Currently, the crate provides the following functionalities:
 11. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
 12. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
 13. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
-    `cvc5`. It translates typed `Sort`s, `Term`s, and `Command`s to their cvc5 counterparts, with memoized caching
+    `cvc5` (static linking) or `cvc5-dynamic` (dynamic linking); see [Cargo features](#cargo-features) below. It
+    translates typed `Sort`s, `Term`s, and `Command`s to their cvc5 counterparts, with memoized caching
     and support for quantifier `:pattern` annotations.
 14. Translation from cvc5: see the `cvc5` module and the `ConvertFromCvc5` trait. This functionality requires the
-    feature `cvc5`. It translates cvc5 `Sort`s and `Term`s back to yaspar-ir typed ASTs, sharing the same `Cvc5Env`
+    feature `cvc5` or `cvc5-dynamic`. It translates cvc5 `Sort`s and `Term`s back to yaspar-ir typed ASTs, sharing the same `Cvc5Env`
     (and its sort/term caches) used for forward translation. Command results carrying terms are auto-backward-
     translated, and `:named` assertion labels are recovered in `get-unsat-core`/`get-assertions`/
     `get-unsat-assumptions` results.
@@ -784,6 +785,28 @@ fn main() {
     let back = cvc5_term.conv_from_cvc5(&mut *es.env).unwrap();
     assert_eq!(term.to_string(), back.to_string());
 }
+```
+
+## Cargo features
+
+The crate gates optional functionality behind the following Cargo features:
+
+| Feature | Description |
+|---|---|
+| `cnf` | NNF/CNF conversion (`ast::CNFConversion`). Implies `cache`. |
+| `implicant-generation` | Implicant computation (`ast::FindImplicant`). Implies `cnf`. |
+| `cache` | Caching infrastructure used by CNF and other algorithms. |
+| `cvc5` | Translation to/from cvc5 (the `cvc5` module), linking cvc5 **statically**. |
+| `cvc5-dynamic` | Same as `cvc5`, but links cvc5 **dynamically**. Use this when linking against a system-provided cvc5 shared library. |
+| `cvc5-parser` | Additionally enables the cvc5 `parser`. Takes effect only alongside `cvc5` or `cvc5-dynamic`. |
+| `finite-set` | Theory of finite sets (`Set` sort and `set.*` operators) and the logics that include it. |
+| `all` | Convenience feature enabling `cnf`, `implicant-generation`, and `finite-set`. |
+
+`cvc5` and `cvc5-dynamic` are mutually exclusive ways of linking the same cvc5 support — enable exactly one. For
+example, to build with dynamically linked cvc5 plus its parser:
+
+```sh
+cargo build --features cvc5-dynamic,cvc5-parser
 ```
 
 ## SMTLib compliance

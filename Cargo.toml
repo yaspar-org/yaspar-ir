@@ -17,7 +17,10 @@ default = ["none"]
 all = ["cnf", "implicant-generation", "finite-set"]
 cnf = ["dep:sat-interface", "cache"]
 implicant-generation = ["cnf"]
-cvc5 = ["dep:cvc5"]
+cvc5-parser = ["cvc5?/parser"]
+cvc5 = ["cvc5-dep", "cvc5/static"]
+cvc5-dep = ["dep:cvc5"]
+cvc5-dynamic = ["cvc5-dep"]
 finite-set = []
 cache = []
 none = []
@@ -26,7 +29,7 @@ regression = ["all", "cvc5"]
 [dependencies]
 yaspar = "2.7"
 sat-interface = { version = "0.1", optional = true }
-cvc5 = { version = "0.4", optional = true, features = ["static"] }
+cvc5 = { version = "0.4", optional = true }
 dashu = { version = "0.4.2", features = ["serde", "num-traits", "num-order"] }
 hashconsing = "1.6"
 paste = "1"

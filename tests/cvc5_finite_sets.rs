@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(all(feature = "cvc5", feature = "finite-set"))]
+#![cfg(all(feature = "cvc5-dep", feature = "finite-set"))]
 
 use cvc5::{Kind, Solver, TermManager};
 use yaspar_ir::ast::{Context, Typecheck};
