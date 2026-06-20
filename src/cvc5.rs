@@ -2487,7 +2487,15 @@ where
             env.dt_sorts.insert(def.name.clone(), us);
         }
         let result = Self::build_dt_decls(env, defs);
+        // Evict stale sort_cache entries that were cached against unresolved
+        // placeholder sorts during datatype construction. Without this,
+        // later sort lookups hit the cache and return the unresolved sort
+        // object instead of the resolved one, causing sort identity mismatches.
+        let stale: Vec<CSort<'tm>> = env.dt_sorts.values().cloned().collect();
         env.dt_sorts.clear();
+        for cs in stale {
+            env.sort_cache.remove_by_right(&cs);
+        }
         let decls = result?;
         if decls.len() == 1 {
             let cs = env.tm.mk_dt_sort(&decls[0]);

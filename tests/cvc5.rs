@@ -2673,3 +2673,26 @@ fn back_from_cvc5_api_const_array() {
         tm.mk_const_array(arr, zero)
     });
 }
+
+// ── Mutual datatype sort cache eviction tests ───────────────
+
+/// Mutually-declared datatypes: a sort used as a field type in a sibling
+/// datatype must resolve to the *finalized* sort after declaration, not to
+/// the unresolved placeholder that was in dt_sorts during construction.
+/// Without the stale sort_cache eviction fix this panics with a sort
+/// identity mismatch ("argument type is not the type of the function's
+/// argument type").
+#[test]
+fn mutual_datatypes_sort_cache_eviction() {
+    run_script(
+        "(set-logic ALL)
+         (declare-datatypes ((A 0) (B 0))
+           (((mkA (getB B)) (baseA))
+            ((mkB (getA A)))))
+         (declare-const a A)
+         (declare-const b B)
+         (assert (= a (mkA b)))
+         (assert (= b (mkB a)))
+         (check-sat)",
+    );
+}
