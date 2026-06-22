@@ -436,89 +436,44 @@ pub(crate) fn wf_sort(names: &[Str], sort: &Sort, env: &mut TCEnv<()>, top: bool
     }
 }
 
-/// The actuator that computes the non-emptiness of the `current` datatype using DFS
-///
-/// * `nonemptiness` is the cached result of non-emptiness
-/// * `defs` is a mapping from names to definitions.
-/// * `stack` is a visiting stack for DFS
-/// * `current` is the current datatype being looked at
-///
-/// Return true if the `current` datatype is non-empty.
-fn check_emptiness_once<D: Borrow<DatatypeDef>>(
-    nonemptiness: &mut HashMap<Str, Option<bool>>,
-    defs: &HashMap<Str, D>,
-    stack: &mut Vec<Str>,
-    current: &Str,
-) -> bool {
-    if let Some(Some(r)) = nonemptiness.get(current) {
-        // the non-emptiness of def has been determined, so there is nothing to work on.
-        return *r;
-    }
-
-    let def = defs.get(current).unwrap().borrow(); // unwrap because we only handle datatypes
-    // now we are working on def
-    stack.push(def.name.clone());
-
-    let params = &def.dec.params;
-    let mut def_nonemptiness = false;
-    for ctor in &def.dec.constructors {
-        if def_nonemptiness {
-            break;
-        }
-        let mut ctor_nonemptiness = true;
-        for x in &ctor.args {
-            if !ctor_nonemptiness {
-                break;
-            }
-            if params.contains(x.2.sort_name()) {
-                // a parameter is always non-empty.
-                continue;
-            }
-            if let Some(r) = nonemptiness.get(x.2.sort_name()) {
-                // now we are handling a recursively defined datatype
-                if let Some(r) = r {
-                    // the non-emptiness has been determined for x.2
-                    ctor_nonemptiness = ctor_nonemptiness && *r;
-                } else {
-                    // the non-emptiness has not been determined for x.2
-                    if stack.contains(x.2.sort_name()) {
-                        // now we hit a loop, so we assume this sort is empty
-                        ctor_nonemptiness = false
-                    } else {
-                        // now we have not seen this sort, so we must recursively compute its non-emptiness
-                        let r = check_emptiness_once(nonemptiness, defs, stack, x.2.sort_name());
-                        ctor_nonemptiness = ctor_nonemptiness && r;
-                    }
-                }
-            }
-        }
-        def_nonemptiness = def_nonemptiness || ctor_nonemptiness;
-    }
-    nonemptiness.insert(current.clone(), Some(def_nonemptiness));
-    stack.pop();
-
-    def_nonemptiness
-}
-
 /// Check the (non-)emptiness of given datatype definitions.
 ///
 /// The well-foundness condition for datatypes requires that datatypes must inductively have a
 /// base case. This is checked by a DFS to detect a base case.
 ///
 /// Return the name of the empty datatype, if exists.
+///
+/// The worst-case complexity of this algorithm is `|datatypes|^2 * |constructors|`.
 pub(crate) fn check_dt_emptiness<D: Borrow<DatatypeDef>>(def_map: &HashMap<Str, D>) -> Option<Str> {
-    let mut nonemptiness = HashMap::new();
-    for k in def_map.keys() {
-        nonemptiness.insert(k.clone(), None);
-    }
-    let mut stack = vec![];
-    for name in def_map.keys() {
-        let def = def_map.get(name).unwrap().borrow();
-        if !check_emptiness_once(&mut nonemptiness, def_map, &mut stack, &def.name) {
-            return Some(name.clone());
+    let mut nonempty: HashSet<Str> = HashSet::new();
+    loop {
+        let mut changed = false;
+        for (name, d) in def_map.iter() {
+            if nonempty.contains(name) {
+                continue;
+            }
+            let def = d.borrow();
+            let params = &def.dec.params;
+            let has_base = def.dec.constructors.iter().any(|ctor| {
+                ctor.args.iter().all(|x| {
+                    let arg = x.2.sort_name();
+                    // sort parameter, or external/built-in sort, or already-proven datatype
+                    params.contains(arg) || !def_map.contains_key(arg) || nonempty.contains(arg)
+                })
+            });
+            if has_base {
+                nonempty.insert(name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
         }
     }
-    None
+    def_map
+        .keys()
+        .find(|name| !nonempty.contains(*name))
+        .cloned()
 }
 
 /// Assuming correct datatypes, extend the symbol table

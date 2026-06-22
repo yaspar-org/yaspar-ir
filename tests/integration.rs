@@ -1712,3 +1712,50 @@ fn test_is_symbol_rejected() {
     // "is" is not a declared symbol, so this should fail
     assert!(result.is_err());
 }
+
+/// Regression test: the datatype emptiness checker must be order-independent.
+///
+/// Datatypes:
+///   A = mkA(getB: B) | baseA   -- non-empty (has base case `baseA`)
+///   B = mkB(getA: A)           -- non-empty (because A is)
+/// Both are genuinely inhabited, so type-checking MUST always succeed.
+///
+/// A prior implementation broke the A/B recursive cycle by *assuming* the
+/// on-stack sort was empty and then cached the result derived under that
+/// assumption as final. When the checker (iterating a `HashMap`, i.e. random
+/// order) happened to visit `A` before `B`, it finalized `B = empty` under the
+/// temporary "A is empty" assumption and cached it; the later visit to `B` read
+/// that stale value and wrongly reported `B` empty. The verdict thus depended
+/// on HashMap iteration order, so a single check was ~50/50.
+///
+/// We run many iterations (a fresh `Context` => fresh HashMap seed each time)
+/// and assert the checker never wrongly rejects this valid datatype.
+#[test]
+fn test_mutual_datatype_emptiness_order_independent() {
+    const SCRIPT: &str = "(set-logic ALL)
+         (declare-datatypes ((A 0) (B 0))
+           (((mkA (getB B)) (baseA))
+            ((mkB (getA A)))))";
+    const ITERS: usize = 500;
+
+    let mut failures = Vec::new();
+    for i in 0..ITERS {
+        let mut ctx = Context::new();
+        let r = UntypedAst
+            .parse_script_str(SCRIPT)
+            .unwrap()
+            .type_check(&mut ctx);
+        if let Err(e) = r {
+            failures.push((i, e));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "valid mutually-recursive datatypes were wrongly rejected in {}/{} runs \
+         (order-dependent emptiness bug). First failure: {:?}",
+        failures.len(),
+        ITERS,
+        failures.first(),
+    );
+}
