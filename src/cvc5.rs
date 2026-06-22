@@ -91,7 +91,7 @@ use crate::traits::{AllocatableString, Contains, HasMutRef, Repr};
 use crate::untyped::UntypedAst;
 use bimap::BiHashMap;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
-use dashu::integer::UBig;
+use dashu::integer::{IBig, Sign, UBig};
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
@@ -602,6 +602,23 @@ where
     }
 }
 
+/// Allocate an integer term for a possibly-negative `IBig`.
+///
+/// A `Numeral` is non-negative, so a negative value becomes a unary-minus
+/// application `(- mag)`, matching [`CheckedApi::integer`](crate::ast::CheckedApi::integer).
+fn signed_int_term(rf: &mut Context, value: IBig, sort: Sort) -> Term {
+    let (sign, mag) = value.into_parts();
+    let num = rf.allocate_term(ATerm::Constant(Constant::Numeral(mag), Some(sort.clone())));
+    match sign {
+        Sign::Negative => {
+            let sym = rf.allocate_symbol(SUB);
+            let qid = QualifiedIdentifier::simple(sym);
+            rf.app(qid, vec![num], Some(sort))
+        }
+        Sign::Positive => num,
+    }
+}
+
 fn translate_term_from_cvc5<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term>
 where
     Ctx: HasMutRef<Context>,
@@ -616,14 +633,12 @@ where
     }
     if ct.is_integer_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
-        let n: UBig = ct
+        // cvc5 gives a negative value as a signed string (e.g. "-5"), so parse signed.
+        let n: IBig = ct
             .integer_value()
             .parse()
             .map_err(|e| format!("Big integer parse error: {e}"))?;
-        return Ok(fenv
-            .ctx
-            .ref_mut()
-            .allocate_term(ATerm::Constant(Constant::Numeral(n), Some(sort))));
+        return Ok(signed_int_term(&mut fenv.ctx.ref_mut(), n, sort));
     }
     if ct.is_real_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -640,11 +655,13 @@ where
                 let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
                 (numer, denom)
             } else {
-                let num: UBig = num_s.parse().map_err(|e| format!("{e}"))?;
+                // cvc5 normalizes a rational's sign onto the numerator (even "5/(-2)"
+                // comes back as "-5/2"), so only the numerator can be negative; parsing
+                // the denominator as `UBig` enforces that it stays non-negative.
+                let num: IBig = num_s.parse().map_err(|e| format!("{e}"))?;
                 let den: UBig = den_s.parse().map_err(|e| format!("{e}"))?;
                 let int = rf.int_sort();
-                let numer =
-                    rf.allocate_term(ATerm::Constant(Constant::Numeral(num), Some(int.clone())));
+                let numer = signed_int_term(&mut rf, num, int.clone());
                 let denom = rf.allocate_term(ATerm::Constant(Constant::Numeral(den), Some(int)));
                 (numer, denom)
             };

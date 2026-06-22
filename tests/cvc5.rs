@@ -2696,3 +2696,71 @@ fn mutual_datatypes_sort_cache_eviction() {
          (check-sat)",
     );
 }
+
+// ── Negative numeric model values (regression for the `UBig` parse bug) ───────
+//
+// cvc5 returns a negative integer's value as the signed string "-5", and a
+// rational with negative numerator as "-3/4". `conv_from_cvc5` previously parsed
+// these into `UBig`, which errored ("Big integer parse error: invalid digit").
+// They must round-trip back to the unary-minus term form `(- n)`.
+
+#[test]
+fn get_value_negative_integer() {
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (= x (- 5)))
+         (check-sat)
+         (get-value (x))",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetValue(vals) => {
+                assert_eq!(vals.len(), 1);
+                assert_eq!(vals[0].to_string(), "(- 5)");
+            }
+            other => panic!("expected GetValue, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn get_value_negative_integer_nested() {
+    // A negative integer nested inside a larger value must also convert, since
+    // `conv_from_cvc5` recurses. Here the value of `(+ x 0)` is the negative model.
+    with_script_results(
+        "(set-logic QF_LIA)
+         (declare-const x Int)
+         (assert (= x (- 42)))
+         (check-sat)
+         (get-value ((+ x 1)))",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetValue(vals) => {
+                assert_eq!(vals.len(), 1);
+                assert_eq!(vals[0].to_string(), "(- 41)");
+            }
+            other => panic!("expected GetValue, got {other:?}"),
+        },
+    );
+}
+
+#[test]
+fn get_value_negative_rational_pure_real() {
+    // Pure-`Real` logic (no Int theory) exercises the rational branch that also
+    // parsed into `UBig`; a negative numerator must round-trip.
+    with_script_results(
+        "(set-logic QF_LRA)
+         (declare-const x Real)
+         (assert (= x (- (/ 3.0 4.0))))
+         (check-sat)
+         (get-value (x))",
+        &[("produce-models", "true")],
+        |results| match results.last().unwrap() {
+            CommandResult::GetValue(vals) => {
+                assert_eq!(vals.len(), 1);
+                assert_eq!(vals[0].to_string(), "(/ (- 3) 4)");
+            }
+            other => panic!("expected GetValue, got {other:?}"),
+        },
+    );
+}
