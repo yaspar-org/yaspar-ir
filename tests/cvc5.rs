@@ -2758,7 +2758,7 @@ fn get_value_negative_rational_pure_real() {
         |results| match results.last().unwrap() {
             CommandResult::GetValue(vals) => {
                 assert_eq!(vals.len(), 1);
-                assert_eq!(vals[0].to_string(), "(/ (- 3) 4)");
+                assert_eq!(vals[0].to_string(), "(/ (- 3.0) 4.0)");
             }
             other => panic!("expected GetValue, got {other:?}"),
         },

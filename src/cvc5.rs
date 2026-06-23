@@ -91,7 +91,9 @@ use crate::traits::{AllocatableString, Contains, HasMutRef, Repr};
 use crate::untyped::UntypedAst;
 use bimap::BiHashMap;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
+use dashu::float::DBig;
 use dashu::integer::{IBig, Sign, UBig};
+use num_traits::Signed;
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
@@ -619,6 +621,23 @@ fn signed_int_term(rf: &mut Context, value: IBig, sort: Sort) -> Term {
     }
 }
 
+/// A similar function to [signed_int_term]
+fn signed_decimal_term(rf: &mut Context, value: DBig, sort: Sort) -> Term {
+    let sign = value.sign();
+    let num = rf.allocate_term(ATerm::Constant(
+        Constant::Decimal(value.abs()),
+        Some(sort.clone()),
+    ));
+    match sign {
+        Sign::Negative => {
+            let sym = rf.allocate_symbol(SUB);
+            let qid = QualifiedIdentifier::simple(sym);
+            rf.app(qid, vec![num], Some(sort))
+        }
+        Sign::Positive => num,
+    }
+}
+
 fn translate_term_from_cvc5<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term>
 where
     Ctx: HasMutRef<Context>,
@@ -647,31 +666,17 @@ where
         let has_ints = rf.get_theories().iter().any(|t| t.has_int());
         // cvc5 returns rationals as "num/den" or just "num"
         if let Some((num_s, den_s)) = s.split_once('/') {
-            let (numer, denom) = if has_ints {
-                // In RealInts, numerals are Int; use Decimal constants for Real division
-                let n = Constant::Decimal(format!("{num_s}.0").parse().unwrap());
-                let d = Constant::Decimal(format!("{den_s}.0").parse().unwrap());
-                let numer = rf.allocate_term(ATerm::Constant(n, Some(sort.clone())));
-                let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
-                (numer, denom)
-            } else {
-                // cvc5 normalizes a rational's sign onto the numerator (even "5/(-2)"
-                // comes back as "-5/2"), so only the numerator can be negative; parsing
-                // the denominator as `UBig` enforces that it stays non-negative.
-                let num: IBig = num_s.parse().map_err(|e| format!("{e}"))?;
-                let den: UBig = den_s.parse().map_err(|e| format!("{e}"))?;
-                let int = rf.int_sort();
-                let numer = signed_int_term(&mut rf, num, int.clone());
-                let denom = rf.allocate_term(ATerm::Constant(Constant::Numeral(den), Some(int)));
-                (numer, denom)
-            };
+            let num = format!("{num_s}.0").parse().unwrap();
+            let d = Constant::Decimal(format!("{den_s}.0").parse().unwrap());
+            let numer = signed_decimal_term(&mut rf, num, sort.clone());
+            let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
             let sym = rf.allocate_symbol(RDIV);
             let qid = QualifiedIdentifier::simple(sym);
             return Ok(rf.app(qid, vec![numer, denom], Some(sort)));
         }
         // No division — parse as a single decimal
-        let n: dashu::float::DBig = format!("{s}.0").parse().map_err(|e| format!("{e}"))?;
-        return Ok(rf.allocate_term(ATerm::Constant(Constant::Decimal(n), Some(sort))));
+        let n: DBig = format!("{s}.0").parse().map_err(|e| format!("{e}"))?;
+        return Ok(signed_decimal_term(&mut rf, n, sort));
     }
     if ct.is_string_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
