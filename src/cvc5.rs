@@ -663,7 +663,6 @@ where
         let sort = ct.sort().conv_from_cvc5(fenv)?;
         let s = ct.real_value();
         let mut rf = fenv.ctx.ref_mut();
-        let has_ints = rf.get_theories().iter().any(|t| t.has_int());
         // cvc5 returns rationals as "num/den" or just "num"
         if let Some((num_s, den_s)) = s.split_once('/') {
             let num = format!("{num_s}.0").parse().unwrap();
