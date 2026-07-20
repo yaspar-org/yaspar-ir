@@ -10,7 +10,7 @@ keywords = ["SMT", "solver", "logic"]
 categories = ["science"]
 homepage = "https://github.com/yaspar-org/yaspar-ir"
 repository = "https://github.com/yaspar-org/yaspar-ir"
-exclude = ["tests/resources", "tests/regression.rs"]
+exclude = ["tests/resources", "tests/regression.rs", ".github"]
 
 [features]
 default = ["none"]
@@ -27,7 +27,7 @@ none = []
 regression = ["all", "cvc5"]
 
 [dependencies]
-yaspar = "2.7"
+yaspar = "2.7.1"
 sat-interface = { version = "0.1", optional = true }
 cvc5 = { version = "0.4", optional = true }
 dashu = { version = "0.4.2", features = ["serde", "num-traits", "num-order"] }
