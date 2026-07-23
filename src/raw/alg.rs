@@ -594,6 +594,11 @@ pub enum Sig<Str, So> {
     /// It is a special case, because concat is an associative operation, which requires accumulation
     /// of bv lengths as well
     BvConcat,
+    /// A placeholder signature for rejected symbol
+    ///
+    /// It is useful when a symbol is meant to be rejected for various reasons (e.g. unsupported functions),
+    /// but we want the symbols to be presented as rejected ones, not just absent.
+    Rejected,
 }
 
 impl<Str, So> Sig<Str, So> {
@@ -1287,6 +1292,7 @@ where
                 write!(f, "(=> {} ...[>= {} times] {} {})", inp, n, inp, o)
             }
             Sig::BvConcat => "(=> (_ BitVec l1) ... (_ BitVec ln) (_ BitVec (+ l1 ... ln)))".fmt(f),
+            Sig::Rejected => "REJECTED".fmt(f),
         }
     }
 }
