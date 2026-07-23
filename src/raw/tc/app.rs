@@ -221,6 +221,9 @@ where
                         "TC: {qid}{meta_string} has a signature of a bit vector function, which cannot be used as a variable!"
                     ))
                 }
+                Sig::Rejected => Err(format!(
+                    "TC: {qid}{meta_string} is a rejected/unsupported symbol!"
+                )),
             }
         }
         Some((l, s)) => {
@@ -674,6 +677,7 @@ where
             // passing all tests
             Ok(env.arena.app(f.clone(), new_args, Some(out_sort)))
         }
+        Sig::Rejected => Err(format!("TC: {f}{f_meta} is a rejected/unsupported symbol!")),
     }
 }
 
