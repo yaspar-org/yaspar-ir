@@ -12,7 +12,7 @@ use crate::ast::{SymbolQuote, Theory};
 use crate::containers::LocEnv;
 use crate::raw::instance::{FetchSort, HasArena};
 use crate::raw::tc::{sort_mismatch, tc_determine_datatype_sort_map};
-use crate::traits::AllocatableString;
+use crate::traits::{AllocatableString, HasMutRef};
 use std::collections::{HashMap, HashSet};
 
 /// A builder context for constructing `match` expressions over datatype values.
@@ -295,6 +295,25 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     }
 }
 
+impl HasArena for MatchContext<'_, '_> {
+    #[inline]
+    fn arena(&mut self) -> &mut Arena {
+        self.context.arena()
+    }
+}
+
+impl HasMutRef<Context> for MatchContext<'_, '_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.context
+    }
+}
+
 impl ArmContext<'_, '_, '_> {
     /// finalize the arm by giving a body
     ///
@@ -334,6 +353,18 @@ impl ArmContext<'_, '_, '_> {
 impl HasArena for ArmContext<'_, '_, '_> {
     fn arena(&mut self) -> &mut Arena {
         self.parent.context.arena()
+    }
+}
+
+impl HasMutRef<Context> for ArmContext<'_, '_, '_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.parent.context
     }
 }
 

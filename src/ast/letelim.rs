@@ -247,6 +247,15 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
 
 impl<E: HasArena> TypedTermRecursor for LetEliminatorInner<'_, E> {}
 
+impl<E> LetElim<E> for Term
+where
+    E: HasArena,
+{
+    fn let_elim(&self, env: &mut E) -> Self {
+        LetEliminator::create(env).recurse_on_term_no_err(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
