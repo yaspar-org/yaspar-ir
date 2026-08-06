@@ -301,12 +301,6 @@ impl Typecheck<Context> for u::Command {
     }
 }
 
-impl LetElim<Context> for Term {
-    fn let_elim(&self, env: &mut Context) -> Self {
-        LetEliminator::create(env).recurse_on_term_no_err(self)
-    }
-}
-
 #[cfg(feature = "implicant-generation")]
 impl<Solver> FindImplicant<&mut Context, Solver> for Vec<Term>
 where

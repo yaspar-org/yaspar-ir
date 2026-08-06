@@ -9,7 +9,7 @@ use crate::ast::ctx::checked::CheckedApi;
 use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
 use crate::ast::{FetchSort, LetContext, MatchContext, QuantifierContext, SymbolQuote, Term};
 use crate::containers::{LocEnv, sanitize_bindings};
-use crate::traits::AllocatableString;
+use crate::traits::{AllocatableString, HasMutRef};
 use std::collections::{HashMap, HashSet};
 
 /// A signature of a recursive function
@@ -207,6 +207,25 @@ impl Drop for RecFunsContext<'_> {
     }
 }
 
+impl HasArena for RecFunsContext<'_> {
+    #[inline]
+    fn arena(&mut self) -> &mut Arena {
+        self.context.arena()
+    }
+}
+
+impl HasMutRef<Context> for RecFunsContext<'_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.context
+    }
+}
+
 impl<'b> EachRecFunContext<'b> {
     fn new<'a, S>(parent: &'b mut RecFunsContext<'a>, name: S) -> TC<Self>
     where
@@ -265,6 +284,18 @@ impl HasArena for EachRecFunContext<'_> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
+    }
+}
+
+impl HasMutRef<Context> for EachRecFunContext<'_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.context
     }
 }
 

@@ -8,7 +8,7 @@ use crate::ast::ctx::{Command, Sort, Str, TC};
 use crate::ast::{ScopedSortApi, SymbolQuote};
 use crate::containers::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
-use crate::traits::AllocatableString;
+use crate::traits::{AllocatableString, HasMutRef};
 
 /// A builder context for defining a sort alias (`define-sort`).
 ///
@@ -80,6 +80,18 @@ impl<'a> DefSortContext<'a> {
 impl HasArena for DefSortContext<'_> {
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
+    }
+}
+
+impl HasMutRef<Context> for DefSortContext<'_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.context
     }
 }
 

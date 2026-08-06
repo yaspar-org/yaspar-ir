@@ -10,7 +10,7 @@ use crate::ast::{MatchContext, SymbolQuote};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};
-use crate::traits::{AllocatableString, Contains};
+use crate::traits::{AllocatableString, Contains, HasMutRef};
 use std::collections::HashSet;
 
 /// A structure that captures local sort bindings.
@@ -102,6 +102,18 @@ impl HasArena for LocalContext<'_, '_> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
+    }
+}
+
+impl HasMutRef<Context> for LocalContext<'_, '_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.context
     }
 }
 

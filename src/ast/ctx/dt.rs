@@ -18,7 +18,7 @@ use crate::ast::{
 use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::statics::{IS, IS_DASH};
-use crate::traits::{AllocatableString, Contains};
+use crate::traits::{AllocatableString, Contains, HasMutRef};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 
@@ -224,6 +224,18 @@ impl HasArena for DatatypeContext<'_> {
     }
 }
 
+impl HasMutRef<Context> for DatatypeContext<'_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.context
+    }
+}
+
 impl<'a, 'b> DtDeclContext<'a, 'b> {
     fn new<S>(parent: &'b mut DatatypeContext<'a>, s: S) -> TC<Self>
     where
@@ -394,6 +406,19 @@ impl HasArena for DtDeclContext<'_, '_> {
         self.parent.context.arena()
     }
 }
+
+impl HasMutRef<Context> for DtDeclContext<'_, '_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.parent.context
+    }
+}
+
 impl ScopedSortApi for DtDeclContext<'_, '_> {
     #[inline]
     fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, ()> {
