@@ -54,6 +54,26 @@ fn main() {
 }
 ```
 
+### Context Management
+
+Similar to APIs of any SMT solver, we maintain a **Context** to keep track of term and sort information. 
+```
+let mut context = Context::new();
+```
+A context is also an arena, which manages term and sort identity. Therefore, quite often a unique context is manipulated
+throughout the program. Mixing objects managed by different context is always a bad idea:
+```
+let mut ctx1 = Context::new();
+let mut ctx2 = Context::new();
+let tru = ctx1.get_true();
+let fals = ctx2.get_false();
+assert_eq!(tru, fals); // WHAT?!
+```
+In this example, `tru` and `fals` are compared equal, because they are both the first objects allocated in their respective
+contexts. Internally, each object hold an id number allocated by its context, so object comparison is just id comparison and
+hence very efficient. Since we are mixing contexts, this program reveals the fact that `tru` and `fals` have the same id,
+which is not very useful!
+
 ### Checked v.s. Unchecked Building APIs
 
 In general, we maintain a global top-level context to keep track of SMTLib objects and their validity:
@@ -523,7 +543,6 @@ When a `TermRecursor` callback returns `Err`, the traversal aborts immediately. 
 scoped constructs (`let`, `forall`/`exists`, `match`) may have already called their
 `setup_*` hooks to extend the recursor's environment. If the error occurs inside such a
 scope, the environment modifications from those hooks would be left behind — potentially
-corrupting the recursor's state for future use.
 
 To address this, the traversal engine automatically **rewinds the stack** on error, calling
 a corresponding `cleanup_*_on_error` hook for each scoped frame that was entered but not
