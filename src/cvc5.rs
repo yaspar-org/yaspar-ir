@@ -1857,6 +1857,17 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
         Ok(vec![to_term_vec(patterns_rec)])
     }
 
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(
+        &mut self,
+        _patterns: &[Term],
+        patterns_rec: Vec<WithPattern<'tm>>,
+    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
+        // `:no-pattern` is an anti-trigger hint; treat it as a (non-triggering)
+        // pattern group for cvc5's purposes.
+        Ok(vec![to_term_vec(patterns_rec)])
+    }
+
     fn on_eq(
         &mut self,
         _current: &Term,

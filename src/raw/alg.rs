@@ -348,6 +348,14 @@ pub enum Attribute<Str, T> {
     Named(Str),
     /// Special attribute :pattern (term+)
     Pattern(Vec<T>),
+    /// Special attribute :no-pattern (single term). An *anti*-trigger hint: the
+    /// term must NOT be used as an e-matching trigger. Stored as a `Vec` (of
+    /// length one) so it reuses the same sub-term recursion machinery as
+    /// `Pattern`; the term is preserved so consumers (e.g. trigger inference)
+    /// can honor the exclusion. Gated behind the `no-pattern` feature, which
+    /// forwards to `yaspar/no-pattern`; only produced when it is enabled.
+    #[cfg(feature = "no-pattern")]
+    NoPattern(Vec<T>),
 }
 
 /// Represent sorts in SMTLib
@@ -803,6 +811,8 @@ impl<Str, So, T> Term<Str, So, T> {
             Term::Annotated(t, annos) => {
                 Box::new(std::iter::once(t).chain(annos.iter().flat_map(|a| match a {
                     Attribute::Pattern(ts) => ts.iter(),
+                    #[cfg(feature = "no-pattern")]
+                    Attribute::NoPattern(ts) => ts.iter(),
                     _ => [].iter(),
                 })))
             }
@@ -1151,6 +1161,12 @@ where
             Attribute::Pattern(ts) => {
                 ":pattern ".fmt(f)?;
                 fmt_vec_paren(f, ts)
+            }
+            #[cfg(feature = "no-pattern")]
+            Attribute::NoPattern(ts) => {
+                // `:no-pattern` takes a single term value (not a list).
+                ":no-pattern ".fmt(f)?;
+                fmt_vec(f, ts)
             }
         }
     }

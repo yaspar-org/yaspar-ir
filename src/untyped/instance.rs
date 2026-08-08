@@ -250,6 +250,19 @@ impl ActionOnAttribute for UntypedAst {
     ) -> ParsingResult<Self::Attribute> {
         Ok(Attribute::Pattern(patterns))
     }
+
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(
+        &mut self,
+        _range: Range,
+        term: Self::Term,
+    ) -> ParsingResult<Self::Attribute> {
+        // `:no-pattern <term>` is an *anti*-trigger hint: it names a term that
+        // must NOT be used as an e-matching trigger. We preserve the term (as a
+        // single-element vector, mirroring `Pattern`) so consumers such as
+        // trigger inference can honor the exclusion.
+        Ok(Attribute::NoPattern(vec![term]))
+    }
 }
 
 impl ActionOnSort for UntypedAst {
