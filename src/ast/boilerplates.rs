@@ -256,6 +256,11 @@ where
         Ok(Attribute::Pattern(recs))
     }
 
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(&mut self, _: &[Term], recs: Vec<Term>) -> Result<Attribute, Bottom> {
+        Ok(Attribute::NoPattern(recs))
+    }
+
     fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {
         Ok(self.arena.arena().eq(a, b))
     }

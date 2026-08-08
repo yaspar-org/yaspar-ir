@@ -159,6 +159,8 @@ where
             fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Self::Attr, Self::Err>;
             fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err>;
             fn on_attribute_pattern(&mut self, patterns: &[T], patterns_rec: Vec<Self::Out>) -> Result<Self::Attr, Self::Err>;
+            #[cfg(feature = "no-pattern")]
+            fn on_attribute_no_pattern(&mut self, patterns: &[T], patterns_rec: Vec<Self::Out>) -> Result<Self::Attr, Self::Err>;
             fn on_let_binding(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, binding_idx: usize, binding_rec: Self::Out) -> Result<Self::Binding, Self::Err>;
             fn setup_let_scope(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, vs_rec: &[Self::Binding]) -> Result<(), Self::Err>;
             fn cleanup_let_scope_on_error(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, vs_rec: Vec<Self::Binding>);
@@ -405,6 +407,8 @@ where
             fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Self::Attr, Self::Err>;
             fn on_attribute_named(&mut self, name: &Str) -> Result<Self::Attr, Self::Err>;
             fn on_attribute_pattern(&mut self, patterns: &[T], patterns_rec: Vec<Self::Out>) -> Result<Self::Attr, Self::Err>;
+            #[cfg(feature = "no-pattern")]
+            fn on_attribute_no_pattern(&mut self, patterns: &[T], patterns_rec: Vec<Self::Out>) -> Result<Self::Attr, Self::Err>;
             fn on_let_binding(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, binding_idx: usize, binding_rec: Self::Out) -> Result<Self::Binding, Self::Err>;
             fn setup_let_scope(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, vs_rec: &[Self::Binding]) -> Result<(), Self::Err>;
             fn cleanup_let_scope_on_error(&mut self, current: &T, vs: &[VarBinding<Str, T>], body: &T, vs_rec: Vec<Self::Binding>);

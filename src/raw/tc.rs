@@ -1037,6 +1037,15 @@ where
         Ok(Attribute::Pattern(patterns_rec))
     }
 
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(
+        &mut self,
+        _patterns: &[T],
+        patterns_rec: Vec<Self::Out>,
+    ) -> Result<Self::Attr, Self::Err> {
+        Ok(Attribute::NoPattern(patterns_rec))
+    }
+
     fn on_eq(
         &mut self,
         _current: &T,
@@ -1191,6 +1200,12 @@ where
             )),
             alg::Attribute::Named(s) => Ok(Attribute::Named(env.arena.allocate_symbol(s.inner()))),
             alg::Attribute::Pattern(ts) => Ok(Attribute::Pattern(
+                ts.iter()
+                    .map(|t| t.type_check(env))
+                    .collect::<TC<Vec<_>>>()?,
+            )),
+            #[cfg(feature = "no-pattern")]
+            alg::Attribute::NoPattern(ts) => Ok(Attribute::NoPattern(
                 ts.iter()
                     .map(|t| t.type_check(env))
                     .collect::<TC<Vec<_>>>()?,
