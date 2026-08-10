@@ -726,17 +726,22 @@ Currently, the crate provides the following functionalities:
    introduces let-bindings to terms, so that they can be compactly printed with let-bindings inserted for sub-terms
    appearing multiple times.
 9. Global and local substitutions; see `ast::SubstituteV2` and `ast::GlobalSubst`.
-10. Stack-free recursors: see `ast::TermRecursor`, `ast::TypedTermRecursor`, `ast::u::UntypedTermRecursor` and `ast::Memoize`.
+10. Alpha equivalence of terms: see `ast::AlphaEquiv`. Plain `==` on hashconsed `Term`s is identity-based,
+    so two separately built copies of `(forall ((x Int)) (p x))` compare unequal. `.aeq()` compares terms
+    up to renaming of variables bound by `let`, `forall`, `exists`, and `match` patterns, while requiring
+    free local variables to be identical. `.aeq_permissive()` additionally allows free local variables to
+    correspond under a consistent (bijective, sort-preserving) renaming.
+11. Stack-free recursors: see `ast::TermRecursor`, `ast::TypedTermRecursor`, `ast::u::UntypedTermRecursor` and `ast::Memoize`.
     This functionality provides a stack-free, visitor-based implementation of a depth first traversal of `Term`s. General
     recursions are still available, but for deeply nested terms, general recursions could hit the stack limit of the
     operating system. Stack-free recursors do not have such risk. Plug-in memoization is also available.  
-11. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
-12. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
-13. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
+12. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
+13. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
+14. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
     `cvc5` (static linking) or `cvc5-dynamic` (dynamic linking); see [Cargo features](#cargo-features) below. It
     translates typed `Sort`s, `Term`s, and `Command`s to their cvc5 counterparts, with memoized caching
     and support for quantifier `:pattern` annotations.
-14. Translation from cvc5: see the `cvc5` module and the `ConvertFromCvc5` trait. This functionality requires the
+15. Translation from cvc5: see the `cvc5` module and the `ConvertFromCvc5` trait. This functionality requires the
     feature `cvc5` or `cvc5-dynamic`. It translates cvc5 `Sort`s and `Term`s back to yaspar-ir typed ASTs, sharing the same `Cvc5Env`
     (and its sort/term caches) used for forward translation. Command results carrying terms are auto-backward-
     translated, and `:named` assertion labels are recovered in `get-unsat-core`/`get-assertions`/
