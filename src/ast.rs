@@ -20,6 +20,7 @@
 //! - [`ScopedSortApi`] — well-formedness-checked sort building (auto-derived from `CheckedApi`).
 //! - [`Typecheck`] — convert untyped ASTs (or re-check typed ASTs) via `.type_check(&mut ctx)`.
 //! - [`LetElim`] — eliminate let-bindings by inlining bound terms.
+//! - [`AlphaEquiv`] — compare terms up to renaming of bound variables.
 //! - [`Repr`] — access the internal enum representation of a hashconsed object.
 //!
 //! # Sub-modules
@@ -30,6 +31,7 @@
 //! - [`letintro`] — let-introduction via topological sorting (inverse of let-elimination).
 //! - [`mono`] — monomorphization of parametric datatypes.
 
+pub(crate) mod alpha_eq;
 mod boilerplates;
 #[cfg(feature = "cnf")]
 pub(crate) mod cnf;
@@ -62,6 +64,7 @@ pub use gsubst::{GlobalSubst, GlobalSubstituter, GlobalSubstituterInner};
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
 pub use subst::{Substitute, Substitution};
 
+pub use crate::ast::alpha_eq::AlphaEquiv;
 pub use crate::ast::letelim::{LetElim, LetEliminator, LetEliminatorInner};
 use crate::traits::MetaData;
 #[cfg(feature = "implicant-generation")]
