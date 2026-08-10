@@ -24,10 +24,7 @@ cvc5-dynamic = ["cvc5-dep"]
 finite-set = []
 cache = []
 none = []
-# Enable parsing of the non-standard `:no-pattern <term>` quantifier attribute
-# (an anti-trigger hint emitted by Dafny/Boogie). Forwards to yaspar's grammar
-# gate of the same name. Off by default so the parser stays strictly SMT-LIB
-# 2.7 conformant.
+# Parse the non-standard `:no-pattern` attribute; forwards to `yaspar/no-pattern`.
 no-pattern = ["yaspar/no-pattern"]
 regression = ["all", "cvc5"]
 

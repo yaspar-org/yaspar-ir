@@ -787,9 +787,7 @@ where
                         Attribute::NoPattern(ts) => (ts, true),
                         _ => unreachable!(),
                     };
-                    // `is_no_pattern` is always `false` unless the `no-pattern`
-                    // feature is enabled (the only arm that sets it is gated).
-                    let _ = is_no_pattern;
+                    let _ = is_no_pattern; // only read under `no-pattern`
                     if cur_pattern_rec.len() >= pat_ts.len() {
                         #[cfg(feature = "no-pattern")]
                         let attr = if is_no_pattern {

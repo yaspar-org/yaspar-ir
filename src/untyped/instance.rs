@@ -257,10 +257,7 @@ impl ActionOnAttribute for UntypedAst {
         _range: Range,
         term: Self::Term,
     ) -> ParsingResult<Self::Attribute> {
-        // `:no-pattern <term>` is an *anti*-trigger hint: it names a term that
-        // must NOT be used as an e-matching trigger. We preserve the term (as a
-        // single-element vector, mirroring `Pattern`) so consumers such as
-        // trigger inference can honor the exclusion.
+        // Length-1 vec, mirroring `Pattern`; see `Attribute::NoPattern`.
         Ok(Attribute::NoPattern(vec![term]))
     }
 }
