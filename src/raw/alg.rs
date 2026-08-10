@@ -348,12 +348,9 @@ pub enum Attribute<Str, T> {
     Named(Str),
     /// Special attribute :pattern (term+)
     Pattern(Vec<T>),
-    /// Special attribute :no-pattern (single term). An *anti*-trigger hint: the
-    /// term must NOT be used as an e-matching trigger. Stored as a `Vec` (of
-    /// length one) so it reuses the same sub-term recursion machinery as
-    /// `Pattern`; the term is preserved so consumers (e.g. trigger inference)
-    /// can honor the exclusion. Gated behind the `no-pattern` feature, which
-    /// forwards to `yaspar/no-pattern`; only produced when it is enabled.
+    /// Special attribute `:no-pattern` — an *anti*-trigger hint whose term must
+    /// not be used as an e-matching trigger. A length-1 `Vec` so it reuses
+    /// `Pattern`'s sub-term recursion. Behind the `no-pattern` feature.
     #[cfg(feature = "no-pattern")]
     NoPattern(Vec<T>),
 }
