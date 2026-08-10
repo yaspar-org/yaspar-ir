@@ -43,6 +43,7 @@ pub(crate) mod implicant;
 pub(crate) mod letelim;
 pub mod letintro;
 pub mod mono;
+pub(crate) mod rename;
 pub mod subst;
 
 pub use crate::allocator::*;
@@ -62,6 +63,7 @@ pub use crate::untyped as u;
 pub use boilerplates::TypedBuilder;
 pub use gsubst::{GlobalSubst, GlobalSubstituter, GlobalSubstituterInner};
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
+pub use rename::AlphaRename;
 pub use subst::{Substitute, Substitution};
 
 pub use crate::ast::alpha_eq::AlphaEquiv;
