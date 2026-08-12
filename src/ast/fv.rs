@@ -245,8 +245,8 @@ impl TermRecursor<Str, Sort, Term> for FreeLocalVariableFinder {
     #[cfg(feature = "no-pattern")]
     fn on_attribute_no_pattern(
         &mut self,
-        _patterns: &[Term],
-        _patterns_rec: Vec<Self::Out>,
+        _pattern: &Term,
+        _pattern_rec: Self::Out,
     ) -> Result<Self::Attr, Self::Err> {
         Ok(())
     }

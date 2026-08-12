@@ -180,6 +180,20 @@ pub struct WithPattern<'tm> {
     ///
     /// Multiple `:pattern`s are maintained.
     patterns: Vec<Vec<CTerm<'tm>>>,
+    /// Terms collected from `:no-pattern` annotations (each an anti-trigger).
+    #[cfg(feature = "no-pattern")]
+    no_patterns: Vec<CTerm<'tm>>,
+}
+
+/// Pattern / anti-pattern groups collected from a term's annotations, produced
+/// by the `on_attribute_*` callbacks and merged in `on_annotated`.
+#[derive(Default)]
+struct PatternAttrs<'tm> {
+    /// `:pattern` groups; each becomes an `INST_PATTERN`.
+    patterns: Vec<Vec<CTerm<'tm>>>,
+    /// `:no-pattern` terms; each becomes an `INST_NO_PATTERN`.
+    #[cfg(feature = "no-pattern")]
+    no_patterns: Vec<CTerm<'tm>>,
 }
 
 impl<'tm> From<WithPattern<'tm>> for CTerm<'tm> {
@@ -193,6 +207,8 @@ impl<'tm> From<CTerm<'tm>> for WithPattern<'tm> {
         WithPattern {
             term: value,
             patterns: vec![],
+            #[cfg(feature = "no-pattern")]
+            no_patterns: vec![],
         }
     }
 }
@@ -805,6 +821,8 @@ where
                 let probe = WithPattern {
                     term: body_ct.clone(),
                     patterns: cvc5_patterns.clone(),
+                    #[cfg(feature = "no-pattern")]
+                    no_patterns: vec![],
                 };
                 if let Some(cached) = fenv.term_cache.get_by_right(&probe) {
                     break 'inner Ok(cached.clone());
@@ -1544,7 +1562,7 @@ fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
 
 impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
     type Out = WithPattern<'tm>;
-    type Attr = Vec<Vec<CTerm<'tm>>>;
+    type Attr = PatternAttrs<'tm>;
     type Binding = (usize, WithPattern<'tm>);
     type Pattern = ();
     type Arm = CTerm<'tm>;
@@ -1818,54 +1836,63 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
         _t: &Term,
         _anns: &[Attribute],
         t_rec: WithPattern<'tm>,
-        anns_rec: Vec<Vec<Vec<CTerm<'tm>>>>,
+        anns_rec: Vec<PatternAttrs<'tm>>,
     ) -> Res<WithPattern<'tm>> {
-        // do not handle other annotations
         let mut pats = t_rec.patterns;
-        anns_rec.into_iter().for_each(|ps| pats.extend(ps));
+        #[cfg(feature = "no-pattern")]
+        let mut no_pats = t_rec.no_patterns;
+        for a in anns_rec {
+            pats.extend(a.patterns);
+            #[cfg(feature = "no-pattern")]
+            no_pats.extend(a.no_patterns);
+        }
         Ok(WithPattern {
             term: t_rec.term,
             patterns: pats,
+            #[cfg(feature = "no-pattern")]
+            no_patterns: no_pats,
         })
     }
-    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
     fn on_attribute_constant(
         &mut self,
         _keyword: &Keyword,
         _constant: &Constant,
-    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    ) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
-    fn on_attribute_symbol(
-        &mut self,
-        _keyword: &Keyword,
-        _symbol: &Str,
-    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    fn on_attribute_symbol(&mut self, _keyword: &Keyword, _symbol: &Str) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
-    fn on_attribute_named(&mut self, _name: &Str) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    fn on_attribute_named(&mut self, _name: &Str) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
 
     fn on_attribute_pattern(
         &mut self,
         _patterns: &[Term],
         patterns_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![to_term_vec(patterns_rec)])
+    ) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs {
+            patterns: vec![to_term_vec(patterns_rec)],
+            ..Default::default()
+        })
     }
 
     #[cfg(feature = "no-pattern")]
     fn on_attribute_no_pattern(
         &mut self,
-        _patterns: &[Term],
-        patterns_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        // `:no-pattern` is an anti-trigger hint; treat it as a (non-triggering)
-        // pattern group for cvc5's purposes.
-        Ok(vec![to_term_vec(patterns_rec)])
+        _pattern: &Term,
+        pattern_rec: WithPattern<'tm>,
+    ) -> Res<PatternAttrs<'tm>> {
+        // Preserve the anti-trigger term; emitted as an INST_NO_PATTERN on the
+        // quantifier in `translate_quantifier_body`.
+        Ok(PatternAttrs {
+            no_patterns: vec![pattern_rec.term],
+            ..Default::default()
+        })
     }
 
     fn on_eq(
@@ -2145,19 +2172,28 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
         // Peel off annotations from the body to extract :pattern triggers
         let cbody = t_rec.term;
 
-        // Build INST_PATTERN_LIST from :pattern annotations
-        if !t_rec.patterns.is_empty() {
-            let pats = t_rec
-                .patterns
-                .iter()
-                .filter_map(|ts| {
-                    if ts.is_empty() {
-                        None
-                    } else {
-                        Some(self.tm.mk_term(Kind::InstPattern, ts))
-                    }
-                })
-                .collect::<Vec<_>>();
+        // Build INST_PATTERN_LIST from :pattern (and :no-pattern) annotations.
+        // The list holds INST_PATTERN entries and, for anti-triggers,
+        // INST_NO_PATTERN entries.
+        let mut pats: Vec<CTerm<'tm>> = t_rec
+            .patterns
+            .iter()
+            .filter_map(|ts| {
+                if ts.is_empty() {
+                    None
+                } else {
+                    Some(self.tm.mk_term(Kind::InstPattern, ts))
+                }
+            })
+            .collect();
+        #[cfg(feature = "no-pattern")]
+        for t in &t_rec.no_patterns {
+            pats.push(
+                self.tm
+                    .mk_term(Kind::InstNoPattern, std::slice::from_ref(t)),
+            );
+        }
+        if !pats.is_empty() {
             let plist = self.tm.mk_term(Kind::InstPatternList, &pats);
             return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]).into());
         }

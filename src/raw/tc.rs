@@ -1040,10 +1040,10 @@ where
     #[cfg(feature = "no-pattern")]
     fn on_attribute_no_pattern(
         &mut self,
-        _patterns: &[T],
-        patterns_rec: Vec<Self::Out>,
+        _pattern: &T,
+        pattern_rec: Self::Out,
     ) -> Result<Self::Attr, Self::Err> {
-        Ok(Attribute::NoPattern(patterns_rec))
+        Ok(Attribute::NoPattern(pattern_rec))
     }
 
     fn on_eq(
@@ -1205,11 +1205,7 @@ where
                     .collect::<TC<Vec<_>>>()?,
             )),
             #[cfg(feature = "no-pattern")]
-            alg::Attribute::NoPattern(ts) => Ok(Attribute::NoPattern(
-                ts.iter()
-                    .map(|t| t.type_check(env))
-                    .collect::<TC<Vec<_>>>()?,
-            )),
+            alg::Attribute::NoPattern(t) => Ok(Attribute::NoPattern(t.type_check(env)?)),
         }
     }
 }

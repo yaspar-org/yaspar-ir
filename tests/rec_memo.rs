@@ -211,10 +211,10 @@ impl TermRecursor<Str, Sort, Term> for TouchedTermSize {
     #[cfg(feature = "no-pattern")]
     fn on_attribute_no_pattern(
         &mut self,
-        _patterns: &[Term],
-        patterns_rec: Vec<Self::Out>,
+        _pattern: &Term,
+        pattern_rec: Self::Out,
     ) -> Result<Self::Attr, Self::Err> {
-        Ok(patterns_rec.into_iter().sum::<usize>())
+        Ok(pattern_rec)
     }
 
     fn on_eq(

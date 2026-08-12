@@ -257,8 +257,7 @@ impl ActionOnAttribute for UntypedAst {
         _range: Range,
         term: Self::Term,
     ) -> ParsingResult<Self::Attribute> {
-        // Length-1 vec, mirroring `Pattern`; see `Attribute::NoPattern`.
-        Ok(Attribute::NoPattern(vec![term]))
+        Ok(Attribute::NoPattern(term))
     }
 }
 

@@ -348,11 +348,11 @@ pub enum Attribute<Str, T> {
     Named(Str),
     /// Special attribute :pattern (term+)
     Pattern(Vec<T>),
-    /// Special attribute `:no-pattern` — an *anti*-trigger hint whose term must
-    /// not be used as an e-matching trigger. A length-1 `Vec` so it reuses
-    /// `Pattern`'s sub-term recursion. Behind the `no-pattern` feature.
+    /// Special attribute `:no-pattern` — an *anti*-trigger hint whose (single)
+    /// term must not be used as an e-matching trigger. Behind the `no-pattern`
+    /// feature.
     #[cfg(feature = "no-pattern")]
-    NoPattern(Vec<T>),
+    NoPattern(T),
 }
 
 /// Represent sorts in SMTLib
@@ -809,7 +809,7 @@ impl<Str, So, T> Term<Str, So, T> {
                 Box::new(std::iter::once(t).chain(annos.iter().flat_map(|a| match a {
                     Attribute::Pattern(ts) => ts.iter(),
                     #[cfg(feature = "no-pattern")]
-                    Attribute::NoPattern(ts) => ts.iter(),
+                    Attribute::NoPattern(t) => std::slice::from_ref(t).iter(),
                     _ => [].iter(),
                 })))
             }
@@ -1160,11 +1160,7 @@ where
                 fmt_vec_paren(f, ts)
             }
             #[cfg(feature = "no-pattern")]
-            Attribute::NoPattern(ts) => {
-                // `:no-pattern` takes a single term value (not a list).
-                ":no-pattern ".fmt(f)?;
-                fmt_vec(f, ts)
-            }
+            Attribute::NoPattern(t) => write!(f, ":no-pattern {t}"),
         }
     }
 }

@@ -323,13 +323,13 @@ pub trait TermRecursor<Str, So, T> {
         patterns: &[T],
         patterns_rec: Vec<Self::Out>,
     ) -> Result<Self::Attr, Self::Err>;
-    /// Called for a `:no-pattern` attribute after its sub-term(s) have been
-    /// recursed. Only present under the `no-pattern` feature.
+    /// Called for a `:no-pattern` attribute after its (single) sub-term has
+    /// been recursed. Only present under the `no-pattern` feature.
     #[cfg(feature = "no-pattern")]
     fn on_attribute_no_pattern(
         &mut self,
-        patterns: &[T],
-        patterns_rec: Vec<Self::Out>,
+        pattern: &T,
+        pattern_rec: Self::Out,
     ) -> Result<Self::Attr, Self::Err>;
 
     // --- Binary / n-ary connectives ---
@@ -578,13 +578,8 @@ where
                     }
                 }
                 #[cfg(feature = "no-pattern")]
-                Attribute::NoPattern(ts) => {
-                    if ts.is_empty() {
-                        anns_rec.push(recursor.on_attribute_no_pattern(ts, vec![])?);
-                    } else {
-                        break;
-                    }
-                }
+                // `:no-pattern` always carries exactly one term: break to recurse it.
+                Attribute::NoPattern(_) => break,
                 Attribute::Keyword(k) => anns_rec.push(recursor.on_attribute_keyword(k)?),
                 Attribute::Constant(k, c) => anns_rec.push(recursor.on_attribute_constant(k, c)?),
                 Attribute::Symbol(k, s) => anns_rec.push(recursor.on_attribute_symbol(k, s)?),
@@ -781,17 +776,22 @@ where
                     mut cur_pattern_rec,
                 } => {
                     cur_pattern_rec.push(result);
-                    let (pat_ts, is_no_pattern) = match &anns[anns_rec.len()] {
-                        Attribute::Pattern(ts) => (ts, false),
+                    // `:no-pattern` has a single sub-term, viewed as a 1-elem
+                    // slice so it shares the pattern loop below.
+                    let (pat_ts, is_no_pattern): (&[T], bool) = match &anns[anns_rec.len()] {
+                        Attribute::Pattern(ts) => (ts.as_slice(), false),
                         #[cfg(feature = "no-pattern")]
-                        Attribute::NoPattern(ts) => (ts, true),
+                        Attribute::NoPattern(t) => (std::slice::from_ref(t), true),
                         _ => unreachable!(),
                     };
                     let _ = is_no_pattern; // only read under `no-pattern`
                     if cur_pattern_rec.len() >= pat_ts.len() {
                         #[cfg(feature = "no-pattern")]
                         let attr = if is_no_pattern {
-                            recursor.on_attribute_no_pattern(pat_ts, cur_pattern_rec)?
+                            recursor.on_attribute_no_pattern(
+                                &pat_ts[0],
+                                cur_pattern_rec.into_iter().next().unwrap(),
+                            )?
                         } else {
                             recursor.on_attribute_pattern(pat_ts, cur_pattern_rec)?
                         };
@@ -982,7 +982,7 @@ where
             } => match &anns[anns_rec.len()] {
                 Attribute::Pattern(ts) => Ok(&ts[cur_pattern_rec.len()]),
                 #[cfg(feature = "no-pattern")]
-                Attribute::NoPattern(ts) => Ok(&ts[cur_pattern_rec.len()]),
+                Attribute::NoPattern(t) => Ok(t),
                 _ => unreachable!(),
             },
             Frame::Nary { ts, rec, .. } => Ok(&ts[rec.len()]),
