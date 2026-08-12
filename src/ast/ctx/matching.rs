@@ -53,7 +53,10 @@ use std::collections::{HashMap, HashSet};
 /// let h = cons_arm.typed_symbol("h").unwrap();
 /// cons_arm.typed_arm(h).unwrap();
 /// let term = m.typed_matching().unwrap();
-/// assert_eq!(term.to_string(), "(match l ((nil 0) ((cons h t) h)))");
+/// assert_eq!(
+///     term.to_string(),
+///     "(match (as l (List Int)) ((nil 0) ((cons h t) h)))"
+/// );
 /// ```
 pub struct MatchContext<'a, 'b> {
     context: &'a mut Context,

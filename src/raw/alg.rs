@@ -17,7 +17,7 @@
 //! `super::instance`, we show a more memory-efficient version using an interning library.
 
 use crate::statics::*;
-use crate::traits::Contains;
+use crate::traits::{Contains, Repr};
 use dashu::base::Sign;
 use dashu::float::DBig;
 use dashu::integer::UBig;
@@ -1406,13 +1406,21 @@ where
 impl<Str, So, T> Display for Term<Str, So, T>
 where
     Str: Display + StrQuote<String> + SymbolQuote<String>,
-    So: Display,
+    So: Display + Contains,
+    So::T: Repr<T = Sort<Str, So>>,
     T: Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Term::Constant(c, _) => c.fmt(f),
-            Term::Global(id, _) => id.fmt(f),
+            Term::Global(id, sort) => match (&id.1, sort) {
+                // The symbol table is unavailable here, so preserve enough sort information
+                // for nullary parametric constructors to be parsed again.
+                (None, Some(sort)) if !sort.inner().repr().1.is_empty() => {
+                    write!(f, "(as {} {})", id.0, sort)
+                }
+                _ => id.fmt(f),
+            },
             Term::Local(id) => write!(f, "{}", id.symbol.sym_quote()),
             Term::App(id, args, _) => fmt_app(f, id, args),
             Term::Let(vs, body) => fmt_binder(f, "let", vs, body),

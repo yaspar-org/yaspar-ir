@@ -451,7 +451,10 @@ fn test_gsubst_datatype_tester() {
     let is_nil = ctx.typed_simp_app("is-nil", [l.clone()]).unwrap();
 
     let expanded_inplace = is_nil.gsubst(["is-nil"], &mut ctx);
-    assert_eq!(expanded_inplace.to_string(), "((_ is nil) l)");
+    assert_eq!(
+        expanded_inplace.to_string(),
+        "((_ is nil) (as l (List Int)))"
+    );
     expanded_inplace.type_check(&mut ctx).unwrap();
 }
 
@@ -478,7 +481,7 @@ fn test_gsubst_datatype_tester_in_formula() {
     let expanded_inplace = formula.gsubst(["is-nil", "is-cons"], &mut ctx);
     assert_eq!(
         expanded_inplace.to_string(),
-        "(or ((_ is nil) l) ((_ is cons) l))"
+        "(or ((_ is nil) (as l (List Real))) ((_ is cons) (as l (List Real))))"
     );
     expanded_inplace.type_check(&mut ctx).unwrap();
 }
@@ -539,7 +542,7 @@ fn test_gsubst_multiple_datatype_testers() {
     let expanded_inplace = xor.gsubst(["is-none", "is-some"], &mut ctx);
     assert_eq!(
         expanded_inplace.to_string(),
-        "(xor ((_ is none) opt) ((_ is some) opt))"
+        "(xor ((_ is none) (as opt (Option Bool))) ((_ is some) (as opt (Option Bool))))"
     );
     expanded_inplace.type_check(&mut ctx).unwrap();
 }
