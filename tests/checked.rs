@@ -773,3 +773,92 @@ fn test_typed_match_negatives() {
     let bar = context.typed_symbol("bar").unwrap();
     assert!(context.build_matching(bar).is_err());
 }
+
+// Regression tests for the eager overload-error formatting bug: `typed_app`
+// used to render the full application text (via `AppFmt`) into a fallback
+// error string BEFORE trying any signature of an overloaded function. Each
+// application of `+`, `-`, `*`, `<`, `<=`, `>`, `>=` (two signatures each
+// under logic ALL) therefore cost O(term size) time and O(term depth) native
+// stack, making iteratively built terms quadratic overall and crashing with a
+// stack overflow at a few thousand levels of nesting.
+
+/// Builds a deeply left-nested chain `(+ (+ ... (+ x 1) ... 1) 1)` through an
+/// overloaded builtin on a deliberately small thread stack. Before the fix,
+/// the eager error formatting recursed over the whole accumulator on every
+/// application and aborted with a stack overflow at a small fraction of this
+/// depth; after the fix no per-application rendering happens at all.
+#[test]
+fn overloaded_app_deep_chain_no_eager_error_formatting() {
+    let handle = std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let mut context = Context::new();
+            UntypedAst
+                .parse_script_str("(set-logic ALL)\n(declare-const x Int)")
+                .unwrap()
+                .type_check(&mut context)
+                .unwrap();
+            let one = context.integer(IBig::from(1)).unwrap();
+            let mut acc = context.typed_symbol("x").unwrap();
+            for _ in 0..4_000 {
+                acc = context
+                    .typed_simp_app("+", [acc, one.clone()])
+                    .expect("well-sorted overloaded application must succeed");
+            }
+            let int_sort = context.int_sort();
+            assert_eq!(acc.get_sort(&mut context), int_sort);
+        })
+        .unwrap();
+    handle
+        .join()
+        .expect("deep overloaded chain must not overflow the stack");
+}
+
+/// Overload resolution semantics are unchanged: `+` resolves to the Int
+/// signature for Int arguments and the Real signature for Real arguments.
+#[test]
+fn overloaded_app_still_resolves_signatures() {
+    let mut context = Context::new();
+    UntypedAst
+        .parse_script_str("(set-logic ALL)\n(declare-const i Int)\n(declare-const r Real)")
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+
+    let i = context.typed_symbol("i").unwrap();
+    let int_plus = context.typed_simp_app("+", [i.clone(), i]).unwrap();
+    let int_sort = context.int_sort();
+    assert_eq!(int_plus.get_sort(&mut context), int_sort);
+
+    let r = context.typed_symbol("r").unwrap();
+    let real_plus = context.typed_simp_app("+", [r.clone(), r]).unwrap();
+    let real_sort = context.real_sort();
+    assert_eq!(real_plus.get_sort(&mut context), real_sort);
+}
+
+/// When no signature of an overloaded function matches, the error of the last
+/// attempted signature is still returned (same behavior as before the fix).
+/// Under logic ALL, `+` carries the Int signature then the Real signature, so
+/// last-attempt-wins means the Real error text is the one reported.
+#[test]
+fn overloaded_app_failure_still_reports_error() {
+    let mut context = Context::new();
+    UntypedAst
+        .parse_script_str("(set-logic ALL)\n(declare-const p Bool)")
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+
+    let p = context.typed_symbol("p").unwrap();
+    let err = context
+        .typed_simp_app("+", [p.clone(), p])
+        .expect_err("Bool arguments must not type-check against any + signature");
+    assert!(
+        err.contains("expects sort Real"),
+        "expected the LAST attempted signature's (Real) error, got: {err}"
+    );
+    assert!(
+        !err.contains("does not have a case to match"),
+        "the fallback error must not replace the per-signature error: {err}"
+    );
+}

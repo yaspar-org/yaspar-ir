@@ -784,11 +784,9 @@ where
         )
     } else {
         // 4. if the function is overloaded, we try all signatures.
-        let mut tc_res = Err(format!(
-            "TC: overloaded function {f}{id_meta} does not have a case to match its list of arguments! '{print_struct}'",
-        ));
+        let mut tc_res = None;
         for (sig, _) in sigs {
-            tc_res = type_check_with_func_sig(
+            let attempt = type_check_with_func_sig(
                 &print_struct,
                 env,
                 WithMeta::new(&f, id_meta),
@@ -797,10 +795,24 @@ where
                 sig,
                 app_meta,
             );
-            if tc_res.is_ok() {
+            let ok = attempt.is_ok();
+            tc_res = Some(attempt);
+            if ok {
                 break;
             }
         }
-        tc_res
+        // The fallback error is only constructed if no signature matched (or the
+        // signature list was empty -- not constructible through the public API,
+        // but kept as a graceful Err to preserve the previous behavior exactly).
+        // Laziness matters here: rendering
+        // `print_struct` walks the whole application (all argument subtrees), so
+        // building the message eagerly made every overloaded application cost O(term size)
+        // in time and O(term depth) in native stack -- quadratic and prone to
+        // stack overflow for iteratively built terms.
+        tc_res.unwrap_or_else(|| {
+            Err(format!(
+                "TC: overloaded function {f}{id_meta} does not have a case to match its list of arguments! '{print_struct}'",
+            ))
+        })
     }
 }
