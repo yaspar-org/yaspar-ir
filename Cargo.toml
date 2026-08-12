@@ -29,7 +29,7 @@ no-pattern = ["yaspar/no-pattern"]
 regression = ["all", "cvc5"]
 
 [dependencies]
-yaspar = "2.7.1"
+yaspar = "2.7.2"
 sat-interface = { version = "0.1", optional = true }
 cvc5 = { version = "0.4", optional = true }
 dashu = { version = "0.4.2", features = ["serde", "num-traits", "num-order"] }
