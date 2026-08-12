@@ -257,8 +257,8 @@ where
     }
 
     #[cfg(feature = "no-pattern")]
-    fn on_attribute_no_pattern(&mut self, _: &[Term], recs: Vec<Term>) -> Result<Attribute, Bottom> {
-        Ok(Attribute::NoPattern(recs))
+    fn on_attribute_no_pattern(&mut self, _: &Term, rec: Term) -> Result<Attribute, Bottom> {
+        Ok(Attribute::NoPattern(rec))
     }
 
     fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {

@@ -38,9 +38,7 @@ fn parses_no_pattern_attribute() {
 #[test]
 fn no_pattern_term_is_preserved() {
     let cmds = UntypedAst
-        .parse_script_str(
-            "(assert (forall ((x Int)) (! (p x) :no-pattern (f x))))",
-        )
+        .parse_script_str("(assert (forall ((x Int)) (! (p x) :no-pattern (f x))))")
         .expect("parse");
     let printed = format!("{}", cmds[0]);
     assert!(

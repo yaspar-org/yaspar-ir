@@ -226,7 +226,7 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
             fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
             #[cfg(feature = "no-pattern")]
-            fn on_attribute_no_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
+            fn on_attribute_no_pattern(&mut self, pattern: &Term, pattern_rec: Term) -> Result<Attribute, Bottom>;
             fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
             fn on_distinct(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
             fn on_and(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
