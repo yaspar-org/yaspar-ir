@@ -405,7 +405,7 @@ fn back_from_cvc5_api_fset_singleton() {
 
 #[test]
 fn back_from_cvc5_api_fset_union() {
-    assert_back_eq("(set.union a b)", |tm| {
+    assert_back_eq("(set.union (as a (Set Int)) (as b (Set Int)))", |tm| {
         let s = tm.mk_set_sort(tm.integer_sort());
         let a = tm.mk_const(s.clone(), "a");
         let b = tm.mk_const(s, "b");
@@ -415,7 +415,7 @@ fn back_from_cvc5_api_fset_union() {
 
 #[test]
 fn back_from_cvc5_api_fset_inter() {
-    assert_back_eq("(set.inter a b)", |tm| {
+    assert_back_eq("(set.inter (as a (Set Int)) (as b (Set Int)))", |tm| {
         let s = tm.mk_set_sort(tm.integer_sort());
         let a = tm.mk_const(s.clone(), "a");
         let b = tm.mk_const(s, "b");
@@ -425,7 +425,7 @@ fn back_from_cvc5_api_fset_inter() {
 
 #[test]
 fn back_from_cvc5_api_fset_minus() {
-    assert_back_eq("(set.minus a b)", |tm| {
+    assert_back_eq("(set.minus (as a (Set Int)) (as b (Set Int)))", |tm| {
         let s = tm.mk_set_sort(tm.integer_sort());
         let a = tm.mk_const(s.clone(), "a");
         let b = tm.mk_const(s, "b");
@@ -435,7 +435,7 @@ fn back_from_cvc5_api_fset_minus() {
 
 #[test]
 fn back_from_cvc5_api_fset_member() {
-    assert_back_eq("(set.member x a)", |tm| {
+    assert_back_eq("(set.member x (as a (Set Int)))", |tm| {
         let int = tm.integer_sort();
         let s = tm.mk_set_sort(int.clone());
         let x = tm.mk_const(int, "x");
@@ -446,7 +446,7 @@ fn back_from_cvc5_api_fset_member() {
 
 #[test]
 fn back_from_cvc5_api_fset_subset() {
-    assert_back_eq("(set.subset a b)", |tm| {
+    assert_back_eq("(set.subset (as a (Set Int)) (as b (Set Int)))", |tm| {
         let s = tm.mk_set_sort(tm.integer_sort());
         let a = tm.mk_const(s.clone(), "a");
         let b = tm.mk_const(s, "b");
@@ -456,7 +456,7 @@ fn back_from_cvc5_api_fset_subset() {
 
 #[test]
 fn back_from_cvc5_api_fset_card() {
-    assert_back_eq("(set.card a)", |tm| {
+    assert_back_eq("(set.card (as a (Set Int)))", |tm| {
         let s = tm.mk_set_sort(tm.integer_sort());
         let a = tm.mk_const(s, "a");
         tm.mk_term(Kind::SetCard, &[a])
@@ -465,7 +465,7 @@ fn back_from_cvc5_api_fset_card() {
 
 #[test]
 fn back_from_cvc5_api_fset_complement() {
-    assert_back_eq("(set.complement a)", |tm| {
+    assert_back_eq("(set.complement (as a (Set Int)))", |tm| {
         let s = tm.mk_set_sort(tm.integer_sort());
         let a = tm.mk_const(s, "a");
         tm.mk_term(Kind::SetComplement, &[a])
@@ -474,12 +474,15 @@ fn back_from_cvc5_api_fset_complement() {
 
 #[test]
 fn back_from_cvc5_api_fset_nested() {
-    assert_back_eq("(set.union (set.inter a b) c)", |tm| {
-        let s = tm.mk_set_sort(tm.integer_sort());
-        let a = tm.mk_const(s.clone(), "a");
-        let b = tm.mk_const(s.clone(), "b");
-        let c = tm.mk_const(s, "c");
-        let inter = tm.mk_term(Kind::SetInter, &[a, b]);
-        tm.mk_term(Kind::SetUnion, &[inter, c])
-    });
+    assert_back_eq(
+        "(set.union (set.inter (as a (Set Int)) (as b (Set Int))) (as c (Set Int)))",
+        |tm| {
+            let s = tm.mk_set_sort(tm.integer_sort());
+            let a = tm.mk_const(s.clone(), "a");
+            let b = tm.mk_const(s.clone(), "b");
+            let c = tm.mk_const(s, "c");
+            let inter = tm.mk_term(Kind::SetInter, &[a, b]);
+            tm.mk_term(Kind::SetUnion, &[inter, c])
+        },
+    );
 }
