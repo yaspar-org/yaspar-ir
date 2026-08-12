@@ -188,7 +188,7 @@ pub struct WithPattern<'tm> {
 /// Pattern / anti-pattern groups collected from a term's annotations, produced
 /// by the `on_attribute_*` callbacks and merged in `on_annotated`.
 #[derive(Default)]
-struct PatternAttrs<'tm> {
+pub struct PatternAttrs<'tm> {
     /// `:pattern` groups; each becomes an `INST_PATTERN`.
     patterns: Vec<Vec<CTerm<'tm>>>,
     /// `:no-pattern` terms; each becomes an `INST_NO_PATTERN`.
@@ -2175,6 +2175,8 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
         // Build INST_PATTERN_LIST from :pattern (and :no-pattern) annotations.
         // The list holds INST_PATTERN entries and, for anti-triggers,
         // INST_NO_PATTERN entries.
+        // `mut` is used only under `no-pattern` (to push INST_NO_PATTERN entries).
+        #[cfg_attr(not(feature = "no-pattern"), allow(unused_mut))]
         let mut pats: Vec<CTerm<'tm>> = t_rec
             .patterns
             .iter()
