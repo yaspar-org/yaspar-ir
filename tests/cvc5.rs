@@ -2434,7 +2434,7 @@ fn back_from_cvc5_api_uf_application() {
 
 #[test]
 fn back_from_cvc5_api_select_store() {
-    assert_back_eq("(select (store a i v) i)", |tm| {
+    assert_back_eq("(select (store (as a (Array Int Int)) i v) i)", |tm| {
         let int = tm.integer_sort();
         let arr = tm.mk_array_sort(int.clone(), int.clone());
         let a = tm.mk_const(arr, "a");
