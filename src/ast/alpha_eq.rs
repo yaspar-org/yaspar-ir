@@ -24,7 +24,6 @@ use crate::ast::alg::VarBinding;
 use crate::ast::{ATerm, Attribute, Pattern, Sort, Str, Term};
 use crate::traits::Repr;
 use bimap::BiHashMap;
-use std::collections::HashMap;
 
 /// Compare `Self` up to renaming of bound variables.
 pub trait AlphaEquiv {
@@ -51,20 +50,17 @@ struct AEqCtx {
     ///
     /// A bijection: each bound variable on the left corresponds to exactly one on the right.
     local_map: BiHashMap<usize, usize>,
-    l_sort_map: HashMap<usize, Sort>,
 }
 
 impl AEqCtx {
     fn new() -> Self {
         Self {
             local_map: BiHashMap::new(),
-            l_sort_map: Default::default(),
         }
     }
 
-    fn assoc_local(&mut self, id1: usize, id2: usize, sort: Sort) {
+    fn assoc_local(&mut self, id1: usize, id2: usize) {
         self.local_map.insert(id1, id2);
-        self.l_sort_map.insert(id1, sort);
     }
 
     /// Enter a scope in which each `(id1, id2)` pair of bound variables corresponds.
@@ -111,7 +107,7 @@ fn aeq_impl(ctx: &mut AEqCtx, t1: &Term, t2: &Term, permissive: bool) -> bool {
                     if permissive {
                         // in the permissive case, two free local variables in retrospect compare equal
                         ctx.local_map.remove_by_left(&l1.id);
-                        ctx.assoc_local(l1.id, l2.id, l1.sort.clone());
+                        ctx.assoc_local(l1.id, l2.id);
                         true
                     } else {
                         l1.id == l2.id
