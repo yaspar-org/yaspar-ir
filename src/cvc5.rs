@@ -1835,23 +1835,15 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
         _current: &Term,
         _t: &Term,
         _anns: &[Attribute],
-        t_rec: WithPattern<'tm>,
+        mut t_rec: WithPattern<'tm>,
         anns_rec: Vec<PatternAttrs<'tm>>,
     ) -> Res<WithPattern<'tm>> {
-        let mut pats = t_rec.patterns;
-        #[cfg(feature = "no-pattern")]
-        let mut no_pats = t_rec.no_patterns;
         for a in anns_rec {
-            pats.extend(a.patterns);
+            t_rec.patterns.extend(a.patterns);
             #[cfg(feature = "no-pattern")]
-            no_pats.extend(a.no_patterns);
+            t_rec.no_patterns.extend(a.no_patterns);
         }
-        Ok(WithPattern {
-            term: t_rec.term,
-            patterns: pats,
-            #[cfg(feature = "no-pattern")]
-            no_patterns: no_pats,
-        })
+        Ok(t_rec)
     }
     fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<PatternAttrs<'tm>> {
         Ok(PatternAttrs::default())
@@ -1877,7 +1869,8 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
     ) -> Res<PatternAttrs<'tm>> {
         Ok(PatternAttrs {
             patterns: vec![to_term_vec(patterns_rec)],
-            ..Default::default()
+            #[cfg(feature = "no-pattern")]
+            no_patterns: vec![],
         })
     }
 
@@ -1887,8 +1880,6 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
         _pattern: &Term,
         pattern_rec: WithPattern<'tm>,
     ) -> Res<PatternAttrs<'tm>> {
-        // Preserve the anti-trigger term; emitted as an INST_NO_PATTERN on the
-        // quantifier in `translate_quantifier_body`.
         Ok(PatternAttrs {
             no_patterns: vec![pattern_rec.term],
             ..Default::default()
@@ -2176,18 +2167,13 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
         // The list holds INST_PATTERN entries and, for anti-triggers,
         // INST_NO_PATTERN entries.
         // `mut` is used only under `no-pattern` (to push INST_NO_PATTERN entries).
-        #[cfg_attr(not(feature = "no-pattern"), allow(unused_mut))]
-        let mut pats: Vec<CTerm<'tm>> = t_rec
-            .patterns
-            .iter()
-            .filter_map(|ts| {
-                if ts.is_empty() {
-                    None
-                } else {
-                    Some(self.tm.mk_term(Kind::InstPattern, ts))
-                }
-            })
-            .collect();
+        let mut pats: Vec<CTerm<'tm>> = Vec::with_capacity(t_rec.patterns.len());
+        for ts in &t_rec.patterns {
+            // An empty `:pattern ()` group carries no trigger; cvc5 rejects an empty INST_PATTERN.
+            if !ts.is_empty() {
+                pats.push(self.tm.mk_term(Kind::InstPattern, ts));
+            }
+        }
         #[cfg(feature = "no-pattern")]
         for t in &t_rec.no_patterns {
             pats.push(
