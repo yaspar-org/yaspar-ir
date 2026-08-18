@@ -382,6 +382,7 @@ impl<E> TypedTermRecursor for RenameEnv<'_, E> where E: HasArena {}
 mod tests {
     use super::*;
     use crate::allocator::{LocalVarAllocator, ObjectAllocatorExt, StrAllocator};
+    use crate::ast::fv::is_closed;
     use crate::ast::{ATerm, AlphaEquiv, CheckedApi, Context, Typecheck};
     use crate::traits::Repr;
     use crate::untyped::UntypedAst;
@@ -688,5 +689,147 @@ mod tests {
         let renamed = t.alpha_rename(&mut ctx);
         let reparsed = parse(&mut ctx, &renamed.to_string());
         assert_eq!(reparsed.to_string(), renamed.to_string());
+    }
+
+    // --- Closed terms and alpha equivalence ---
+    //
+    // Strict `aeq` requires free local variables to be literally the same variable on both sides,
+    // so it is only a meaningful check against a *reparsed* term when the term is closed: parsing
+    // mints new ids, and a free variable would come back as a different variable. Every fixture
+    // below is asserted closed for that reason.
+
+    /// Closed terms covering each kind of binder, plus the shapes renaming has to get right.
+    fn closed_terms() -> Vec<&'static str> {
+        #[allow(unused_mut)]
+        let mut terms = vec![
+            // one binder of each kind, nothing to resolve
+            "(forall ((x Int)) (p x))",
+            "(exists ((x Int)) (p x))",
+            "(forall ((x Int) (y Int)) (q x y))",
+            "(let ((x n)) (p x))",
+            "(match pr (((mk-pair a b) (q a b))))",
+            "(match c ((red true) (green false)))",
+            // globals and constants are not local variables, so these are still closed
+            "(forall ((x Int)) (q x n))",
+            "(forall ((n Int)) (p n))",
+            // shadowing, the case renaming exists for
+            "(forall ((x Int)) (exists ((x Int)) (p x)))",
+            "(forall ((x Int)) (exists ((x Int)) (forall ((x Int)) (p x))))",
+            "(forall ((x Int)) (and (forall ((x Int)) (p x)) (p x)))",
+            // sibling scopes reusing a name
+            "(and (forall ((x Int)) (p x)) (forall ((x Int)) (p x)))",
+            // parallel `let`: the inner `y` is bound to the outer `x`
+            "(let ((x n)) (let ((x 1) (y x)) (q x y)))",
+            // a pattern variable clashing with an enclosing binder
+            "(forall ((a Int)) (and (p a) (match pr (((mk-pair a b) (q a b))))))",
+            // a named wildcard clashing with an enclosing binder
+            "(forall ((w Int)) (and (p w) (match c ((red true) (w (p 1))))))",
+            // `:pattern` terms carry variables too
+            "(forall ((x Int)) (! (p x) :pattern ((p x))))",
+            "(forall ((x Int)) (exists ((x Int)) (! (p x) :pattern ((p x)))))",
+            // already-suffixed names, which the prefix logic has to handle
+            "(forall ((|x-0| Int)) (exists ((|x-0| Int)) (p |x-0|)))",
+            "(forall ((|my-var| Int)) (exists ((|my-var| Int)) (p |my-var|)))",
+        ];
+        // `:no-pattern` carries a single term, whose variables must be re-labelled like `:pattern`
+        #[cfg(feature = "no-pattern")]
+        terms.extend([
+            "(forall ((x Int)) (! (p x) :no-pattern (p x)))",
+            "(forall ((x Int)) (exists ((x Int)) (! (p x) :no-pattern (p x))))",
+            "(forall ((x Int)) (! (p x) :pattern ((p x)) :no-pattern (p x)))",
+        ]);
+        terms
+    }
+
+    /// Renaming a closed term produces an alpha equivalent term: only the labels move.
+    #[test]
+    fn test_rename_closed_term_is_alpha_eq() {
+        for s in closed_terms() {
+            let mut ctx = setup();
+            let t = parse(&mut ctx, s);
+            assert!(is_closed(&t), "fixture must be closed: {s}");
+            let renamed = t.alpha_rename(&mut ctx);
+            assert!(is_closed(&renamed), "renaming must not free a variable: {s}");
+            assert!(renamed.aeq(&t), "renaming must be alpha preserving: {s}");
+        }
+    }
+
+    /// A renamed closed term survives a print/parse round-trip up to alpha equivalence.
+    ///
+    /// This is what renaming buys: reparsing mints new ids and re-resolves every name by lexical
+    /// scoping, so the result can only match the original when no binder is shadowed.
+    #[test]
+    fn test_rename_closed_term_roundtrips_alpha_eq() {
+        for s in closed_terms() {
+            let mut ctx = setup();
+            let t = parse(&mut ctx, s);
+            assert!(is_closed(&t), "fixture must be closed: {s}");
+            let renamed = t.alpha_rename(&mut ctx);
+            let reparsed = parse(&mut ctx, &renamed.to_string());
+            assert!(
+                reparsed.aeq(&t),
+                "renamed term must reparse to an alpha equivalent term: {s}\n  \
+                 renamed:  {renamed}\n  reparsed: {reparsed}"
+            );
+        }
+    }
+
+    /// Renaming a closed term twice still gives an alpha equivalent term, even though each pass
+    /// picks new labels.
+    #[test]
+    fn test_repeated_rename_of_closed_term_stays_alpha_eq() {
+        for s in closed_terms() {
+            let mut ctx = setup();
+            let t = parse(&mut ctx, s);
+            let once = t.alpha_rename(&mut ctx);
+            let twice = once.alpha_rename(&mut ctx);
+            assert!(twice.aeq(&once), "second pass must stay alpha equivalent: {s}");
+            assert!(twice.aeq(&t), "and equivalent to the original: {s}");
+        }
+    }
+
+    /// A closed term whose printed form is *ambiguous* does not round-trip, but its renamed form
+    /// does — the concrete reason the pass exists.
+    ///
+    /// The body of the `exists` refers to the *outer* `x`, so printing loses that: reparsing binds
+    /// the printed `x` to the inner binder instead. Renaming separates the two names first.
+    #[test]
+    fn test_rename_repairs_ambiguous_closed_term() {
+        let mut ctx = setup();
+        let int = ctx.int_sort();
+        // build `(forall ((x Int)) (exists ((x Int)) (p x)))` where `(p x)` is the *outer* `x`.
+        // the parser cannot produce this, but the unchecked API can, and the ids keep it
+        // well-formed
+        let outer_id = ctx.new_local();
+        let inner_id = ctx.new_local();
+        let x = ctx.allocate_symbol("x");
+        let outer = VarBinding(x.clone(), outer_id, int.clone());
+        let inner = VarBinding(x, inner_id, int);
+        let outer_occurrence = ctx.local(Local::from(outer.clone()));
+        let body = ctx.typed_simp_app("p", [outer_occurrence]).unwrap();
+        let inner_term = ctx.exists(vec![inner], body);
+        let t = ctx.forall(vec![outer], inner_term);
+        assert!(is_closed(&t), "both binders are in scope, so the term is closed");
+        assert_eq!(t.to_string(), "(forall ((x Int)) (exists ((x Int)) (p x)))");
+
+        // printed as it is, the inner binder captures the occurrence: not alpha equivalent
+        let reparsed = parse(&mut ctx, &t.to_string());
+        assert!(
+            !reparsed.aeq(&t),
+            "the shadowed binder should capture the occurrence on reparse"
+        );
+
+        // after renaming, the two binders differ and the occurrence survives the round-trip
+        let renamed = t.alpha_rename(&mut ctx);
+        assert_eq!(
+            renamed.to_string(),
+            "(forall ((x-0 Int)) (exists ((x-1 Int)) (p x-0)))"
+        );
+        assert!(renamed.aeq(&t), "renaming must be alpha preserving");
+        let reparsed = parse(&mut ctx, &renamed.to_string());
+        assert!(
+            reparsed.aeq(&t),
+            "the renamed term must reparse to an alpha equivalent term"
+        );
     }
 }
