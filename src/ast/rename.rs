@@ -749,7 +749,10 @@ mod tests {
             let t = parse(&mut ctx, s);
             assert!(is_closed(&t), "fixture must be closed: {s}");
             let renamed = t.alpha_rename(&mut ctx);
-            assert!(is_closed(&renamed), "renaming must not free a variable: {s}");
+            assert!(
+                is_closed(&renamed),
+                "renaming must not free a variable: {s}"
+            );
             assert!(renamed.aeq(&t), "renaming must be alpha preserving: {s}");
         }
     }
@@ -783,7 +786,10 @@ mod tests {
             let t = parse(&mut ctx, s);
             let once = t.alpha_rename(&mut ctx);
             let twice = once.alpha_rename(&mut ctx);
-            assert!(twice.aeq(&once), "second pass must stay alpha equivalent: {s}");
+            assert!(
+                twice.aeq(&once),
+                "second pass must stay alpha equivalent: {s}"
+            );
             assert!(twice.aeq(&t), "and equivalent to the original: {s}");
         }
     }
@@ -809,7 +815,10 @@ mod tests {
         let body = ctx.typed_simp_app("p", [outer_occurrence]).unwrap();
         let inner_term = ctx.exists(vec![inner], body);
         let t = ctx.forall(vec![outer], inner_term);
-        assert!(is_closed(&t), "both binders are in scope, so the term is closed");
+        assert!(
+            is_closed(&t),
+            "both binders are in scope, so the term is closed"
+        );
         assert_eq!(t.to_string(), "(forall ((x Int)) (exists ((x Int)) (p x)))");
 
         // printed as it is, the inner binder captures the occurrence: not alpha equivalent
