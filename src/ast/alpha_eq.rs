@@ -281,10 +281,12 @@ fn aeq_pattern(p1: &Pattern, p2: &Pattern) -> Option<Vec<(usize, usize)>> {
     }
 }
 
-/// Compare two attributes, recursing into `:pattern` since it carries terms.
+/// Compare two attributes, recursing into `:pattern` and `:no-pattern` since they carry terms.
 fn aeq_attribute(ctx: &mut AEqCtx, a1: &Attribute, a2: &Attribute, permissive: bool) -> bool {
     match (a1, a2) {
         (Attribute::Pattern(ts1), Attribute::Pattern(ts2)) => aeq_terms(ctx, ts1, ts2, permissive),
+        #[cfg(feature = "no-pattern")]
+        (Attribute::NoPattern(t1), Attribute::NoPattern(t2)) => aeq_impl(ctx, t1, t2, permissive),
         // the remaining attributes hold no terms, so syntactic equality is exact
         _ => a1 == a2,
     }
@@ -517,6 +519,31 @@ mod tests {
         assert_not_aeq("(! (p n) :named foo)", "(! (p n) :named bar)");
         // an annotation is not transparent
         assert_not_aeq("(! (p n) :named foo)", "(p n)");
+    }
+
+    /// `:no-pattern` carries a term as well, so its variables must correspond like any other.
+    #[cfg(feature = "no-pattern")]
+    #[test]
+    fn test_aeq_no_pattern() {
+        assert_aeq(
+            "(forall ((x Int)) (! (p x) :no-pattern (p x)))",
+            "(forall ((y Int)) (! (p y) :no-pattern (p y)))",
+        );
+        // the anti-trigger has to correspond too: here it is the global `n` on one side
+        assert_not_aeq(
+            "(forall ((x Int)) (! (p x) :no-pattern (p x)))",
+            "(forall ((y Int)) (! (p y) :no-pattern (p n)))",
+        );
+        // `:pattern` and `:no-pattern` mean opposite things, so they never match
+        assert_not_aeq(
+            "(forall ((x Int)) (! (p x) :pattern ((p x))))",
+            "(forall ((y Int)) (! (p y) :no-pattern (p y)))",
+        );
+        // both attributes together, as Dafny/Boogie emit them
+        assert_aeq(
+            "(forall ((x Int)) (! (p x) :pattern ((p x)) :no-pattern (p x)))",
+            "(forall ((y Int)) (! (p y) :pattern ((p y)) :no-pattern (p y)))",
+        );
     }
 
     /// Build `(p v)` and `v` itself, where `v` is a local variable of sort `Int` that is *free*
