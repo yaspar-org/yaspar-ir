@@ -9,17 +9,22 @@
 //! prints ambiguously, and printing it out then re-parsing it does not round-trip to the same
 //! term, because the inner `x` shadows the outer one.
 //!
-//! [`AlphaRename::alpha_rename`] resolves exactly those collisions. The traversal remembers every
-//! name it has already bound, and renames a binder only when its name is one of them; a name seen
-//! for the first time is kept as it is. So `(forall ((x Int)) (p x))` is returned unchanged, while
-//! the inner binder of `(forall ((x Int)) (exists ((x Int)) (p x)))` is renamed. This keeps the
-//! output as close to the input as possible, which matters because these terms are read by people.
+//! [`AlphaRename::alpha_rename`] gives *every* binder a freshly minted name, whether or not its
+//! own name collided. So `(forall ((x Int)) (exists ((x Int)) (p x)))` becomes
+//! `(forall ((x-0 Int)) (exists ((x-1 Int)) (p x-1)))`, and `(forall ((x Int)) (p x))` becomes
+//! `(forall ((x-0 Int)) (p x-0))` even though it had nothing to resolve. Names come from the
+//! arena's fresh-variable supply, so they cannot collide with anything the arena has seen —
+//! including globals and free variables — at the cost of relabelling binders that were already
+//! unambiguous.
 //!
 //! Ids are left untouched: only the [`Str`] labels change, so the result is alpha equivalent to
 //! the input by construction.
 //!
-//! A replacement name keeps the original as its prefix, so a clashing `x` becomes `x-0`. Any `-N`
-//! trailer is stripped first, so a clashing `x-0` becomes `x-1` rather than `x-0-1`.
+//! A new name keeps the original as its prefix, so `x` becomes `x-0`. Any `-N` trailer is stripped
+//! first, so `x-0` becomes `x-1` rather than `x-0-1`.
+//!
+//! Renaming is therefore not idempotent: a second pass mints another round of names. The result is
+//! still alpha equivalent and still clash free, it is just not the same term.
 //!
 //! Free local variables are left alone: they are bound by some enclosing structure that this
 //! traversal cannot see, so renaming them would change what the term means.
@@ -64,9 +69,8 @@ struct RenameEnv<'a, E> {
     name_map: Vec<HashMap<usize, Str>>,
     /// Every name bound so far anywhere in the traversal.
     ///
-    /// A binder whose name is already in here clashes with an earlier one and must be renamed;
-    /// any other name is kept. Names are never removed when a scope ends, since a later sibling
-    /// scope reusing the name would still print ambiguously against the earlier one.
+    /// Names are never removed when a scope ends, since a later sibling scope reusing a name would
+    /// still print ambiguously against the earlier one.
     seen: HashSet<Str>,
     /// Sub-term results already computed, so a shared sub-term is renamed once.
     cache: HashMap<Term, Term>,
@@ -108,14 +112,9 @@ where
 
     /// Decide the name a newly bound variable should carry, and record it as seen.
     ///
-    /// The original name is kept unless it clashes with a name bound earlier in the traversal,
-    /// in which case a fresh one is minted.
+    /// A fresh name is always minted, so no binder keeps the name it came in with.
     fn bind_name(&mut self, name: &Str) -> Str {
-        let chosen = if self.seen.contains(name) {
-            self.fresh_name(name)
-        } else {
-            name.clone()
-        };
+        let chosen = self.fresh_name(name);
         self.seen.insert(chosen.clone());
         chosen
     }
@@ -202,6 +201,8 @@ where
             fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
+            #[cfg(feature = "no-pattern")]
+            fn on_attribute_no_pattern(&mut self, pattern: &Term, pattern_rec: Term) -> Result<Attribute, Bottom>;
             fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
             fn on_distinct(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
             fn on_and(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
@@ -218,7 +219,7 @@ where
     /// A variable with no binder in scope is free, and so is left as it is.
     fn on_local(&mut self, current: &Term, id: &Local) -> Result<Term, Bottom> {
         match self.lookup(id.id) {
-            // its binder kept the name, so the variable is already correct
+            // the name already matches, so there is nothing to rebuild
             Some(symbol) if symbol == id.symbol => Ok(current.clone()),
             Some(symbol) => {
                 let local = Local {
@@ -381,7 +382,7 @@ impl<E> TypedTermRecursor for RenameEnv<'_, E> where E: HasArena {}
 mod tests {
     use super::*;
     use crate::allocator::{LocalVarAllocator, ObjectAllocatorExt, StrAllocator};
-    use crate::ast::{ATerm, CheckedApi, Context, Typecheck};
+    use crate::ast::{ATerm, AlphaEquiv, CheckedApi, Context, Typecheck};
     use crate::traits::Repr;
     use crate::untyped::UntypedAst;
 
@@ -414,70 +415,90 @@ mod tests {
             .unwrap()
     }
 
-    /// Rename `s` and assert it prints as `expected`.
+    /// Rename `s` and assert it prints as `expected`, and that renaming preserved its meaning.
     fn assert_renames_to(s: &str, expected: &str) {
         let mut ctx = setup();
         let t = parse(&mut ctx, s);
         let renamed = t.alpha_rename(&mut ctx);
         assert_eq!(renamed.to_string(), expected);
+        assert!(renamed.aeq(&t), "renaming must be alpha preserving");
     }
 
-    /// Assert `s` needs no renaming, and that the very same term is returned.
+    /// Assert `s` binds nothing, so there is nothing to rename and the very same term comes back.
     fn assert_unchanged(s: &str) {
         let mut ctx = setup();
         let t = parse(&mut ctx, s);
         let renamed = t.alpha_rename(&mut ctx);
         assert_eq!(renamed.to_string(), t.to_string());
         // nothing was rebuilt, so hashconsing is preserved
-        assert_eq!(renamed, t, "a collision-free term should come back as-is");
+        assert_eq!(renamed, t, "a term with no binder should come back as-is");
     }
 
-    /// A term whose binders already have distinct names is left completely alone.
+    /// Every binder gets a freshly minted name, whether or not its own name clashed.
     #[test]
-    fn test_no_rename_without_clash() {
-        assert_unchanged("(forall ((x Int)) (p x))");
-        assert_unchanged("(exists ((x Int)) (p x))");
-        assert_unchanged("(forall ((x Int) (y Int)) (q x y))");
-        assert_unchanged("(let ((x n)) (p x))");
-        assert_unchanged("(forall ((x Int)) (exists ((y Int)) (q x y)))");
-        assert_unchanged("(match pr (((mk-pair a b) (q a b))))");
-        assert_unchanged("(match c ((red true) (green false)))");
-        assert_unchanged("(forall ((x Int)) (! (p x) :pattern ((p x))))");
+    fn test_every_binder_is_renamed() {
+        assert_renames_to("(forall ((x Int)) (p x))", "(forall ((x-0 Int)) (p x-0))");
+        assert_renames_to("(exists ((x Int)) (p x))", "(exists ((x-0 Int)) (p x-0))");
+        assert_renames_to(
+            "(forall ((x Int) (y Int)) (q x y))",
+            "(forall ((x-0 Int) (y-0 Int)) (q x-0 y-0))",
+        );
+        assert_renames_to("(let ((x n)) (p x))", "(let ((x-0 n)) (p x-0))");
+        assert_renames_to(
+            "(forall ((x Int)) (exists ((y Int)) (q x y)))",
+            "(forall ((x-0 Int)) (exists ((y-0 Int)) (q x-0 y-0)))",
+        );
+        assert_renames_to(
+            "(match pr (((mk-pair a b) (q a b))))",
+            "(match pr (((mk-pair a-0 b-0) (q a-0 b-0))))",
+        );
+        assert_renames_to(
+            "(forall ((x Int)) (! (p x) :pattern ((p x))))",
+            "(forall ((x-0 Int)) (! (p x-0) :pattern ((p x-0))))",
+        );
     }
 
-    /// Only the clashing binder is renamed; the first occurrence keeps its name.
+    /// A term that binds nothing has nothing to rename, and is returned as it is.
+    #[test]
+    fn test_no_binder_no_rename() {
+        assert_unchanged("(p n)");
+        // constructor-only patterns bind no variable
+        assert_unchanged("(match c ((red true) (green false)))");
+    }
+
+    /// Shadowing binders end up with distinct names, and each variable follows its own binder.
     #[test]
     fn test_rename_shadowing() {
         assert_renames_to(
             "(forall ((x Int)) (exists ((x Int)) (p x)))",
-            "(forall ((x Int)) (exists ((x-0 Int)) (p x-0)))",
+            "(forall ((x-0 Int)) (exists ((x-1 Int)) (p x-1)))",
         );
         assert_renames_to(
             "(forall ((x Int)) (and (forall ((x Int)) (p x)) (p x)))",
-            "(forall ((x Int)) (and (forall ((x-0 Int)) (p x-0)) (p x)))",
+            "(forall ((x-0 Int)) (and (forall ((x-1 Int)) (p x-1)) (p x-0)))",
         );
     }
 
-    /// Three levels deep, each clash resolves against everything already bound.
+    /// Three levels deep, each binder gets its own name.
     #[test]
     fn test_rename_nested_shadowing() {
         assert_renames_to(
             "(forall ((x Int)) (exists ((x Int)) (forall ((x Int)) (p x))))",
-            "(forall ((x Int)) (exists ((x-0 Int)) (forall ((x-1 Int)) (p x-1))))",
+            "(forall ((x-0 Int)) (exists ((x-1 Int)) (forall ((x-2 Int)) (p x-2))))",
         );
     }
 
     /// Sibling scopes are disjoint, but reusing a name across them would still print ambiguously,
-    /// so the later one is renamed too.
+    /// so they are separated too.
     #[test]
     fn test_rename_sibling_scopes() {
         assert_renames_to(
             "(and (forall ((x Int)) (p x)) (forall ((x Int)) (p x)))",
-            "(and (forall ((x Int)) (p x)) (forall ((x-0 Int)) (p x-0)))",
+            "(and (forall ((x-0 Int)) (p x-0)) (forall ((x-1 Int)) (p x-1)))",
         );
     }
 
-    /// A clash within a single binder list is resolved too.
+    /// Two binders in a single binder list are separated as well.
     #[test]
     fn test_rename_clash_in_one_binder_list() {
         let mut ctx = setup();
@@ -498,44 +519,48 @@ mod tests {
         let renamed = t.alpha_rename(&mut ctx);
         assert_eq!(
             renamed.to_string(),
-            "(forall ((x Int) (x-0 Int)) (q x x-0))"
+            "(forall ((x-0 Int) (x-1 Int)) (q x-0 x-1))"
         );
     }
 
-    /// Free variables and globals are untouched.
+    /// Free variables and globals are untouched; only binders and their own variables move.
     #[test]
     fn test_rename_leaves_free_and_global_alone() {
         assert_unchanged("(p n)");
-        assert_unchanged("(forall ((x Int)) (q x n))");
+        assert_renames_to(
+            "(forall ((x Int)) (q x n))",
+            "(forall ((x-0 Int)) (q x-0 n))",
+        );
     }
 
-    /// A bound name colliding with a *global* is left alone: only bound names are tracked, and
-    /// SMTLib scoping already lets a binder shadow a global.
+    /// A bound name is renamed even when it collides with a *global*, and the fresh name never
+    /// captures a name the arena already knows.
     #[test]
     fn test_rename_ignores_global_names() {
-        assert_unchanged("(forall ((n Int)) (p n))");
+        assert_renames_to("(forall ((n Int)) (p n))", "(forall ((n-0 Int)) (p n-0))");
     }
 
     /// `let` binds in parallel: a right-hand side sees the enclosing scope, not the new bindings.
+    /// Here the inner `y`'s right-hand side is the *outer* `x`, so it follows the outer binder.
     #[test]
     fn test_rename_let_is_parallel() {
         assert_renames_to(
             "(let ((x n)) (let ((x 1) (y x)) (q x y)))",
-            "(let ((x n)) (let ((x-0 1) (y x)) (q x-0 y)))",
+            "(let ((x-0 n)) (let ((x-1 1) (y-1 x-0)) (q x-1 y-1)))",
         );
     }
 
     #[test]
     fn test_rename_match() {
-        // the pattern variable clashes with the enclosing binder
+        // the pattern variable and the enclosing binder end up with distinct names
         assert_renames_to(
             "(forall ((a Int)) (and (p a) (match pr (((mk-pair a b) (q a b))))))",
-            "(forall ((a Int)) (and (p a) (match pr (((mk-pair a-0 b) (q a-0 b))))))",
+            "(forall ((a-0 Int)) (and (p a-0) (match pr (((mk-pair a-1 b-1) (q a-1 b-1))))))",
         );
-        // a named wildcard binds one variable, and is renamed on a clash
+        // a named wildcard binds one variable, and is renamed like any other binder
         assert_renames_to(
             "(forall ((w Int)) (and (p w) (match c ((red true) (w (p 1))))))",
-            "(forall ((w Int)) (and (p w) (match c ((red true) (w-0 (p 1))))))",
+            "(forall ((w-0 Int)) (and (p w-0) (match c ((red true) (w-1 (p 1))))))",
         );
     }
 
@@ -544,33 +569,36 @@ mod tests {
     fn test_rename_annotated() {
         assert_renames_to(
             "(forall ((x Int)) (exists ((x Int)) (! (p x) :pattern ((p x)))))",
-            "(forall ((x Int)) (exists ((x-0 Int)) (! (p x-0) :pattern ((p x-0)))))",
+            "(forall ((x-0 Int)) (exists ((x-1 Int)) (! (p x-1) :pattern ((p x-1)))))",
         );
     }
 
-    /// Renaming is idempotent: a renamed term has no clashes left, so a second pass is a no-op.
+    /// Renaming is *not* idempotent: every pass mints new names, so a second pass relabels again.
+    /// The result stays alpha equivalent and clash free, it is just not the same term.
     #[test]
-    fn test_rename_is_idempotent() {
+    fn test_rename_twice_mints_new_names() {
         let mut ctx = setup();
         let t = parse(&mut ctx, "(forall ((x Int)) (exists ((x Int)) (p x)))");
         let once = t.alpha_rename(&mut ctx);
         assert_eq!(
             once.to_string(),
-            "(forall ((x Int)) (exists ((x-0 Int)) (p x-0)))"
+            "(forall ((x-0 Int)) (exists ((x-1 Int)) (p x-1)))"
         );
         let twice = once.alpha_rename(&mut ctx);
         assert_eq!(
-            twice, once,
-            "renaming an already-renamed term changes nothing"
+            twice.to_string(),
+            "(forall ((x-2 Int)) (exists ((x-3 Int)) (p x-3)))"
         );
+        assert_ne!(twice, once, "a second pass picks new names");
+        assert!(twice.aeq(&once), "but only the labels change");
     }
 
-    /// A replacement name strips any `-N` trailer, so suffixes do not accumulate.
+    /// A fresh name strips any `-N` trailer, so suffixes do not accumulate.
     #[test]
     fn test_rename_strips_numeric_trailer() {
         assert_renames_to(
             "(forall ((|x-0| Int)) (exists ((|x-0| Int)) (p |x-0|)))",
-            "(forall ((x-0 Int)) (exists ((x-1 Int)) (p x-1)))",
+            "(forall ((x-1 Int)) (exists ((x-2 Int)) (p x-2)))",
         );
     }
 
@@ -579,7 +607,7 @@ mod tests {
     fn test_rename_prefix_with_dash() {
         assert_renames_to(
             "(forall ((|my-var| Int)) (exists ((|my-var| Int)) (p |my-var|)))",
-            "(forall ((my-var Int)) (exists ((my-var-0 Int)) (p my-var-0)))",
+            "(forall ((my-var-0 Int)) (exists ((my-var-1 Int)) (p my-var-1)))",
         );
     }
 
@@ -593,19 +621,19 @@ mod tests {
             panic!("expected foralls")
         };
         assert_eq!(vs1[0].1, vs2[0].1, "the outer binder keeps its id");
-        assert_eq!(vs1[0].0, vs2[0].0, "and, having no clash, its name");
+        assert_ne!(vs1[0].0, vs2[0].0, "but gets a new name");
 
         let (ATerm::Exists(is1, _), ATerm::Exists(is2, _)) = (b1.repr(), b2.repr()) else {
             panic!("expected exists")
         };
         assert_eq!(is1[0].1, is2[0].1, "the inner binder keeps its id");
-        assert_ne!(is1[0].0, is2[0].0, "but gets a new name");
+        assert_ne!(is1[0].0, is2[0].0, "and a new name too");
     }
 
     /// A shared sub-term is renamed once and the result reused, so the sharing survives.
     ///
     /// The two occurrences are the same hashconsed term, hence the same binder, and each sits in
-    /// its own scope — so one name is unambiguous and no rename is needed.
+    /// its own scope — so one name is unambiguous and the cached result serves both.
     #[test]
     fn test_rename_shared_subterm_stays_shared() {
         let mut ctx = setup();
@@ -614,18 +642,22 @@ mod tests {
         let renamed = t.alpha_rename(&mut ctx);
         assert_eq!(
             renamed.to_string(),
-            "(and (forall ((x Int)) (p x)) (forall ((x Int)) (p x)))"
+            "(and (forall ((x-0 Int)) (p x-0)) (forall ((x-0 Int)) (p x-0)))"
         );
-        // the cache returns the identical term for both, so nothing was rebuilt
-        assert_eq!(renamed, t);
+        // the cache returns the identical term for both conjuncts, so the sharing is intact
+        let ATerm::And(ts) = renamed.repr() else {
+            panic!("expected an and")
+        };
+        assert_eq!(ts[0], ts[1], "both conjuncts are the same renamed term");
 
-        // distinct binders that merely share a name are still separated
+        // distinct binders that merely share a name are still separated. the suffixes start at 1
+        // because the rename above already took `x-0` out of this context's name supply
         let other = parse(&mut ctx, "(forall ((x Int)) (p x))");
         assert_ne!(other, inner, "separately parsed binders have distinct ids");
         let t = ctx.and(vec![inner, other]);
         assert_eq!(
             t.alpha_rename(&mut ctx).to_string(),
-            "(and (forall ((x Int)) (p x)) (forall ((x-0 Int)) (p x-0)))"
+            "(and (forall ((x-1 Int)) (p x-1)) (forall ((x-2 Int)) (p x-2)))"
         );
     }
 
@@ -642,9 +674,8 @@ mod tests {
         // the clashing binders are separated; the shared sub-term keeps one name throughout
         assert_eq!(
             renamed.to_string(),
-            "(and (forall ((x Int)) (exists ((x-0 Int)) true)) \
-(and (forall ((y Int)) (p y)) (forall ((y Int)) (p y))))"
-                .replace(" \\\n", " ")
+            "(and (forall ((x-0 Int)) (exists ((x-1 Int)) true)) \
+             (and (forall ((y-1 Int)) (p y-1)) (forall ((y-1 Int)) (p y-1))))"
         );
     }
 
