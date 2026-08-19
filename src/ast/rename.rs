@@ -38,7 +38,7 @@ use crate::ast::{
 use crate::containers::Mapping;
 use crate::raw::alg::rec_memo::{MemoizedRecursion, Memoizing};
 use delegate::delegate;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use yaspar::ast::Keyword;
 
 /// Rename bound variables in `Self` so that no two binders share a name.
@@ -67,11 +67,6 @@ struct RenameEnv<'a, E> {
     /// Each frame corresponds to one `let`, quantifier, or match arm. A lookup that misses means
     /// the variable is free, and so is left unrenamed.
     name_map: Vec<HashMap<usize, Str>>,
-    /// Every name bound so far anywhere in the traversal.
-    ///
-    /// Names are never removed when a scope ends, since a later sibling scope reusing a name would
-    /// still print ambiguously against the earlier one.
-    seen: HashSet<Str>,
     /// Sub-term results already computed, so a shared sub-term is renamed once.
     cache: HashMap<Term, Term>,
 }
@@ -99,24 +94,16 @@ where
         Self {
             env: TypedBuilder::new(env),
             name_map: Vec::new(),
-            seen: HashSet::new(),
             cache: HashMap::new(),
         }
     }
 
-    /// Mint a fresh name for `name`, keeping it as the prefix.
+    /// Mint the name a newly bound variable should carry, keeping the original as its prefix.
+    ///
+    /// A fresh name is always minted, so no binder keeps the name it came in with.
     fn fresh_name(&mut self, name: &Str) -> Str {
         let prefix = find_prefix(name);
         self.env.fresh_var(prefix)
-    }
-
-    /// Decide the name a newly bound variable should carry, and record it as seen.
-    ///
-    /// A fresh name is always minted, so no binder keeps the name it came in with.
-    fn bind_name(&mut self, name: &Str) -> Str {
-        let chosen = self.fresh_name(name);
-        self.seen.insert(chosen.clone());
-        chosen
     }
 
     /// Look up the name chosen for the variable `id`, innermost scope first.
@@ -129,7 +116,7 @@ where
         let frame = ids
             .into_iter()
             .map(|(id, name)| {
-                let chosen = self.bind_name(&name);
+                let chosen = self.fresh_name(&name);
                 (id, chosen)
             })
             .collect();
@@ -167,7 +154,7 @@ where
         vs.iter()
             .map(|VarBinding(name, id, sort)| {
                 VarBinding(
-                    frame.get(id).cloned().unwrap_or(name.clone()),
+                    frame.get(id).cloned().unwrap_or_else(|| name.clone()),
                     *id,
                     sort.clone(),
                 )
