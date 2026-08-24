@@ -27,8 +27,8 @@ use crate::ast::{
     TermRecursor, TypedTermRecursor,
 };
 use crate::containers::Mapping;
-use crate::raw::alg::VarBinding;
 use crate::raw::alg::rec::Bottom;
+use crate::raw::alg::{LocalId, VarBinding};
 use delegate::delegate;
 use std::collections::HashMap;
 use yaspar::ast::Keyword;
@@ -48,7 +48,7 @@ pub struct LetEliminatorInner<'a, E> {
     /// Environment stack: each frame maps a local variable id to the substituted term.
     /// Quantifier/match-bound variables are represented by frames with no entry
     /// (their locals simply won't be found, so they pass through unchanged).
-    env: Vec<HashMap<usize, Option<Term>>>,
+    env: Vec<HashMap<LocalId, Option<Term>>>,
 }
 
 /// Memoized, stack-safe let-eliminator. Use [`LetEliminator::create`] to construct.
@@ -70,7 +70,7 @@ where
     /// Returns `Some(Some(term))` for let-bound variables (substitute with `term`),
     /// `Some(None)` for quantifier/match-bound variables (do not substitute),
     /// or `None` if the variable is not in any scope.
-    fn lookup(&self, id: usize) -> Option<Option<Term>> {
+    fn lookup(&self, id: LocalId) -> Option<Option<Term>> {
         self.env.lookup(&id)
     }
 }

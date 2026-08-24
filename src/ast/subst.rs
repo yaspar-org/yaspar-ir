@@ -30,7 +30,7 @@
 //! For expanding global definitions (e.g. `define-fun` bodies), see [`crate::ast::gsubst`].
 
 use crate::allocator::{LocalVarAllocator, TermAllocator};
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::{
     Attribute, Constant, HasArena, Local, Memoize, Pattern, PatternArm, QualifiedIdentifier, Sort,
     Str, Term, TermRecursor, TypedBuilder, TypedTermRecursor,
@@ -46,7 +46,7 @@ use yaspar::ast::Keyword;
 /// Create with [`Substitution::new`] (from `Local`–term pairs) or [`Substitution::empty`].
 /// Apply to a term via the [`Substitute`] trait.
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct Substitution(HashMap<usize, Term>);
+pub struct Substitution(HashMap<LocalId, Term>);
 
 impl Default for Substitution {
     fn default() -> Self {
@@ -81,12 +81,12 @@ impl Substitution {
     }
 
     /// Push a binding by raw local variable ID.
-    pub(crate) fn push_with_id(&mut self, loc_id: usize, term: Term) {
+    pub(crate) fn push_with_id(&mut self, loc_id: LocalId, term: Term) {
         self.0.insert(loc_id, term);
     }
 
     /// Push multiple bindings by raw local variable IDs.
-    pub(crate) fn extend_with_id(&mut self, bindings: impl IntoIterator<Item = (usize, Term)>) {
+    pub(crate) fn extend_with_id(&mut self, bindings: impl IntoIterator<Item = (LocalId, Term)>) {
         for (id, term) in bindings {
             self.0.insert(id, term);
         }
@@ -170,7 +170,7 @@ pub struct SubstituterInner<'a, E> {
     /// The base substitution (local id → replacement term).
     subst: &'a Substitution,
     /// Shadow stack: each frame maps a local variable id to a fresh id, blocking substitution in scoped bodies.
-    shadows: Vec<HashMap<usize, usize>>,
+    shadows: Vec<HashMap<LocalId, LocalId>>,
 }
 
 impl<'a, E: HasArena> SubstituterInner<'a, E> {
@@ -183,7 +183,7 @@ impl<'a, E: HasArena> SubstituterInner<'a, E> {
         }
     }
 
-    fn get_shadow(&self, id: usize) -> Option<usize> {
+    fn get_shadow(&self, id: LocalId) -> Option<LocalId> {
         self.shadows.lookup(&id)
     }
 }

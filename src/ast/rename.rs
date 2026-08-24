@@ -30,7 +30,7 @@
 //! traversal cannot see, so renaming them would change what the term means.
 
 use crate::allocator::TermAllocator;
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::{
     Attribute, Bottom, Constant, FreshVar, HasArena, Local, Pattern, PatternArm,
     QualifiedIdentifier, Sort, Str, Term, TermRecursor, TypedBuilder, TypedTermRecursor,
@@ -66,7 +66,7 @@ struct RenameEnv<'a, E> {
     ///
     /// Each frame corresponds to one `let`, quantifier, or match arm. A lookup that misses means
     /// the variable is free, and so is left unrenamed.
-    name_map: Vec<HashMap<usize, Str>>,
+    name_map: Vec<HashMap<LocalId, Str>>,
     /// Sub-term results already computed, so a shared sub-term is renamed once.
     cache: HashMap<Term, Term>,
 }
@@ -107,12 +107,12 @@ where
     }
 
     /// Look up the name chosen for the variable `id`, innermost scope first.
-    fn lookup(&self, id: usize) -> Option<Str> {
+    fn lookup(&self, id: LocalId) -> Option<Str> {
         self.name_map.lookup(&id)
     }
 
     /// Choose names for each of `ids` and push them as a new scope.
-    fn push_scope(&mut self, ids: impl IntoIterator<Item = (usize, Str)>) {
+    fn push_scope(&mut self, ids: impl IntoIterator<Item = (LocalId, Str)>) {
         let frame = ids
             .into_iter()
             .map(|(id, name)| {
@@ -130,7 +130,7 @@ where
         // a bound pattern variable is always in the scope just pushed, so `lookup` cannot miss;
         // fall back to the original name rather than panicking if it somehow does
         let rename =
-            |(name, id): &(Str, usize)| (self.lookup(*id).unwrap_or_else(|| name.clone()), *id);
+            |(name, id): &(Str, LocalId)| (self.lookup(*id).unwrap_or_else(|| name.clone()), *id);
         match pattern {
             Pattern::Wildcard(None) => Pattern::Wildcard(None),
             Pattern::Wildcard(Some(v)) => Pattern::Wildcard(Some(rename(v))),

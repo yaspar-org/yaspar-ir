@@ -172,7 +172,7 @@ pub trait CommandAllocator<Str, So, T, C> {
 }
 
 pub trait LocalVarAllocator {
-    fn new_local(&mut self) -> usize;
+    fn new_local(&mut self) -> LocalId;
 }
 
 /// Extension trait for more functions
