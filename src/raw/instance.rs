@@ -17,6 +17,7 @@
 //! types, and [`FetchSort`] retrieves the sort of a term.
 
 use super::alg;
+use super::alg::LocalId;
 pub use crate::allocator::{
     CommandAllocator, LocalVarAllocator, ObjectAllocatorExt, SortAllocator, StrAllocator,
     TermAllocator,
@@ -110,7 +111,7 @@ pub struct Arena {
     term: HConsign<RTerm>,
     command: HConsign<RCommand>,
     var_counter: u128,
-    lvar_id: usize,
+    lvar_id: LocalId,
 }
 
 impl Arena {
@@ -175,9 +176,9 @@ impl CommandAllocator<Str, Sort, Term, Command> for Arena {
 }
 
 impl LocalVarAllocator for Arena {
-    fn new_local(&mut self) -> usize {
+    fn new_local(&mut self) -> LocalId {
         let id = self.lvar_id;
-        if id == usize::MAX {
+        if id == LocalId::MAX {
             panic!("Maximum number of local variables reached!");
         }
         self.lvar_id += 1;
@@ -321,7 +322,7 @@ impl<T> LocalVarAllocator for T
 where
     T: HasArena,
 {
-    fn new_local(&mut self) -> usize {
+    fn new_local(&mut self) -> LocalId {
         self.arena().new_local()
     }
 }

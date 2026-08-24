@@ -20,7 +20,7 @@
 //!   local never matches a bound one. This is useful for comparing terms that were built in
 //!   different scopes, e.g. bodies extracted from two separately constructed quantifiers.
 
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::{ATerm, Attribute, Pattern, Sort, Str, Term};
 use crate::traits::Repr;
 use bimap::BiHashMap;
@@ -49,7 +49,7 @@ struct AEqCtx {
     /// Correspondence between local variables
     ///
     /// A bijection: each bound variable on the left corresponds to exactly one on the right.
-    local_map: BiHashMap<usize, usize>,
+    local_map: BiHashMap<LocalId, LocalId>,
 }
 
 impl AEqCtx {
@@ -59,12 +59,15 @@ impl AEqCtx {
         }
     }
 
-    fn assoc_local(&mut self, id1: usize, id2: usize) {
+    fn assoc_local(&mut self, id1: LocalId, id2: LocalId) {
         self.local_map.insert(id1, id2);
     }
 
     /// Enter a scope in which each `(id1, id2)` pair of bound variables corresponds.
-    fn enter(&mut self, pairs: impl IntoIterator<Item = (usize, usize)>) -> Option<Vec<usize>> {
+    fn enter(
+        &mut self,
+        pairs: impl IntoIterator<Item = (LocalId, LocalId)>,
+    ) -> Option<Vec<LocalId>> {
         let mut inserted = vec![];
         for (id1, id2) in pairs {
             let overwritten = self.local_map.insert(id1, id2);
@@ -79,7 +82,7 @@ impl AEqCtx {
     }
 
     /// Leave a scope, restoring the correspondences it shadowed.
-    fn exit(&mut self, inserted: Vec<usize>) {
+    fn exit(&mut self, inserted: Vec<LocalId>) {
         for id1 in inserted {
             self.local_map.remove_by_left(&id1);
         }
@@ -207,7 +210,7 @@ fn aeq_terms(ctx: &mut AEqCtx, ts1: &[Term], ts2: &[Term], permissive: bool) -> 
 /// Compare `b1` and `b2` with `pairs` of bound variables corresponding, then restore the scope.
 fn aeq_in_scope(
     ctx: &mut AEqCtx,
-    pairs: impl IntoIterator<Item = (usize, usize)>,
+    pairs: impl IntoIterator<Item = (LocalId, LocalId)>,
     b1: &Term,
     b2: &Term,
     permissive: bool,
@@ -249,7 +252,7 @@ fn aeq_quantifier(
 ///
 /// Returns the corresponding pattern-variable id pairs when the patterns have the same shape,
 /// or [`None`] when they cannot match at all.
-fn aeq_pattern(p1: &Pattern, p2: &Pattern) -> Option<Vec<(usize, usize)>> {
+fn aeq_pattern(p1: &Pattern, p2: &Pattern) -> Option<Vec<(LocalId, LocalId)>> {
     match (p1, p2) {
         (Pattern::Wildcard(None), Pattern::Wildcard(None)) => Some(vec![]),
         // a named wildcard binds one variable, whose name is irrelevant

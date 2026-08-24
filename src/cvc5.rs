@@ -79,7 +79,7 @@
 //! returned as a yaspar-ir global identifier rather than the assertion body — recovering
 //! the SMT-LIB label that cvc5's solver-level API would otherwise drop.
 
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::*;
 use crate::containers::{InsertableMapping, Mapping};
 use crate::raw::alg;
@@ -272,7 +272,7 @@ pub struct Cvc5Env<'tm, Ctx> {
     /// Datatype sorts mapping from names to their corresponding potentially polymorphic representations.
     dt_sorts: HashMap<Str, CSort<'tm>>,
     /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
-    locals: HashMap<usize, WithPattern<'tm>>,
+    locals: HashMap<LocalId, WithPattern<'tm>>,
     /// Stack of bound-variable lists for scope management in quantifiers and match arms (forward direction).
     scope_stack: Vec<Vec<CTerm<'tm>>>,
     /// Cached sort-parameter substitutions for parametric datatype match translation.
@@ -1563,7 +1563,7 @@ fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
 impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
     type Out = WithPattern<'tm>;
     type Attr = PatternAttrs<'tm>;
-    type Binding = (usize, WithPattern<'tm>);
+    type Binding = (LocalId, WithPattern<'tm>);
     type Pattern = ();
     type Arm = CTerm<'tm>;
     type Err = String;
@@ -2142,7 +2142,7 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
     /// Remove variable bindings from `locals`.
     fn unbind_vars<T, F>(&mut self, vars: &[T], f: F) -> Res<Vec<CTerm<'tm>>>
     where
-        F: Fn(&T) -> &usize,
+        F: Fn(&T) -> &LocalId,
     {
         for v in vars {
             self.locals.remove(f(v));

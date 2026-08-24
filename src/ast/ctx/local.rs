@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::allocator::LocalVarAllocator;
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::ctx::{
     Arena, CheckedApi, Context, LetContext, QuantifierContext, Result, Sort, Str, Term,
 };
@@ -49,7 +49,7 @@ impl<'a, 'b> LocalContext<'a, 'b> {
         Ok(symbol)
     }
 
-    pub(crate) fn extend_impl<S>(&mut self, name: S, sort: Sort) -> Result<usize>
+    pub(crate) fn extend_impl<S>(&mut self, name: S, sort: Sort) -> Result<LocalId>
     where
         S: AllocatableString<Arena>,
     {
@@ -60,7 +60,7 @@ impl<'a, 'b> LocalContext<'a, 'b> {
     }
 
     /// Extends a name-sort binding to the local environment
-    pub(crate) fn extend<S>(&mut self, name: S, sort: Sort) -> Result<usize>
+    pub(crate) fn extend<S>(&mut self, name: S, sort: Sort) -> Result<LocalId>
     where
         S: AllocatableString<Arena>,
     {
@@ -68,7 +68,7 @@ impl<'a, 'b> LocalContext<'a, 'b> {
     }
 
     /// Extends a number of name-osrt bindings
-    pub(crate) fn extend_many<T, S>(&mut self, tups: T) -> Result<Vec<usize>>
+    pub(crate) fn extend_many<T, S>(&mut self, tups: T) -> Result<Vec<LocalId>>
     where
         T: IntoIterator<Item = (S, Sort)>,
         S: AllocatableString<Arena>,
