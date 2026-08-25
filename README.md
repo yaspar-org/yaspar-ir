@@ -631,7 +631,7 @@ impl TermRecursor<Str, Sort, Term> for MyRecursor<'_> {
 }
 ```
 
-See `LetEliminatorInner` in `ast::letelim` and `MonomorphizerInner` in `ast::mono` for
+See `SubstituterInner` in `ast::subst` and `MonomorphizerInner` in `ast::mono` for
 complete real-world examples of this pattern.
 
 ### Memoized term recursion with `Memoize`
