@@ -5,7 +5,12 @@
 //!
 //! Reads `tests/resources/result.json` (a list of `{"include": "<logic>"}` entries),
 //! then for each logic reads `tests/resources/<logic>/result.json` (a list of test
-//! cases), and runs them in parallel across available CPU cores.
+//! cases), and runs them one at a time in a fixed, sorted order.
+//!
+//! Each case is printed before it runs, so the run is reproducible and a failing — or
+//! hanging — case can be pinpointed from the log: the last `RUNNING` line without a matching
+//! result is the culprit. (Progress is printed from a spawned worker thread, which bypasses
+//! libtest's per-test output capture and so streams live even when a case never returns.)
 //!
 //! This test only runs in release mode with the `regression` feature enabled:
 //! ```sh
@@ -16,10 +21,10 @@
 
 use serde::Deserialize;
 use std::fs;
+use std::io::Write;
 use std::panic;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 use yaspar_ir::ast::{ACommand, CommandAllocator, Context, LetElim, Repr, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
 
@@ -115,10 +120,21 @@ fn run_test(path: &Path, steps: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Describe a caught panic payload as a string.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
 #[test]
 fn smtlib_regression() {
     let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let tests = collect_tests(&resources);
+    let mut tests = collect_tests(&resources);
 
     if tests.is_empty() {
         eprintln!(
@@ -127,75 +143,59 @@ fn smtlib_regression() {
         return;
     }
 
-    let total = tests.len();
-    let passed = Arc::new(AtomicUsize::new(0));
-    let failed = Arc::new(AtomicUsize::new(0));
+    // Fixed order: sort by case name so runs are reproducible and the log is easy to scan.
+    tests.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-
-    // Use 64 MB stacks so deeply nested files trigger a catchable panic
-    // instead of an uncatchable SIGABRT.
+    // Use a 64 MB stack so deeply nested files trigger a catchable panic instead of an
+    // uncatchable SIGABRT. Running on this spawned thread also means the progress printed
+    // below escapes libtest's per-test output capture and shows live — so a case that hangs
+    // leaves its `RUNNING` line as the last thing in the log.
     const STACK_SIZE: usize = 64 * 1024 * 1024;
 
-    // Partition tests into chunks for parallel execution
-    let chunk_size = total.div_ceil(num_threads);
-    let chunks: Vec<Vec<_>> = tests.chunks(chunk_size).map(|c| c.to_vec()).collect();
+    let handle = std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(move || {
+            let total = tests.len();
+            let mut failures = Vec::new();
 
-    let handles: Vec<_> = chunks
-        .into_iter()
-        .map(|chunk| {
-            let passed = Arc::clone(&passed);
-            let failed = Arc::clone(&failed);
-            std::thread::Builder::new()
-                .stack_size(STACK_SIZE)
-                .spawn(move || {
-                    let mut local_failures = Vec::new();
-                    for (name, path, steps) in &chunk {
-                        let result =
-                            panic::catch_unwind(panic::AssertUnwindSafe(|| run_test(path, steps)));
-                        match result {
-                            Ok(Ok(())) => {
-                                passed.fetch_add(1, Ordering::Relaxed);
-                            }
-                            Ok(Err(e)) => {
-                                failed.fetch_add(1, Ordering::Relaxed);
-                                local_failures.push(format!("FAIL {name}: {e}"));
-                            }
-                            Err(panic_info) => {
-                                failed.fetch_add(1, Ordering::Relaxed);
-                                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                                    s.to_string()
-                                } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                                    s.clone()
-                                } else {
-                                    "unknown panic".to_string()
-                                };
-                                local_failures.push(format!("FAIL {name}: panic: {msg}"));
-                            }
-                        }
+            for (i, (name, path, steps)) in tests.iter().enumerate() {
+                // Print before running and flush, so a hang leaves this line visible.
+                eprint!("[{:>4}/{total}] RUNNING {name} ... ", i + 1);
+                std::io::stderr().flush().ok();
+
+                let start = Instant::now();
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| run_test(path, steps)));
+                let ms = start.elapsed().as_millis();
+
+                match result {
+                    Ok(Ok(())) => eprintln!("ok ({ms} ms)"),
+                    Ok(Err(e)) => {
+                        eprintln!("FAIL ({ms} ms): {e}");
+                        failures.push(format!("{name}: {e}"));
                     }
-                    local_failures
-                })
-                .expect("failed to spawn thread")
+                    Err(payload) => {
+                        let msg = panic_message(&*payload);
+                        eprintln!("PANIC ({ms} ms): {msg}");
+                        failures.push(format!("{name}: panic: {msg}"));
+                    }
+                }
+            }
+            (total, failures)
         })
-        .collect();
+        .expect("failed to spawn regression worker thread");
 
-    let mut all_failures = Vec::new();
-    for h in handles {
-        all_failures.extend(h.join().unwrap());
-    }
+    let (total, failures) = handle.join().expect("regression worker thread panicked");
+    let passed = total - failures.len();
+    eprintln!(
+        "\nSMT-LIB regression: {passed} passed, {} failed, {total} total",
+        failures.len()
+    );
 
-    let p = passed.load(Ordering::Relaxed);
-    let f = failed.load(Ordering::Relaxed);
-    eprintln!("\nSMT-LIB regression: {p} passed, {f} failed, {total} total");
-
-    if !all_failures.is_empty() {
+    if !failures.is_empty() {
         eprintln!("\nFailures:");
-        for msg in &all_failures {
-            eprintln!("  {msg}");
+        for msg in &failures {
+            eprintln!("  FAIL {msg}");
         }
-        panic!("{f} regression test(s) failed");
+        panic!("{} regression test(s) failed", failures.len());
     }
 }

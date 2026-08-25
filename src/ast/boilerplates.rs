@@ -51,7 +51,7 @@ use yaspar::ast::Keyword;
 /// }
 /// ```
 ///
-/// See [`LetEliminatorInner`](crate::ast::letelim::LetEliminatorInner) and
+/// See [`SubstituterInner`](crate::ast::subst::SubstituterInner) and
 /// [`MonomorphizerInner`](crate::ast::mono::MonomorphizerInner) for real-world examples.
 pub struct TypedBuilder<'a, E> {
     pub arena: &'a mut E,
