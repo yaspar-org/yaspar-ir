@@ -5,26 +5,36 @@
 //!
 //! Reads `tests/resources/result.json` (a list of `{"include": "<logic>"}` entries),
 //! then for each logic reads `tests/resources/<logic>/result.json` (a list of test
-//! cases), and runs them one at a time in a fixed, sorted order.
+//! cases), and runs them in parallel across available CPU cores.
 //!
-//! Each case is printed before it runs, so the run is reproducible and a failing — or
-//! hanging — case can be pinpointed from the log: the last `RUNNING` line without a matching
-//! result is the culprit. (Progress is printed from a spawned worker thread, which bypasses
-//! libtest's per-test output capture and so streams live even when a case never returns.)
+//! # Tracing which case is responsible
+//!
+//! Cases are dispatched in a fixed order (sorted by name) off a shared cursor, and each one
+//! prints twice: `START` when it begins and `DONE` when it returns. So a case that fails names
+//! itself, and a case that *hangs* is the one whose `START` line has no `DONE` line with the
+//! same index — which is what the previous version could not tell you, since it printed nothing
+//! per case and a hung run gets killed before any summary.
+//!
+//! Progress goes to stderr from spawned worker threads, which bypasses libtest's per-test
+//! output capture (that only surfaces a test's own-thread output once the test completes) and
+//! so streams live even when a case never returns. Each line is a single `eprintln!`, which
+//! holds the stderr lock for the whole line, so concurrent workers cannot interleave mid-line.
 //!
 //! This test only runs in release mode with the `regression` feature enabled:
 //! ```sh
-//! cargo test --release --features regression --test regression
+//! cargo test --release --features regression --test regression -- --nocapture
 //! ```
 
 #![cfg(all(feature = "regression", not(debug_assertions)))]
 
 use serde::Deserialize;
 use std::fs;
-use std::io::Write;
 use std::panic;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use yaspar_ir::ast::fv::FreeLocalVars;
 use yaspar_ir::ast::{ACommand, CommandAllocator, Context, LetElim, Repr, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
 
@@ -99,18 +109,30 @@ fn run_test(path: &Path, steps: &[String]) -> Result<(), String> {
             }
             "letelim" => {
                 let t = typed.ok_or("letelim requires a preceding typecheck step")?;
-                typed = Some(
-                    t.into_iter()
-                        .map(|c| {
-                            if let ACommand::Assert(term) = c.repr() {
-                                let r = term.let_elim(&mut context);
-                                context.assert(r)
-                            } else {
-                                c
-                            }
-                        })
-                        .collect(),
-                );
+                let mut eliminated = Vec::with_capacity(t.len());
+                for c in t {
+                    if let ACommand::Assert(term) = c.repr() {
+                        let r = term.let_elim(&mut context);
+                        // Every local variable in a well-formed assertion is bound, and
+                        // let-elimination deletes the `let` binders. So a let-bound variable it
+                        // failed to replace would be left dangling — visible right here as a
+                        // free local variable.
+                        let free = r.free_loc_vars();
+                        if !free.is_empty() {
+                            let mut names: Vec<_> =
+                                free.iter().map(|(n, id)| format!("{n}#{id}")).collect();
+                            names.sort();
+                            return Err(format!(
+                                "let-elimination left free local variable(s): {}",
+                                names.join(", ")
+                            ));
+                        }
+                        eliminated.push(context.assert(r));
+                    } else {
+                        eliminated.push(c);
+                    }
+                }
+                typed = Some(eliminated);
             }
             other => {
                 return Err(format!("unknown step: {other}"));
@@ -143,48 +165,82 @@ fn smtlib_regression() {
         return;
     }
 
-    // Fixed order: sort by case name so runs are reproducible and the log is easy to scan.
+    // Fixed order: sort by case name so the dispatch order is reproducible across runs.
     tests.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Use a 64 MB stack so deeply nested files trigger a catchable panic instead of an
-    // uncatchable SIGABRT. Running on this spawned thread also means the progress printed
-    // below escapes libtest's per-test output capture and shows live — so a case that hangs
-    // leaves its `RUNNING` line as the last thing in the log.
+    let total = tests.len();
+    let tests = Arc::new(tests);
+    // Shared cursor rather than contiguous chunks: per-case cost ranges from 0 ms to ~80 s, so
+    // handing out the next case on demand both keeps dispatch in order and balances the load.
+    let cursor = Arc::new(AtomicUsize::new(0));
+    let failures = Arc::new(Mutex::new(Vec::new()));
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    // Use 64 MB stacks so deeply nested files trigger a catchable panic
+    // instead of an uncatchable SIGABRT.
     const STACK_SIZE: usize = 64 * 1024 * 1024;
 
-    let handle = std::thread::Builder::new()
-        .stack_size(STACK_SIZE)
-        .spawn(move || {
-            let total = tests.len();
-            let mut failures = Vec::new();
+    let handles: Vec<_> = (0..num_threads)
+        .map(|_| {
+            let tests = Arc::clone(&tests);
+            let cursor = Arc::clone(&cursor);
+            let failures = Arc::clone(&failures);
+            std::thread::Builder::new()
+                .stack_size(STACK_SIZE)
+                .spawn(move || {
+                    loop {
+                        let i = cursor.fetch_add(1, Ordering::Relaxed);
+                        let Some((name, path, steps)) = tests.get(i) else {
+                            break;
+                        };
+                        let n = i + 1;
 
-            for (i, (name, path, steps)) in tests.iter().enumerate() {
-                // Print before running and flush, so a hang leaves this line visible.
-                eprint!("[{:>4}/{total}] RUNNING {name} ... ", i + 1);
-                std::io::stderr().flush().ok();
+                        eprintln!("[{n:>4}/{total}] START {name}");
 
-                let start = Instant::now();
-                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| run_test(path, steps)));
-                let ms = start.elapsed().as_millis();
+                        let start = Instant::now();
+                        let result =
+                            panic::catch_unwind(panic::AssertUnwindSafe(|| run_test(path, steps)));
+                        let ms = start.elapsed().as_millis();
 
-                match result {
-                    Ok(Ok(())) => eprintln!("ok ({ms} ms)"),
-                    Ok(Err(e)) => {
-                        eprintln!("FAIL ({ms} ms): {e}");
-                        failures.push(format!("{name}: {e}"));
+                        match result {
+                            Ok(Ok(())) => eprintln!("[{n:>4}/{total}] DONE  {name} ok ({ms} ms)"),
+                            Ok(Err(e)) => {
+                                eprintln!("[{n:>4}/{total}] DONE  {name} FAIL ({ms} ms): {e}");
+                                failures
+                                    .lock()
+                                    .expect("failure list poisoned")
+                                    .push((i, format!("{name}: {e}")));
+                            }
+                            Err(payload) => {
+                                let msg = panic_message(&*payload);
+                                eprintln!("[{n:>4}/{total}] DONE  {name} PANIC ({ms} ms): {msg}");
+                                failures
+                                    .lock()
+                                    .expect("failure list poisoned")
+                                    .push((i, format!("{name}: panic: {msg}")));
+                            }
+                        }
                     }
-                    Err(payload) => {
-                        let msg = panic_message(&*payload);
-                        eprintln!("PANIC ({ms} ms): {msg}");
-                        failures.push(format!("{name}: panic: {msg}"));
-                    }
-                }
-            }
-            (total, failures)
+                })
+                .expect("failed to spawn regression worker thread")
         })
-        .expect("failed to spawn regression worker thread");
+        .collect();
 
-    let (total, failures) = handle.join().expect("regression worker thread panicked");
+    for h in handles {
+        h.join().expect("regression worker thread panicked");
+    }
+
+    let mut failures = Arc::into_inner(failures)
+        .expect("all workers joined")
+        .into_inner()
+        .expect("failure list poisoned");
+    // Report in dispatch order, not the order the workers happened to finish in.
+    failures.sort_by_key(|(i, _)| *i);
+    let failures: Vec<String> = failures.into_iter().map(|(_, msg)| msg).collect();
+
     let passed = total - failures.len();
     eprintln!(
         "\nSMT-LIB regression: {passed} passed, {} failed, {total} total",

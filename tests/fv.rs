@@ -5,7 +5,7 @@ use dashu::integer::UBig;
 use std::collections::HashSet;
 use yaspar_ir::ast::fv::FreeLocalVars;
 use yaspar_ir::ast::{
-    ATerm, CheckedApi, Context, LocalId, ObjectAllocatorExt, ScopedSortApi, Str, Typecheck,
+    ATerm, CheckedApi, Context, LetElim, LocalId, ObjectAllocatorExt, ScopedSortApi, Str, Typecheck,
 };
 use yaspar_ir::traits::Repr;
 use yaspar_ir::untyped::UntypedAst;
@@ -401,4 +401,56 @@ fn test_is_closed() {
         .type_check(&mut inner_ctx)
         .unwrap();
     assert!(!yaspar_ir::ast::fv::is_closed(&t_open));
+}
+
+/// Free-variable computation must stay linear in the number of *distinct* nodes, not in the
+/// number of paths through the DAG.
+///
+/// Let-elimination inlines each let-bound variable at every use, so a chain of `n` lets that
+/// each use the previous one twice yields a term with `2^n` root-to-leaf paths over only `O(n)`
+/// distinct nodes. Without memoization this walk takes `2^n` steps: at `n = 40` that is a
+/// trillion visits, so an unmemoized implementation hangs here rather than failing.
+#[test]
+fn test_free_loc_vars_on_exponentially_shared_dag() {
+    const DEPTH: usize = 40;
+
+    let mut ctx = Context::new();
+    let mut script = String::from("(set-logic ALL)\n(declare-const x Int)\n(assert ");
+    for i in 0..DEPTH {
+        let prev = if i == 0 {
+            "x".to_string()
+        } else {
+            format!("y{}", i - 1)
+        };
+        script.push_str(&format!("(let ((y{i} (+ {prev} {prev}))) "));
+    }
+    script.push_str(&format!("(> y{} 0)", DEPTH - 1));
+    for _ in 0..DEPTH {
+        script.push(')');
+    }
+    script.push_str(")\n");
+
+    let typed = UntypedAst
+        .parse_script_str(&script)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let term = typed
+        .iter()
+        .find_map(|c| match c.repr() {
+            yaspar_ir::ast::ACommand::Assert(t) => Some(t.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    // Before elimination the lets bind every `y`, so only the global `x` is left; `x` is a
+    // declared constant rather than a local, hence no free *local* variables either way.
+    assert!(term.free_loc_vars().is_empty());
+
+    // After elimination the binders are gone and the DAG has 2^DEPTH paths.
+    let eliminated = term.let_elim(&mut ctx);
+    assert!(
+        eliminated.free_loc_vars().is_empty(),
+        "let-elimination left free local variables behind"
+    );
 }
