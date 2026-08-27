@@ -143,6 +143,9 @@ pub enum IdentifierKind<Str> {
     // datatypes
     Is(Str),
 
+    // Special relations (z3 extension)
+    PartialOrder(UBig),
+
     // Finite sets
     #[cfg(feature = "finite-set")]
     SetUnion,
@@ -281,6 +284,7 @@ impl<Str> IdentifierKind<Str> {
             IdentifierKind::BvSgt => BV_SGT,
             IdentifierKind::BvSge => BV_SGE,
             IdentifierKind::Is(_) => IS,
+            IdentifierKind::PartialOrder(_) => PARTIAL_ORDER,
             #[cfg(feature = "finite-set")]
             IdentifierKind::SetUnion => SET_UNION,
             #[cfg(feature = "finite-set")]
@@ -443,6 +447,9 @@ impl<Str> IdentifierKind<Str> {
 
             IdentifierKind::Is(s) => {
                 vec![Index::Symbol(s.clone())]
+            }
+            IdentifierKind::PartialOrder(n) => {
+                vec![Index::Numeral(n.clone())]
             }
         }
     }

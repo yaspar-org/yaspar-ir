@@ -166,3 +166,6 @@ pub const SET_UNIVERSE: &str = "set.universe";
 // Datatype operators
 pub const IS: &str = "is";
 pub const IS_DASH: &str = "is-";
+
+// Special-relations operators (z3 extension, not in the SMT-LIB standard)
+pub const PARTIAL_ORDER: &str = "partial-order";

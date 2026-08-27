@@ -160,6 +160,7 @@ fn test_identifier_kinds() {
     test_kind_one_idx(&mut context, IdentifierKind::SignExtend, UBig::from(1u8));
     test_kind_one_idx(&mut context, IdentifierKind::RotateLeft, UBig::from(1u8));
     test_kind_one_idx(&mut context, IdentifierKind::RotateRight, UBig::from(1u8));
+    test_kind_one_idx(&mut context, IdentifierKind::PartialOrder, UBig::from(0u8));
 
     test_kind_two_idx(
         &mut context,

@@ -1759,3 +1759,53 @@ fn test_mutual_datatype_emptiness_order_independent() {
         failures.first(),
     );
 }
+
+/// `((_ partial-order N) x y)` is a z3-native special-relation with polymorphic
+/// signature (T, T) -> Bool. No user or theory declaration exists for it, so
+/// typed_app handles it directly. Regression test: parse and type-check a
+/// script using partial-order over an uninterpreted sort, and confirm the
+/// application resolves to Bool.
+#[test]
+fn test_partial_order_typechecks() {
+    let script = r#"
+        (set-logic ALL)
+        (declare-sort U 0)
+        (declare-const x U)
+        (declare-const y U)
+        (assert ((_ partial-order 0) x y))
+    "#;
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_ok());
+}
+
+/// Two arguments of the same sort but different from each other's sort should
+/// fail — partial-order is homogeneous.
+#[test]
+fn test_partial_order_sort_mismatch_rejected() {
+    let script = r#"
+        (set-logic ALL)
+        (declare-sort U 0)
+        (declare-sort V 0)
+        (declare-const x U)
+        (declare-const y V)
+        (assert ((_ partial-order 0) x y))
+    "#;
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_err());
+}
+
+/// Wrong arity (1 argument instead of 2) should be rejected.
+#[test]
+fn test_partial_order_arity_rejected() {
+    let script = r#"
+        (set-logic ALL)
+        (declare-sort U 0)
+        (declare-const x U)
+        (assert ((_ partial-order 0) x))
+    "#;
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_err());
+}

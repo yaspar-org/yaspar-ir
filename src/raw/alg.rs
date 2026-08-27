@@ -286,6 +286,7 @@ where
                 BV_SIGN_EXTEND => Some(IdentifierKind::SignExtend(n.clone())),
                 BV_ROTATE_LEFT => Some(IdentifierKind::RotateLeft(n.clone())),
                 BV_ROTATE_RIGHT => Some(IdentifierKind::RotateRight(n.clone())),
+                PARTIAL_ORDER => Some(IdentifierKind::PartialOrder(n.clone())),
                 _ => None,
             },
             [Index::Symbol(sym)] => match self.symbol.inner().as_str() {

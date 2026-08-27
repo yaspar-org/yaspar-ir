@@ -8,6 +8,7 @@ use crate::ast::SymbolQuote;
 use crate::containers::Mapping;
 use crate::meta::WithMeta;
 use crate::raw::alg;
+use crate::raw::alg::{CheckIdentifier, IdentifierKind};
 use crate::raw::instance::{
     BvInSort, BvOutSort, FetchSort, HasArenaAlt, Index, QualifiedIdentifier, Sig, SigIndex, Sort,
     Str, Term, Theory,
@@ -759,7 +760,35 @@ where
             "TC: Applications cannot be nullary; identifier {f}{id_meta} either is an identifier or should accept more arguments!"
         ));
     }
-    // 2. we fetch the list of signatures of f (a list because of overloading).
+
+    // 2. `((_ partial-order N) x y)` is a z3 special-relations extension with
+    // polymorphic signature (T, T) -> Bool. It isn't in the SMT-LIB standard
+    // symbol table, so type-check it directly.
+    if let Some(IdentifierKind::PartialOrder(_)) = f.0.get_kind() {
+        if args.len() != 2 {
+            return Err(format!(
+                "TC: {f}{id_meta} expects exactly 2 arguments, got {}",
+                args.len()
+            ));
+        }
+        let s0 = args[0].data.get_sort(env);
+        let s1 = args[1].data.get_sort(env);
+        if s0 != s1 {
+            return Err(format!(
+                "TC: {f}{id_meta} arguments must share a sort; got {s0} and {s1}"
+            ));
+        }
+        let bool_sort = env.arena.bool_sort();
+        if let Some(want) = &outs {
+            if *want != bool_sort {
+                return super::sort_mismatch(want, &bool_sort, &f, id_meta);
+            }
+        }
+        let arg_terms: Vec<Term> = args.into_iter().map(|w| w.data).collect();
+        return Ok(env.arena.app(f, arg_terms, Some(bool_sort)));
+    }
+
+    // 3. we fetch the list of signatures of f (a list because of overloading).
     let sigs = match env.frame.symbol_table.get(symbol) {
         None => super::identifier_not_found(symbol, id_meta),
         Some(sigs) => Ok(sigs),
@@ -767,7 +796,7 @@ where
 
     let print_struct = alg::AppFmt::new(&f, &args);
 
-    // 3. we check each signature using this closure.
+    // 4. we check each signature using this closure.
     if sigs.len() == 1 {
         type_check_with_func_sig(
             &print_struct,
@@ -779,7 +808,7 @@ where
             app_meta,
         )
     } else {
-        // 4. if the function is overloaded, we try all signatures.
+        // 5. if the function is overloaded, we try all signatures.
         let mut tc_res = Err(format!(
             "TC: overloaded function {f}{id_meta} does not have a case to match its list of arguments! '{print_struct}'",
         ));
