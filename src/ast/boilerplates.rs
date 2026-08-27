@@ -51,7 +51,7 @@ use yaspar::ast::Keyword;
 /// }
 /// ```
 ///
-/// See [`LetEliminatorInner`](crate::ast::letelim::LetEliminatorInner) and
+/// See [`SubstituterInner`](crate::ast::subst::SubstituterInner) and
 /// [`MonomorphizerInner`](crate::ast::mono::MonomorphizerInner) for real-world examples.
 pub struct TypedBuilder<'a, E> {
     pub arena: &'a mut E,
@@ -254,6 +254,11 @@ where
 
     fn on_attribute_pattern(&mut self, _: &[Term], recs: Vec<Term>) -> Result<Attribute, Bottom> {
         Ok(Attribute::Pattern(recs))
+    }
+
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(&mut self, _: &Term, rec: Term) -> Result<Attribute, Bottom> {
+        Ok(Attribute::NoPattern(rec))
     }
 
     fn on_eq(&mut self, _: &Term, _: &Term, _: &Term, a: Term, b: Term) -> Result<Term, Bottom> {

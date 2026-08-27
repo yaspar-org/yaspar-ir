@@ -250,6 +250,15 @@ impl ActionOnAttribute for UntypedAst {
     ) -> ParsingResult<Self::Attribute> {
         Ok(Attribute::Pattern(patterns))
     }
+
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(
+        &mut self,
+        _range: Range,
+        term: Self::Term,
+    ) -> ParsingResult<Self::Attribute> {
+        Ok(Attribute::NoPattern(term))
+    }
 }
 
 impl ActionOnSort for UntypedAst {

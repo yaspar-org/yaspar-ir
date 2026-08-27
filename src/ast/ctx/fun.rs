@@ -12,7 +12,7 @@ use crate::ast::ctx::{
 use crate::ast::ctx::{Command, FunctionDef, Sort, Str, TC, Term};
 use crate::containers::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
-use crate::traits::AllocatableString;
+use crate::traits::{AllocatableString, HasMutRef};
 use std::collections::HashSet;
 
 /// A builder context for constructing non-recursive function definitions (`define-fun`).
@@ -112,6 +112,18 @@ impl HasArena for FunctionContext<'_> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
+    }
+}
+
+impl HasMutRef<Context> for FunctionContext<'_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.context
     }
 }
 

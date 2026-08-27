@@ -54,6 +54,26 @@ fn main() {
 }
 ```
 
+### Context Management
+
+Similar to APIs of any SMT solver, we maintain a **Context** to keep track of term and sort information. 
+```
+let mut context = Context::new();
+```
+A context is also an arena, which manages term and sort identity. Therefore, quite often a unique context is manipulated
+throughout the program. Mixing objects managed by different context is always a bad idea:
+```
+let mut ctx1 = Context::new();
+let mut ctx2 = Context::new();
+let tru = ctx1.get_true();
+let fals = ctx2.get_false();
+assert_eq!(tru, fals); // WHAT?!
+```
+In this example, `tru` and `fals` are compared equal, because they are both the first objects allocated in their respective
+contexts. Internally, each object hold an id number allocated by its context, so object comparison is just id comparison and
+hence very efficient. Since we are mixing contexts, this program reveals the fact that `tru` and `fals` have the same id,
+which is not very useful!
+
 ### Checked v.s. Unchecked Building APIs
 
 In general, we maintain a global top-level context to keep track of SMTLib objects and their validity:
@@ -523,7 +543,6 @@ When a `TermRecursor` callback returns `Err`, the traversal aborts immediately. 
 scoped constructs (`let`, `forall`/`exists`, `match`) may have already called their
 `setup_*` hooks to extend the recursor's environment. If the error occurs inside such a
 scope, the environment modifications from those hooks would be left behind — potentially
-corrupting the recursor's state for future use.
 
 To address this, the traversal engine automatically **rewinds the stack** on error, calling
 a corresponding `cleanup_*_on_error` hook for each scoped frame that was entered but not
@@ -612,7 +631,7 @@ impl TermRecursor<Str, Sort, Term> for MyRecursor<'_> {
 }
 ```
 
-See `LetEliminatorInner` in `ast::letelim` and `MonomorphizerInner` in `ast::mono` for
+See `SubstituterInner` in `ast::subst` and `MonomorphizerInner` in `ast::mono` for
 complete real-world examples of this pattern.
 
 ### Memoized term recursion with `Memoize`
@@ -707,17 +726,22 @@ Currently, the crate provides the following functionalities:
    introduces let-bindings to terms, so that they can be compactly printed with let-bindings inserted for sub-terms
    appearing multiple times.
 9. Global and local substitutions; see `ast::SubstituteV2` and `ast::GlobalSubst`.
-10. Stack-free recursors: see `ast::TermRecursor`, `ast::TypedTermRecursor`, `ast::u::UntypedTermRecursor` and `ast::Memoize`.
+10. Alpha equivalence of terms: see `ast::AlphaEquiv`. Plain `==` on hashconsed `Term`s is identity-based,
+    so two separately built copies of `(forall ((x Int)) (p x))` compare unequal. `.aeq()` compares terms
+    up to renaming of variables bound by `let`, `forall`, `exists`, and `match` patterns, while requiring
+    free local variables to be identical. `.aeq_permissive()` additionally allows free local variables to
+    correspond under a consistent (bijective, sort-preserving) renaming.
+11. Stack-free recursors: see `ast::TermRecursor`, `ast::TypedTermRecursor`, `ast::u::UntypedTermRecursor` and `ast::Memoize`.
     This functionality provides a stack-free, visitor-based implementation of a depth first traversal of `Term`s. General
     recursions are still available, but for deeply nested terms, general recursions could hit the stack limit of the
     operating system. Stack-free recursors do not have such risk. Plug-in memoization is also available.  
-11. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
-12. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
-13. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
+12. NNF and CNF conversion: see `ast::CNFConversion` . This functionality requires the feature `cnf`.
+13. Implicant computation: see `ast::FindImplicant`. This functionality requires the feature `implicant-generation`.
+14. Translation to cvc5: see the `cvc5` module and the `ConvertToCvc5` trait. This functionality requires the feature
     `cvc5` (static linking) or `cvc5-dynamic` (dynamic linking); see [Cargo features](#cargo-features) below. It
     translates typed `Sort`s, `Term`s, and `Command`s to their cvc5 counterparts, with memoized caching
     and support for quantifier `:pattern` annotations.
-14. Translation from cvc5: see the `cvc5` module and the `ConvertFromCvc5` trait. This functionality requires the
+15. Translation from cvc5: see the `cvc5` module and the `ConvertFromCvc5` trait. This functionality requires the
     feature `cvc5` or `cvc5-dynamic`. It translates cvc5 `Sort`s and `Term`s back to yaspar-ir typed ASTs, sharing the same `Cvc5Env`
     (and its sort/term caches) used for forward translation. Command results carrying terms are auto-backward-
     translated, and `:named` assertion labels are recovered in `get-unsat-core`/`get-assertions`/

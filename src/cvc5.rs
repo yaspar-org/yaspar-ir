@@ -79,7 +79,7 @@
 //! returned as a yaspar-ir global identifier rather than the assertion body — recovering
 //! the SMT-LIB label that cvc5's solver-level API would otherwise drop.
 
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::*;
 use crate::containers::{InsertableMapping, Mapping};
 use crate::raw::alg;
@@ -91,7 +91,9 @@ use crate::traits::{AllocatableString, Contains, HasMutRef, Repr};
 use crate::untyped::UntypedAst;
 use bimap::BiHashMap;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
+use dashu::float::DBig;
 use dashu::integer::{IBig, Sign, UBig};
+use num_traits::Signed;
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
@@ -178,6 +180,20 @@ pub struct WithPattern<'tm> {
     ///
     /// Multiple `:pattern`s are maintained.
     patterns: Vec<Vec<CTerm<'tm>>>,
+    /// Terms collected from `:no-pattern` annotations (each an anti-trigger).
+    #[cfg(feature = "no-pattern")]
+    no_patterns: Vec<CTerm<'tm>>,
+}
+
+/// Pattern / anti-pattern groups collected from a term's annotations, produced
+/// by the `on_attribute_*` callbacks and merged in `on_annotated`.
+#[derive(Default)]
+pub struct PatternAttrs<'tm> {
+    /// `:pattern` groups; each becomes an `INST_PATTERN`.
+    patterns: Vec<Vec<CTerm<'tm>>>,
+    /// `:no-pattern` terms; each becomes an `INST_NO_PATTERN`.
+    #[cfg(feature = "no-pattern")]
+    no_patterns: Vec<CTerm<'tm>>,
 }
 
 impl<'tm> From<WithPattern<'tm>> for CTerm<'tm> {
@@ -191,6 +207,8 @@ impl<'tm> From<CTerm<'tm>> for WithPattern<'tm> {
         WithPattern {
             term: value,
             patterns: vec![],
+            #[cfg(feature = "no-pattern")]
+            no_patterns: vec![],
         }
     }
 }
@@ -254,7 +272,7 @@ pub struct Cvc5Env<'tm, Ctx> {
     /// Datatype sorts mapping from names to their corresponding potentially polymorphic representations.
     dt_sorts: HashMap<Str, CSort<'tm>>,
     /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
-    locals: HashMap<usize, WithPattern<'tm>>,
+    locals: HashMap<LocalId, WithPattern<'tm>>,
     /// Stack of bound-variable lists for scope management in quantifiers and match arms (forward direction).
     scope_stack: Vec<Vec<CTerm<'tm>>>,
     /// Cached sort-parameter substitutions for parametric datatype match translation.
@@ -619,6 +637,23 @@ fn signed_int_term(rf: &mut Context, value: IBig, sort: Sort) -> Term {
     }
 }
 
+/// A similar function to [signed_int_term]
+fn signed_decimal_term(rf: &mut Context, value: DBig, sort: Sort) -> Term {
+    let sign = value.sign();
+    let num = rf.allocate_term(ATerm::Constant(
+        Constant::Decimal(value.abs()),
+        Some(sort.clone()),
+    ));
+    match sign {
+        Sign::Negative => {
+            let sym = rf.allocate_symbol(SUB);
+            let qid = QualifiedIdentifier::simple(sym);
+            rf.app(qid, vec![num], Some(sort))
+        }
+        Sign::Positive => num,
+    }
+}
+
 fn translate_term_from_cvc5<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term>
 where
     Ctx: HasMutRef<Context>,
@@ -644,34 +679,19 @@ where
         let sort = ct.sort().conv_from_cvc5(fenv)?;
         let s = ct.real_value();
         let mut rf = fenv.ctx.ref_mut();
-        let has_ints = rf.get_theories().iter().any(|t| t.has_int());
         // cvc5 returns rationals as "num/den" or just "num"
         if let Some((num_s, den_s)) = s.split_once('/') {
-            let (numer, denom) = if has_ints {
-                // In RealInts, numerals are Int; use Decimal constants for Real division
-                let n = Constant::Decimal(format!("{num_s}.0").parse().unwrap());
-                let d = Constant::Decimal(format!("{den_s}.0").parse().unwrap());
-                let numer = rf.allocate_term(ATerm::Constant(n, Some(sort.clone())));
-                let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
-                (numer, denom)
-            } else {
-                // cvc5 normalizes a rational's sign onto the numerator (even "5/(-2)"
-                // comes back as "-5/2"), so only the numerator can be negative; parsing
-                // the denominator as `UBig` enforces that it stays non-negative.
-                let num: IBig = num_s.parse().map_err(|e| format!("{e}"))?;
-                let den: UBig = den_s.parse().map_err(|e| format!("{e}"))?;
-                let int = rf.int_sort();
-                let numer = signed_int_term(&mut rf, num, int.clone());
-                let denom = rf.allocate_term(ATerm::Constant(Constant::Numeral(den), Some(int)));
-                (numer, denom)
-            };
+            let num = format!("{num_s}.0").parse().unwrap();
+            let d = Constant::Decimal(format!("{den_s}.0").parse().unwrap());
+            let numer = signed_decimal_term(&mut rf, num, sort.clone());
+            let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
             let sym = rf.allocate_symbol(RDIV);
             let qid = QualifiedIdentifier::simple(sym);
             return Ok(rf.app(qid, vec![numer, denom], Some(sort)));
         }
         // No division — parse as a single decimal
-        let n: dashu::float::DBig = format!("{s}.0").parse().map_err(|e| format!("{e}"))?;
-        return Ok(rf.allocate_term(ATerm::Constant(Constant::Decimal(n), Some(sort))));
+        let n: DBig = format!("{s}.0").parse().map_err(|e| format!("{e}"))?;
+        return Ok(signed_decimal_term(&mut rf, n, sort));
     }
     if ct.is_string_value() {
         let sort = ct.sort().conv_from_cvc5(fenv)?;
@@ -801,6 +821,8 @@ where
                 let probe = WithPattern {
                     term: body_ct.clone(),
                     patterns: cvc5_patterns.clone(),
+                    #[cfg(feature = "no-pattern")]
+                    no_patterns: vec![],
                 };
                 if let Some(cached) = fenv.term_cache.get_by_right(&probe) {
                     break 'inner Ok(cached.clone());
@@ -1540,8 +1562,8 @@ fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
 
 impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
     type Out = WithPattern<'tm>;
-    type Attr = Vec<Vec<CTerm<'tm>>>;
-    type Binding = (usize, WithPattern<'tm>);
+    type Attr = PatternAttrs<'tm>;
+    type Binding = (LocalId, WithPattern<'tm>);
     type Pattern = ();
     type Arm = CTerm<'tm>;
     type Err = String;
@@ -1813,44 +1835,55 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
         _current: &Term,
         _t: &Term,
         _anns: &[Attribute],
-        t_rec: WithPattern<'tm>,
-        anns_rec: Vec<Vec<Vec<CTerm<'tm>>>>,
+        mut t_rec: WithPattern<'tm>,
+        anns_rec: Vec<PatternAttrs<'tm>>,
     ) -> Res<WithPattern<'tm>> {
-        // do not handle other annotations
-        let mut pats = t_rec.patterns;
-        anns_rec.into_iter().for_each(|ps| pats.extend(ps));
-        Ok(WithPattern {
-            term: t_rec.term,
-            patterns: pats,
-        })
+        for a in anns_rec {
+            t_rec.patterns.extend(a.patterns);
+            #[cfg(feature = "no-pattern")]
+            t_rec.no_patterns.extend(a.no_patterns);
+        }
+        Ok(t_rec)
     }
-    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
     fn on_attribute_constant(
         &mut self,
         _keyword: &Keyword,
         _constant: &Constant,
-    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    ) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
-    fn on_attribute_symbol(
-        &mut self,
-        _keyword: &Keyword,
-        _symbol: &Str,
-    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    fn on_attribute_symbol(&mut self, _keyword: &Keyword, _symbol: &Str) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
-    fn on_attribute_named(&mut self, _name: &Str) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![])
+    fn on_attribute_named(&mut self, _name: &Str) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs::default())
     }
 
     fn on_attribute_pattern(
         &mut self,
         _patterns: &[Term],
         patterns_rec: Vec<WithPattern<'tm>>,
-    ) -> Res<Vec<Vec<CTerm<'tm>>>> {
-        Ok(vec![to_term_vec(patterns_rec)])
+    ) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs {
+            patterns: vec![to_term_vec(patterns_rec)],
+            #[cfg(feature = "no-pattern")]
+            no_patterns: vec![],
+        })
+    }
+
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(
+        &mut self,
+        _pattern: &Term,
+        pattern_rec: WithPattern<'tm>,
+    ) -> Res<PatternAttrs<'tm>> {
+        Ok(PatternAttrs {
+            no_patterns: vec![pattern_rec.term],
+            ..Default::default()
+        })
     }
 
     fn on_eq(
@@ -2109,7 +2142,7 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
     /// Remove variable bindings from `locals`.
     fn unbind_vars<T, F>(&mut self, vars: &[T], f: F) -> Res<Vec<CTerm<'tm>>>
     where
-        F: Fn(&T) -> &usize,
+        F: Fn(&T) -> &LocalId,
     {
         for v in vars {
             self.locals.remove(f(v));
@@ -2130,19 +2163,25 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
         // Peel off annotations from the body to extract :pattern triggers
         let cbody = t_rec.term;
 
-        // Build INST_PATTERN_LIST from :pattern annotations
-        if !t_rec.patterns.is_empty() {
-            let pats = t_rec
-                .patterns
-                .iter()
-                .filter_map(|ts| {
-                    if ts.is_empty() {
-                        None
-                    } else {
-                        Some(self.tm.mk_term(Kind::InstPattern, ts))
-                    }
-                })
-                .collect::<Vec<_>>();
+        // Build INST_PATTERN_LIST from :pattern (and :no-pattern) annotations.
+        // The list holds INST_PATTERN entries and, for anti-triggers,
+        // INST_NO_PATTERN entries.
+        // `mut` is used only under `no-pattern` (to push INST_NO_PATTERN entries).
+        let mut pats: Vec<CTerm<'tm>> = Vec::with_capacity(t_rec.patterns.len());
+        for ts in &t_rec.patterns {
+            // An empty `:pattern ()` group carries no trigger; cvc5 rejects an empty INST_PATTERN.
+            if !ts.is_empty() {
+                pats.push(self.tm.mk_term(Kind::InstPattern, ts));
+            }
+        }
+        #[cfg(feature = "no-pattern")]
+        for t in &t_rec.no_patterns {
+            pats.push(
+                self.tm
+                    .mk_term(Kind::InstNoPattern, std::slice::from_ref(t)),
+            );
+        }
+        if !pats.is_empty() {
             let plist = self.tm.mk_term(Kind::InstPatternList, &pats);
             return Ok(self.tm.mk_term(kind, &[bvl, cbody, plist]).into());
         }

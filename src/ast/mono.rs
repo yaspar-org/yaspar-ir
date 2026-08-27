@@ -8,7 +8,7 @@
 
 use super::boilerplates::TypedBuilder;
 use crate::allocator::{LocalVarAllocator, TermAllocator};
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::{
     Attribute, Constant, ConstructorDec, DatatypeDec, HasArena, HasArenaAlt, Local,
     QualifiedIdentifier, Sort, Str, TC, Term,
@@ -42,7 +42,7 @@ pub struct MonomorphizerInner<'a, E> {
     inner: TypedBuilder<'a, E>,
     subst: &'a SortSubst,
     /// Scoped old-id → new-id mappings. Each frame corresponds to a let, quantifier, or match arm.
-    env: Vec<HashMap<usize, usize>>,
+    env: Vec<HashMap<LocalId, LocalId>>,
 }
 
 pub type Monomorphizer<'a, E> = Memoize<MonomorphizerInner<'a, E>, HashMap<Term, Term>>;
@@ -175,7 +175,7 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     }
 
     /// Look up a local variable's new id from the env stack.
-    fn lookup_new_id(&self, id: usize) -> Option<usize> {
+    fn lookup_new_id(&self, id: LocalId) -> Option<LocalId> {
         self.env.lookup(&id)
     }
 
@@ -192,7 +192,7 @@ impl<'a, E: HasArena> MonomorphizerInner<'a, E> {
     }
 
     /// Get the new id for a binding from the current top frame.
-    fn new_id_for(&self, old_id: usize) -> usize {
+    fn new_id_for(&self, old_id: LocalId) -> LocalId {
         self.env.last().unwrap()[&old_id]
     }
 
@@ -225,6 +225,8 @@ impl<E: HasArena> TermRecursor<Str, Sort, Term> for MonomorphizerInner<'_, E> {
             fn on_attribute_symbol(&mut self, keyword: &Keyword, symbol: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_named(&mut self, name: &Str) -> Result<Attribute, Bottom>;
             fn on_attribute_pattern(&mut self, patterns: &[Term], patterns_rec: Vec<Term>) -> Result<Attribute, Bottom>;
+            #[cfg(feature = "no-pattern")]
+            fn on_attribute_no_pattern(&mut self, pattern: &Term, pattern_rec: Term) -> Result<Attribute, Bottom>;
             fn on_eq(&mut self, current: &Term, a: &Term, b: &Term, a_rec: Term, b_rec: Term) -> Result<Term, Bottom>;
             fn on_distinct(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;
             fn on_and(&mut self, current: &Term, ts: &[Term], ts_rec: Vec<Term>) -> Result<Term, Bottom>;

@@ -9,7 +9,7 @@ use crate::ast::ctx::{Sort, Str, Term};
 use crate::ast::{MatchContext, QuantifierContext, TC};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
-use crate::traits::AllocatableString;
+use crate::traits::{AllocatableString, HasMutRef};
 
 /// A builder context for constructing `let` binding terms.
 ///
@@ -110,6 +110,18 @@ impl HasArena for LetContext<'_, '_> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.inner.arena()
+    }
+}
+
+impl HasMutRef<Context> for LetContext<'_, '_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.inner.context
     }
 }
 

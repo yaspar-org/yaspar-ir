@@ -303,6 +303,14 @@ where
     }
 }
 
+/// The type of the identity of a local variable
+///
+/// Local variables are tracked by a number that is unique within an arena, so that variables of the
+/// same name can be distinguished from each other.
+///
+/// c.f. [Local] and [VarBinding]
+pub type LocalId = usize;
+
 /// Represent local variables
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Local<Str, So> {
@@ -312,7 +320,7 @@ pub struct Local<Str, So> {
     /// This field is necessary to avoid unintentional name clashing.
     ///
     /// c.f. [VarBinding]
-    pub id: usize,
+    pub id: LocalId,
     /// The variable name
     pub symbol: Str,
     /// The sort of local variable
@@ -349,6 +357,11 @@ pub enum Attribute<Str, T> {
     Named(Str),
     /// Special attribute :pattern (term+)
     Pattern(Vec<T>),
+    /// Special attribute `:no-pattern` — an *anti*-trigger hint whose (single)
+    /// term must not be used as an e-matching trigger. Behind the `no-pattern`
+    /// feature.
+    #[cfg(feature = "no-pattern")]
+    NoPattern(T),
 }
 
 /// Represent sorts in SMTLib
@@ -595,6 +608,11 @@ pub enum Sig<Str, So> {
     /// It is a special case, because concat is an associative operation, which requires accumulation
     /// of bv lengths as well
     BvConcat,
+    /// A placeholder signature for rejected symbol
+    ///
+    /// It is useful when a symbol is meant to be rejected for various reasons (e.g. unsupported functions),
+    /// but we want the symbols to be presented as rejected ones, not just absent.
+    Rejected,
 }
 
 impl<Str, So> Sig<Str, So> {
@@ -664,7 +682,7 @@ where
 /// The second field is a special number that uniquely tracks the variable to avoid unintentional
 /// variable clashing.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct VarBinding<Str, T>(pub Str, pub usize, pub T);
+pub struct VarBinding<Str, T>(pub Str, pub LocalId, pub T);
 
 impl<Str, So> From<Local<Str, So>> for VarBinding<Str, So> {
     fn from(value: Local<Str, So>) -> Self {
@@ -799,6 +817,8 @@ impl<Str, So, T> Term<Str, So, T> {
             Term::Annotated(t, annos) => {
                 Box::new(std::iter::once(t).chain(annos.iter().flat_map(|a| match a {
                     Attribute::Pattern(ts) => ts.iter(),
+                    #[cfg(feature = "no-pattern")]
+                    Attribute::NoPattern(t) => std::slice::from_ref(t).iter(),
                     _ => [].iter(),
                 })))
             }
@@ -822,7 +842,7 @@ pub enum Pattern<Str> {
     /// Represents a wildcard case
     ///
     /// Invariant: If the option is a [Some], then the symbol must not be a constructor.
-    Wildcard(Option<(Str, usize)>),
+    Wildcard(Option<(Str, LocalId)>),
     /// Invariant: The symbol must be a constructor with no arguments.
     ///
     /// This is an invariant maintained by the type checker.
@@ -833,7 +853,7 @@ pub enum Pattern<Str> {
     /// A [None] in arguments means a wildcard.
     Applied {
         ctor: Str,
-        arguments: Vec<Option<(Str, usize)>>,
+        arguments: Vec<Option<(Str, LocalId)>>,
     },
 }
 
@@ -861,7 +881,7 @@ impl<Str> Pattern<Str> {
     }
 
     /// Return variables and their ids of the given [Pattern]
-    pub fn variables_and_ids(&self) -> Vec<(Str, usize)>
+    pub fn variables_and_ids(&self) -> Vec<(Str, LocalId)>
     where
         Str: Clone,
     {
@@ -1148,6 +1168,8 @@ where
                 ":pattern ".fmt(f)?;
                 fmt_vec_paren(f, ts)
             }
+            #[cfg(feature = "no-pattern")]
+            Attribute::NoPattern(t) => write!(f, ":no-pattern {t}"),
         }
     }
 }
@@ -1288,6 +1310,7 @@ where
                 write!(f, "(=> {} ...[>= {} times] {} {})", inp, n, inp, o)
             }
             Sig::BvConcat => "(=> (_ BitVec l1) ... (_ BitVec ln) (_ BitVec (+ l1 ... ln)))".fmt(f),
+            Sig::Rejected => "REJECTED".fmt(f),
         }
     }
 }

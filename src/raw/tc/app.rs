@@ -8,7 +8,7 @@ use crate::ast::SymbolQuote;
 use crate::containers::Mapping;
 use crate::meta::WithMeta;
 use crate::raw::alg;
-use crate::raw::alg::{CheckIdentifier, IdentifierKind};
+use crate::raw::alg::{CheckIdentifier, IdentifierKind, LocalId};
 use crate::raw::instance::{
     BvInSort, BvOutSort, FetchSort, HasArenaAlt, Index, QualifiedIdentifier, Sig, SigIndex, Sort,
     Str, Term, Theory,
@@ -131,7 +131,7 @@ pub(crate) fn typed_qualified_identifier<L>(
     meta_string: &str,
 ) -> TC<Term>
 where
-    L: Mapping<Key = Str, Value = (usize, Sort)>,
+    L: Mapping<Key = Str, Value = (LocalId, Sort)>,
 {
     if env.meta.theories.contains(&Theory::Bitvectors) {
         // special handling for (_ bvX n)
@@ -222,6 +222,9 @@ where
                         "TC: {qid}{meta_string} has a signature of a bit vector function, which cannot be used as a variable!"
                     ))
                 }
+                Sig::Rejected => Err(format!(
+                    "TC: {qid}{meta_string} is a rejected/unsupported symbol!"
+                )),
             }
         }
         Some((l, s)) => {
@@ -675,6 +678,7 @@ where
             // passing all tests
             Ok(env.arena.app(f.clone(), new_args, Some(out_sort)))
         }
+        Sig::Rejected => Err(format!("TC: {f}{f_meta} is a rejected/unsupported symbol!")),
     }
 }
 

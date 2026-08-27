@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ast::SymbolQuote;
-use crate::raw::alg::VarBinding;
+use crate::raw::alg::{LocalId, VarBinding};
 use crate::traits::Contains;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -63,7 +63,7 @@ where
     T: Clone,
 {
     type Key = S;
-    type Value = (usize, T);
+    type Value = (LocalId, T);
 
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
         self.iter()

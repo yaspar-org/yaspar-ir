@@ -27,7 +27,7 @@
 //!   perform type-checking.
 
 use super::alg;
-use super::alg::VarBinding;
+use super::alg::{LocalId, VarBinding};
 use super::instance::{
     Arena, Attribute, Constant, DatatypeDec, Identifier, Index, Pattern, PatternArm,
     QualifiedIdentifier, Sort, SortDef, Str, Term,
@@ -412,7 +412,7 @@ impl<St, So, L> Typecheck<TCEnvGen<'_, L>> for So
 where
     St: AllocatableString<Arena>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>> + Display,
-    L: Mapping<Key = Str, Value = (usize, ())>,
+    L: Mapping<Key = Str, Value = (LocalId, ())>,
 {
     type Out = Sort;
 
@@ -536,7 +536,7 @@ where
     T: Clone,
 {
     type Key = Str;
-    type Value = (usize, T);
+    type Value = (LocalId, T);
 
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
         self.loc_inc.lookup(key).or_else(|| self.loc.lookup(key))
@@ -1037,6 +1037,15 @@ where
         Ok(Attribute::Pattern(patterns_rec))
     }
 
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(
+        &mut self,
+        _pattern: &T,
+        pattern_rec: Self::Out,
+    ) -> Result<Self::Attr, Self::Err> {
+        Ok(Attribute::NoPattern(pattern_rec))
+    }
+
     fn on_eq(
         &mut self,
         _current: &T,
@@ -1195,6 +1204,8 @@ where
                     .map(|t| t.type_check(env))
                     .collect::<TC<Vec<_>>>()?,
             )),
+            #[cfg(feature = "no-pattern")]
+            alg::Attribute::NoPattern(t) => Ok(Attribute::NoPattern(t.type_check(env)?)),
         }
     }
 }

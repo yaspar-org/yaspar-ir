@@ -20,6 +20,7 @@
 //! - [`ScopedSortApi`] — well-formedness-checked sort building (auto-derived from `CheckedApi`).
 //! - [`Typecheck`] — convert untyped ASTs (or re-check typed ASTs) via `.type_check(&mut ctx)`.
 //! - [`LetElim`] — eliminate let-bindings by inlining bound terms.
+//! - [`AlphaEquiv`] — compare terms up to renaming of bound variables.
 //! - [`Repr`] — access the internal enum representation of a hashconsed object.
 //!
 //! # Sub-modules
@@ -30,6 +31,7 @@
 //! - [`letintro`] — let-introduction via topological sorting (inverse of let-elimination).
 //! - [`mono`] — monomorphization of parametric datatypes.
 
+pub(crate) mod alpha_eq;
 mod boilerplates;
 #[cfg(feature = "cnf")]
 pub(crate) mod cnf;
@@ -41,6 +43,7 @@ pub(crate) mod implicant;
 pub(crate) mod letelim;
 pub mod letintro;
 pub mod mono;
+pub(crate) mod rename;
 pub mod subst;
 
 pub use crate::allocator::*;
@@ -53,6 +56,7 @@ pub use crate::ast::implicant::ImplicantIterator;
 #[cfg(feature = "implicant-generation")]
 pub use crate::ast::implicant::{FindImplicant, Model};
 pub use crate::raw::alg;
+pub use crate::raw::alg::LocalId;
 pub use crate::raw::alg::rec::{Bottom, IsBottom, TermRecursor};
 pub use crate::raw::alg::rec_memo::Memoize;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck, unif::SortSubst};
@@ -60,8 +64,10 @@ pub use crate::untyped as u;
 pub use boilerplates::TypedBuilder;
 pub use gsubst::{GlobalSubst, GlobalSubstituter, GlobalSubstituterInner};
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
+pub use rename::AlphaRename;
 pub use subst::{Substitute, Substitution};
 
+pub use crate::ast::alpha_eq::AlphaEquiv;
 pub use crate::ast::letelim::{LetElim, LetEliminator, LetEliminatorInner};
 use crate::traits::MetaData;
 #[cfg(feature = "implicant-generation")]
@@ -298,12 +304,6 @@ impl Typecheck<Context> for u::Command {
             e.push_str(&self.display_meta_data());
             e
         })
-    }
-}
-
-impl LetElim<Context> for Term {
-    fn let_elim(&self, env: &mut Context) -> Self {
-        LetEliminator::create(env).recurse_on_term_no_err(self)
     }
 }
 

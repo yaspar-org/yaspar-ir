@@ -11,7 +11,7 @@ use crate::ast::{MatchContext, Theory};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::TC;
-use crate::traits::AllocatableString;
+use crate::traits::{AllocatableString, HasMutRef};
 
 /// A builder context for constructing quantified terms (`forall` and `exists`).
 ///
@@ -94,6 +94,18 @@ impl HasArena for QuantifierContext<'_, '_> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.0.arena()
+    }
+}
+
+impl HasMutRef<Context> for QuantifierContext<'_, '_> {
+    type RefMut<'a>
+        = &'a mut Context
+    where
+        Self: 'a;
+
+    #[inline]
+    fn ref_mut(&mut self) -> Self::RefMut<'_> {
+        self.0.context
     }
 }
 

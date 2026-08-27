@@ -10,7 +10,7 @@
 //! Use [`is_closed`] as a convenience check for whether a term has
 //! no free local variables.
 
-use crate::ast::alg::VarBinding;
+use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::{Attribute, Constant, PatternArm, QualifiedIdentifier};
 use crate::ast::{Bottom, Local, Sort, Str, Term, TermRecursor, TypedTermRecursor};
 use std::collections::HashSet;
@@ -21,11 +21,11 @@ use yaspar::ast::Keyword;
 /// A local variable is free if it is not bound by any enclosing binder (`let`, `forall`,
 /// `exists`, or `match` pattern).
 pub trait FreeLocalVars {
-    fn free_loc_vars(&self) -> HashSet<(Str, usize)>;
+    fn free_loc_vars(&self) -> HashSet<(Str, LocalId)>;
 }
 
 impl FreeLocalVars for Term {
-    fn free_loc_vars(&self) -> HashSet<(Str, usize)> {
+    fn free_loc_vars(&self) -> HashSet<(Str, LocalId)> {
         let mut finder = FreeLocalVariableFinder::default();
         match finder.recurse_on_term(self) {
             Ok(_) => finder.vars,
@@ -36,13 +36,13 @@ impl FreeLocalVars for Term {
 
 #[derive(Default)]
 struct FreeLocalVariableFinder {
-    vars: HashSet<(Str, usize)>,
+    vars: HashSet<(Str, LocalId)>,
 }
 
 impl FreeLocalVariableFinder {
     fn remove_bindings<T, F>(&mut self, bindings: impl Iterator<Item = T>, f: F)
     where
-        F: Fn(T) -> (Str, usize),
+        F: Fn(T) -> (Str, LocalId),
     {
         for b in bindings {
             let loc = f(b);
@@ -238,6 +238,15 @@ impl TermRecursor<Str, Sort, Term> for FreeLocalVariableFinder {
         &mut self,
         _patterns: &[Term],
         _patterns_rec: Vec<Self::Out>,
+    ) -> Result<Self::Attr, Self::Err> {
+        Ok(())
+    }
+
+    #[cfg(feature = "no-pattern")]
+    fn on_attribute_no_pattern(
+        &mut self,
+        _pattern: &Term,
+        _pattern_rec: Self::Out,
     ) -> Result<Self::Attr, Self::Err> {
         Ok(())
     }

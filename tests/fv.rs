@@ -5,13 +5,13 @@ use dashu::integer::UBig;
 use std::collections::HashSet;
 use yaspar_ir::ast::fv::FreeLocalVars;
 use yaspar_ir::ast::{
-    ATerm, CheckedApi, Context, ObjectAllocatorExt, ScopedSortApi, Str, Typecheck,
+    ATerm, CheckedApi, Context, LocalId, ObjectAllocatorExt, ScopedSortApi, Str, Typecheck,
 };
 use yaspar_ir::traits::Repr;
 use yaspar_ir::untyped::UntypedAst;
 
-/// Extract the `(Str, usize)` key from a `Term::Local` node.
-fn local_key(t: &yaspar_ir::ast::Term) -> (Str, usize) {
+/// Extract the `(Str, LocalId)` key from a `Term::Local` node.
+fn local_key(t: &yaspar_ir::ast::Term) -> (Str, LocalId) {
     match t.repr() {
         ATerm::Local(id) => (id.symbol.clone(), id.id),
         _ => panic!("expected a local variable term"),

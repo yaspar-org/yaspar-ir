@@ -311,7 +311,7 @@ impl Context {
     }
 
     /// Remove a sort from the sort table
-    pub fn remove_sort<S>(&mut self, sort: &S)
+    pub fn remove_sort<S>(&mut self, sort: S)
     where
         S: AllocatableString<Arena>,
     {
@@ -472,7 +472,7 @@ impl Context {
     }
 
     /// Remove a symbol from the symbol table
-    pub fn remove_symbol<S>(&mut self, symbol: &S)
+    pub fn remove_symbol<S>(&mut self, symbol: S)
     where
         S: AllocatableString<Arena>,
     {
