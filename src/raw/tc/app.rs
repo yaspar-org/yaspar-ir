@@ -783,10 +783,10 @@ where
             ));
         }
         let bool_sort = env.arena.bool_sort();
-        if let Some(want) = &outs {
-            if *want != bool_sort {
-                return super::sort_mismatch(want, &bool_sort, &f, id_meta);
-            }
+        if let Some(want) = &outs
+            && *want != bool_sort
+        {
+            return super::sort_mismatch(want, &bool_sort, &f, id_meta);
         }
         let arg_terms: Vec<Term> = args.into_iter().map(|w| w.data).collect();
         return Ok(env.arena.app(f, arg_terms, Some(bool_sort)));
