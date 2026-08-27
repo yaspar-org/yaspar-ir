@@ -11,9 +11,9 @@
 //! no free local variables.
 
 use crate::ast::alg::{LocalId, VarBinding};
-use crate::ast::{Attribute, Constant, PatternArm, QualifiedIdentifier};
+use crate::ast::{Attribute, Constant, Memoize, PatternArm, QualifiedIdentifier};
 use crate::ast::{Bottom, Local, Sort, Str, Term, TermRecursor, TypedTermRecursor};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 
 /// Compute the set of free local variables in a term.
@@ -26,11 +26,12 @@ pub trait FreeLocalVars {
 
 impl FreeLocalVars for Term {
     fn free_loc_vars(&self) -> HashSet<(Str, LocalId)> {
-        let mut finder = FreeLocalVariableFinder::default();
-        match finder.recurse_on_term(self) {
-            Ok(_) => finder.vars,
-            Err(b) => match b {},
-        }
+        // The value type is `()`: the cache records only *whether* a node was visited. See the
+        // module docs for why skipping a revisit cannot change the answer.
+        let mut finder: Memoize<_, HashMap<Term, ()>> =
+            Memoize::new(FreeLocalVariableFinder::default());
+        finder.recurse_on_term_no_err(self);
+        finder.inner.vars
     }
 }
 
