@@ -3,14 +3,16 @@
     "path": "2019-ezsmt/Labyrinth/SCC_Strong/0159-labyrinth-20-0.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "2019-ezsmt/Labyrinth/SCC_Strong/0206-labyrinth-20-0.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {

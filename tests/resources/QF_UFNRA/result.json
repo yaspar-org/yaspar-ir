@@ -17,70 +17,80 @@
     "path": "20230328-sqrtmodinv-hoenicke/modInvInitial.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/modInvStep.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/modInvVar1.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/modSimpleTest.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/sqrtStep1.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/sqrtStep1a.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/sqrtStep4a.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/sqrtStep5a.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/sqrtStepFinal.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230328-sqrtmodinv-hoenicke/sqrtStepFinala.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
