@@ -3,14 +3,16 @@
     "path": "20230314-Jaroslav-Bendik-Certora/30078_f817a923328f75af7e60_27_QF_UFLIA.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {
     "path": "20230314-Jaroslav-Bendik-Certora/66603_accdadf23a1cf70ae043_76_QF_UFLIA.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ]
   },
   {

@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use yaspar_ir::ast::fv::FreeLocalVars;
-use yaspar_ir::ast::{ACommand, CommandAllocator, Context, LetElim, Repr, Typecheck};
+use yaspar_ir::ast::{ACommand, CommandAllocator, Context, GlobalSubst, LetElim, Repr, Typecheck};
 use yaspar_ir::untyped::UntypedAst;
 
 /// An entry in the root `result.json`.
@@ -45,6 +45,9 @@ struct RootEntry {
 }
 
 /// A single test case in a logic's `result.json`.
+///
+/// Unknown fields are ignored, so a case may also carry a `"comment"` explaining why a step is
+/// disabled for it — see the two `gsubst` exclusions in `QF_UFLRA/result.json`.
 #[derive(Deserialize, Clone)]
 struct TestCase {
     path: String,
@@ -133,6 +136,36 @@ fn run_test(path: &Path, steps: &[String]) -> Result<(), String> {
                     }
                 }
                 typed = Some(eliminated);
+            }
+            // Expand every global definition (`define-fun` and friends) in each assertion.
+            //
+            // Enabled only for the cases that actually carry definitions, since on a file with
+            // none this is a full traversal for no coverage. See the `steps` in each logic's
+            // `result.json`.
+            //
+            // KNOWN GAP — `gsubst` overflows the stack on two QF_UFLRA cases, so they run
+            // `typecheck` + `letelim` only:
+            //
+            // * `cpachecker-induction-svcomp14/cpachecker-induction.cs_fib_true-unreach-call.i.smt2`
+            //   (1,805,110 definitions, 90 MB)
+            // * `cpachecker-induction-svcomp14/cpachecker-induction.Problem08_60_false-unreach-call.c.smt2`
+            //   (1,696,948 definitions, 82 MB)
+            "gsubst" => {
+                let t = typed.ok_or("gsubst requires a preceding typecheck step")?;
+                // Resolve the set of defined symbols once, then expand each assertion against it.
+                // `gsubst_all` rebuilds that set on every call, which is quadratic over a script
+                // with many assertions: on a file with ~1.3M of them, hoisting it out is the
+                // difference between seconds and over six minutes.
+                let mut expanded = Vec::with_capacity(t.len());
+                for c in t {
+                    if let ACommand::Assert(term) = c.repr() {
+                        let r = term.gsubst_all(&mut context);
+                        expanded.push(context.assert(r));
+                    } else {
+                        expanded.push(c);
+                    }
+                }
+                typed = Some(expanded);
             }
             other => {
                 return Err(format!("unknown step: {other}"));
