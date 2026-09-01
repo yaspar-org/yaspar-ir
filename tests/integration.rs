@@ -485,7 +485,8 @@ fn test_datatype3() {
         .parse_command_str("(declare-datatype Foo ( (Baz) (Bar (x Foo) ) ))")
         .unwrap();
     cmd.type_check(&mut context).unwrap();
-    assert_eq!(begin + 7, context.symbol_count());
+    // 2 constructors + 1 selector + 1 shared `(_ is _)` tester + 2 `is-X` testers
+    assert_eq!(begin + 6, context.symbol_count());
 }
 
 #[test]
@@ -534,7 +535,8 @@ fn test_datatype7() {
         )
         .unwrap();
     cmd.type_check(&mut context).unwrap();
-    assert_eq!(begin + 9, context.symbol_count());
+    // 3 constructors + 1 shared `(_ is _)` tester + 3 `is-X` testers
+    assert_eq!(begin + 7, context.symbol_count());
     UntypedAst
         .parse_term_str(
             "(forall ((x Color)) (exists ((y Int)) \
@@ -562,7 +564,9 @@ fn test_datatype8() {
         )
         .unwrap();
     cmd.type_check(&mut context).unwrap();
-    assert_eq!(begin + 13, context.symbol_count());
+    // Tree: 1 constructor + 2 selectors + 1 tester + 1 `is-X`;
+    // TreeList: 2 constructors + 2 selectors + 1 tester + 2 `is-X`
+    assert_eq!(begin + 12, context.symbol_count());
 }
 
 #[test]

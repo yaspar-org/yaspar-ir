@@ -509,9 +509,34 @@ pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Con
     let is_symb = env.allocate_symbol(IS);
     let x_var = env.allocate_symbol("x");
     for def in defs {
+        let current_sort = env.sort_n_params(def.name.clone(), def.dec.params.clone());
+
+        // 0. insert the (_ is X) testers of this datatype as a *single* overload
+        //    all of them share the same signature apart from the symbolic index, so they are
+        //    collapsed into one entry whose index admits any constructor of this datatype. this
+        //    keeps the overload list of `is` proportional to the number of datatypes rather than
+        //    to the total number of constructors.
+        if !def.dec.constructors.is_empty() {
+            let sig = Sig::ParFunc(
+                vec![SigIndex::symbols(
+                    def.dec.constructors.iter().map(|c| c.ctor.clone()),
+                )],
+                def.dec.params.clone(),
+                vec![current_sort.clone()],
+                bool_sort.clone(),
+            );
+            env.push_symbol(
+                is_symb.clone(),
+                sig,
+                FunctionMeta::Datatype {
+                    dt_name: def.name.clone(),
+                    kind: DatatypeFunction::Tester,
+                },
+            );
+        }
+
         for ctor in &def.dec.constructors {
             // 1. insert constructor
-            let current_sort = env.sort_n_params(def.name.clone(), def.dec.params.clone());
             let sig = Sig::ParFunc(
                 vec![],
                 def.dec.params.clone(),
@@ -545,23 +570,7 @@ pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Con
                 );
             }
 
-            // 3. insert (_ is X) testers
-            let sig = Sig::ParFunc(
-                vec![SigIndex::Symbol(ctor.ctor.clone())],
-                def.dec.params.clone(),
-                vec![current_sort.clone()],
-                bool_sort.clone(),
-            );
-            env.push_symbol(
-                is_symb.clone(),
-                sig,
-                FunctionMeta::Datatype {
-                    dt_name: def.name.clone(),
-                    kind: DatatypeFunction::Tester,
-                },
-            );
-
-            // 4. insert is-X testers
+            // 3. insert is-X testers
             //    we expand is-X to (_ is X) by defining the former in terms of the latter
             let mut is_sym = IS_DASH.to_string();
             is_sym.push_str(ctor.ctor.inner());
