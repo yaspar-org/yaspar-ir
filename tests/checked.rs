@@ -549,7 +549,8 @@ fn test_typed_datatypes() {
     );
     let num_defs3 = context.symbol_count();
     let num_sorts3 = context.sort_count();
-    assert_eq!(num_defs2 + 7, num_defs3);
+    // 2 constructors + 1 selector + 1 shared `(_ is _)` tester + 2 `is-X` testers
+    assert_eq!(num_defs2 + 6, num_defs3);
     assert_eq!(num_sorts2 + 1, num_sorts3);
 
     // test_datatype7
@@ -566,7 +567,8 @@ fn test_typed_datatypes() {
     );
     let num_defs4 = context.symbol_count();
     let num_sorts4 = context.sort_count();
-    assert_eq!(num_defs3 + 9, num_defs4);
+    // 3 constructors + 1 shared `(_ is _)` tester + 3 `is-X` testers
+    assert_eq!(num_defs3 + 7, num_defs4);
     assert_eq!(num_sorts3 + 1, num_sorts4);
 
     // test_datatype8
@@ -630,7 +632,9 @@ fn test_typed_datatypes() {
 
     let num_defs5 = context.symbol_count();
     let num_sorts5 = context.sort_count();
-    assert_eq!(num_defs4 + 13, num_defs5);
+    // Tree: 1 constructor + 2 selectors + 1 tester + 1 `is-X`;
+    // TreeList: 2 constructors + 2 selectors + 1 tester + 2 `is-X`
+    assert_eq!(num_defs4 + 12, num_defs5);
     assert_eq!(num_sorts4 + 2, num_sorts5);
 
     let cmd2 = context

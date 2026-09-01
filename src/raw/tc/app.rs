@@ -24,42 +24,61 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 
+/// The reason why the indices of a qualified identifier fail to match a signature.
+///
+/// Reporting the reason instead of an error message lets callers reject a candidate signature
+/// without paying for message formatting, which matters when scanning a long overload list.
+enum IndexMismatch<'a> {
+    /// The identifier carries the wrong number of indices
+    Arity(usize),
+    /// The index at hand does not fit the expected spec
+    Spec(&'a SigIndex, &'a Index),
+}
+
+/// Check whether the indices on a qualified identifier match the expected signature indices.
+fn match_sig_indices<'a>(
+    f: &'a QualifiedIdentifier,
+    sig_indices: &'a [SigIndex],
+) -> Result<(), IndexMismatch<'a>> {
+    if sig_indices.len() != f.0.indices.len() {
+        return Err(IndexMismatch::Arity(sig_indices.len()));
+    }
+    for (spec, i) in sig_indices.iter().zip(&f.0.indices) {
+        let ok = match (spec, i) {
+            (SigIndex::Numeral, Index::Numeral(_)) => true,
+            (SigIndex::Symbol(syms), Index::Symbol(s)) => syms.contains(s),
+            (SigIndex::Hexadecimal, Index::Hexadecimal(_, _)) => true,
+            _ => false,
+        };
+        if !ok {
+            return Err(IndexMismatch::Spec(spec, i));
+        }
+    }
+    Ok(())
+}
+
 /// Validate that the indices on a qualified identifier match the expected signature indices.
 fn check_sig_indices(
     f: &QualifiedIdentifier,
     meta_string: &str,
     sig_indices: &[SigIndex],
 ) -> TC<()> {
-    if sig_indices.len() != f.0.indices.len() {
-        return Err(format!(
-            "TC: function '{f}'{meta_string} expects {} indices but {} were given!",
-            sig_indices.len(),
+    match match_sig_indices(f, sig_indices) {
+        Ok(()) => Ok(()),
+        Err(IndexMismatch::Arity(expected)) => Err(format!(
+            "TC: function '{f}'{meta_string} expects {expected} indices but {} were given!",
             f.0.indices.len()
-        ));
+        )),
+        Err(IndexMismatch::Spec(SigIndex::Numeral, i)) => Err(format!(
+            "TC: function '{f}'{meta_string} expects a numeral index, but {i} was given!",
+        )),
+        Err(IndexMismatch::Spec(spec @ SigIndex::Symbol(_), i)) => Err(format!(
+            "TC: function '{f}'{meta_string} expects a symbolic index {spec}, but {i} was given!",
+        )),
+        Err(IndexMismatch::Spec(SigIndex::Hexadecimal, i)) => Err(format!(
+            "TC: function '{f}'{meta_string} expects a hexadecimal index, but {i} was given!",
+        )),
     }
-    for (spec, i) in sig_indices.iter().zip(&f.0.indices) {
-        match (spec, i) {
-            (SigIndex::Numeral, Index::Numeral(_)) => {}
-            (SigIndex::Symbol(sym), Index::Symbol(s)) if *sym == *s => {}
-            (SigIndex::Hexadecimal, Index::Hexadecimal(_, _)) => {}
-            (SigIndex::Numeral, _) => {
-                return Err(format!(
-                    "TC: function '{f}'{meta_string} expects a numeral index, but {i} was given!",
-                ));
-            }
-            (SigIndex::Symbol(s), _) => {
-                return Err(format!(
-                    "TC: function '{f}'{meta_string} expects a symbolic index {s}, but {i} was given!",
-                ));
-            }
-            (SigIndex::Hexadecimal, _) => {
-                return Err(format!(
-                    "TC: function '{f}'{meta_string} expects a hexadecimal index, but {i} was given!",
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Type-check a quantifier that we know is of the form `(_ bvX n)`.
@@ -789,6 +808,13 @@ where
             "TC: overloaded function {f}{id_meta} does not have a case to match its list of arguments! '{print_struct}'",
         ));
         for (sig, _) in sigs {
+            // cheap prefilter: skip candidates ruled out by their indices alone, so that a long
+            // overload list doesn't cost one formatted error message per candidate.
+            if let Sig::ParFunc(sig_indices, _, _, _) = sig
+                && match_sig_indices(&f, sig_indices).is_err()
+            {
+                continue;
+            }
             tc_res = type_check_with_func_sig(
                 &print_struct,
                 env,

@@ -25,6 +25,7 @@ pub use kind::IdentifierKind;
 use num_order::NumHash;
 use num_traits::Signed;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Mul, Sub};
@@ -441,10 +442,26 @@ where
 
 /// This type provides a spec of indices to be used in a signature
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(bound(deserialize = "Str: Deserialize<'de> + Ord"))]
 pub enum SigIndex<Str> {
     Numeral,
-    Symbol(Str),
+    Symbol(BTreeSet<Str>),
     Hexadecimal,
+}
+
+impl<Str> SigIndex<Str>
+where
+    Str: Ord,
+{
+    /// Return a symbolic index spec admitting exactly one symbol
+    pub fn symbol(s: Str) -> Self {
+        Self::Symbol(BTreeSet::from([s]))
+    }
+
+    /// Return a symbolic index spec admitting any of the given symbols
+    pub fn symbols(ss: impl IntoIterator<Item = Str>) -> Self {
+        Self::Symbol(ss.into_iter().collect())
+    }
 }
 
 /// An expression to express the calculation of bit vector lengths in the signature
@@ -563,6 +580,8 @@ impl<So> BvOutSort<So> {
 
 /// Signature for functions
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+// `Str: Ord` is required by the symbol set inside [SigIndex::Symbol]
+#[serde(bound(deserialize = "Str: Deserialize<'de> + Ord, So: Deserialize<'de>"))]
 pub enum Sig<Str, So> {
     /// ParFunc(sig_indices, sort_vars, input_sorts, output_sorts)
     ///
@@ -1196,7 +1215,16 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             SigIndex::Numeral => "<NUMERAL>".fmt(f),
-            SigIndex::Symbol(s) => s.sym_quote().fmt(f),
+            SigIndex::Symbol(ss) => {
+                // a single admissible symbol is printed bare; a genuine choice is braced
+                if ss.len() == 1 {
+                    ss.iter().next().unwrap().sym_quote().fmt(f)
+                } else {
+                    write!(f, "{{")?;
+                    fmt_vec(f, &ss.iter().map(|s| s.sym_quote()).collect::<Vec<_>>())?;
+                    write!(f, "}}")
+                }
+            }
             SigIndex::Hexadecimal => "<HEXADECIMAL>".fmt(f),
         }
     }
