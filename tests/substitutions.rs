@@ -543,3 +543,54 @@ fn test_gsubst_multiple_datatype_testers() {
     );
     expanded_inplace.type_check(&mut ctx).unwrap();
 }
+
+/// `defined_symbols` is memoized against symbol table writes under the `cache` feature, so a
+/// definition added after a first call must still be seen. A stale set would be silent: `gsubst_all`
+/// would simply leave the new definition unexpanded.
+#[test]
+fn test_defined_symbols_tracks_symbol_table_writes() {
+    let mut context = Context::new();
+    context.ensure_logic();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (declare-const x Real)
+        (define-fun y () Real (/ x 100.1))
+        "#,
+        )
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+
+    // prime the cache
+    let before = context.defined_symbols();
+    assert_eq!(before.len(), 1);
+    // repeat calls agree with themselves
+    assert_eq!(context.defined_symbols(), before);
+
+    // adding a definition must invalidate
+    UntypedAst
+        .parse_command_str("(define-fun w () Real (* x 2.0))")
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+    let after = context.defined_symbols();
+    assert_eq!(after.len(), 2);
+    let w = context.allocate_symbol("w");
+    assert!(after.contains(&w));
+
+    // and the expansion actually uses it
+    let t = UntypedAst
+        .parse_term_str("(+ w y)")
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+    assert_eq!(
+        t.gsubst_all(&mut context).to_string(),
+        "(+ (* x 2.0) (/ x 100.1))"
+    );
+
+    // removing it must invalidate too
+    context.remove_symbol("w");
+    assert_eq!(context.defined_symbols().len(), 1);
+}
