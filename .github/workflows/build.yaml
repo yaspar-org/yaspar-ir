@@ -109,7 +109,11 @@ jobs:
         uses: ./.github/actions/setup-cvc5
       - uses: Swatinem/rust-cache@v2
       - name: Run regression tests
-        run: cargo test --release --features regression --test regression
+        # --nocapture is required for the per-case START/DONE progress to reach the log. libtest
+        # propagates its output-capture sink into spawned threads, so without it the driver's
+        # progress lines sit in a buffer that is only flushed when the test returns -- and are
+        # lost entirely if the job is cancelled or times out, which is exactly when they matter.
+        run: cargo test --release --features regression --test regression -- --nocapture
         env:
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
