@@ -43,6 +43,8 @@ pub use crate::raw::instance::*;
 use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};
 pub use checked::{CheckedApi, ScopedSortApi};
 use lazy_static::lazy_static;
+#[cfg(feature = "cache")]
+use std::cell::RefCell;
 use std::collections::hash_map::Keys;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -166,6 +168,16 @@ lazy_static! {
 #[cfg(feature = "cache")]
 pub struct Caches {
     pub(crate) global_def_cache: HashMap<Str, FunctionDef>,
+    /// Memoized [`Context::defined_symbols`], cleared by [`Context::touch_symbol_table`] whenever
+    /// the symbol table is written to.
+    ///
+    /// Resolving this set costs a scan of the whole symbol table, so it is proportional to the
+    /// number of *declared* symbols even when hardly any are defined. Recomputing it per call
+    /// makes expanding the assertions of one script one at a time quadratic in script size.
+    ///
+    /// [`RefCell`] because [`Context::defined_symbols`] takes `&self`; the borrow never escapes
+    /// that method, so it cannot be held across anything that would re-enter it.
+    pub(crate) defined_symbols: RefCell<Option<HashSet<Str>>>,
     #[cfg(feature = "cnf")]
     pub cnf_cache: CNFCache,
 }
@@ -408,15 +420,30 @@ impl Context {
         }
     }
 
+    /// Record that the symbol table has changed, invalidating every cache derived from it.
+    ///
+    /// EVERY write to `frame.symbol_table` must go through a method that calls this, or a derived
+    /// cache can go stale. Without the `cache` feature there is nothing to invalidate, so this
+    /// compiles away.
+    #[inline]
+    pub(crate) fn touch_symbol_table(&mut self) {
+        #[cfg(feature = "cache")]
+        {
+            *self.caches.defined_symbols.get_mut() = None;
+        }
+    }
+
     /// Insert the symbol to the table without any checks. Use it only when invariance is known
     /// to have been maintained.
     pub(crate) fn insert_symbol(&mut self, symbol: Str, sig: Sig, meta: FunctionMeta) {
+        self.touch_symbol_table();
         self.frame.symbol_table.insert(symbol, vec![(sig, meta)]);
     }
 
     /// Insert the symbol to the table with its definition without any checks. Use it only when
     /// invariance is known to have been maintained.
     pub(crate) fn insert_symbol_with_def(&mut self, rec_deps: HashSet<Str>, def: FunctionDef) {
+        self.touch_symbol_table();
         self.frame.symbol_table.insert(
             def.name.clone(),
             vec![(
@@ -450,6 +477,7 @@ impl Context {
     /// Push the symbol to the table without any checks. Use it only when invariance is known
     /// to have been maintained.
     pub(crate) fn push_symbol(&mut self, symbol: Str, sig: Sig, meta: FunctionMeta) {
+        self.touch_symbol_table();
         self.frame
             .symbol_table
             .entry(symbol)
@@ -477,6 +505,7 @@ impl Context {
         S: AllocatableString<Arena>,
     {
         let symbol = symbol.allocate(self.arena());
+        self.touch_symbol_table();
         self.frame.symbol_table.remove(&symbol);
     }
 
@@ -594,7 +623,32 @@ impl Context {
     ///
     /// This function is different from [Self::user_defined_symbols] in that it only returns the symbols
     /// defined through `define-const` or `define-fun` or datatype testers of the form `is-X`.
+    ///
+    /// Computing this costs a scan of the whole symbol table, so it is proportional to the number
+    /// of *declared* symbols however few of them are defined. Callers that expand definitions one
+    /// term at a time would pay that scan per term, which is quadratic in the size of the script.
+    /// With the `cache` feature the scan is therefore memoized until the symbol table is next
+    /// written to, leaving repeat calls with only the cost of cloning the set out; without it
+    /// every call rescans.
     pub fn defined_symbols(&self) -> HashSet<Str> {
+        #[cfg(feature = "cache")]
+        {
+            // cloned out of the borrow, so nothing is held when the cache is written below
+            if let Some(names) = self.caches.defined_symbols.borrow().clone() {
+                return names;
+            }
+            let names = self.compute_defined_symbols();
+            *self.caches.defined_symbols.borrow_mut() = Some(names.clone());
+            names
+        }
+        #[cfg(not(feature = "cache"))]
+        self.compute_defined_symbols()
+    }
+
+    /// Scan the symbol table for every symbol carrying a definition body.
+    ///
+    /// This is the uncached worker behind [`Self::defined_symbols`]; prefer that.
+    fn compute_defined_symbols(&self) -> HashSet<Str> {
         self.frame
             .symbol_table
             .iter()

@@ -56,6 +56,7 @@ impl Context {
             #[cfg(feature = "cache")]
             caches: Caches {
                 global_def_cache: Default::default(),
+                defined_symbols: Default::default(),
                 #[cfg(feature = "cnf")]
                 cnf_cache: CNFCache::new(),
             },
@@ -95,6 +96,7 @@ impl Context {
             builtin(ge, bin_pred_sig.clone()),
             builtin(gt, bin_pred_sig.clone()),
         ]);
+        self.touch_symbol_table();
         self.frame.symbol_table.extend(default_symbol_table);
     }
 
@@ -124,6 +126,7 @@ impl Context {
             builtin(ge, bin_pred_sig.clone()),
             builtin(gt, bin_pred_sig.clone()),
         ]);
+        self.touch_symbol_table();
         self.frame.symbol_table.extend(default_symbol_table);
     }
 
@@ -183,6 +186,7 @@ impl Context {
             builtin(to_int, Sig::func(vec![real.clone()], int.clone())),
             builtin(is_int, Sig::func(vec![real.clone()], self.bool_sort())),
         ]);
+        self.touch_symbol_table();
         self.frame.symbol_table.extend(default_symbol_table);
     }
 
@@ -337,6 +341,7 @@ impl Context {
             builtin(str_to_int, Sig::func(vec![string.clone()], int.clone())),
             builtin(str_from_int, Sig::func(vec![int.clone()], string.clone())),
         ]);
+        self.touch_symbol_table();
         self.frame.symbol_table.extend(default_symbol_table);
     }
 
@@ -379,6 +384,7 @@ impl Context {
                 ),
             ),
         ]);
+        self.touch_symbol_table();
         self.frame.symbol_table.extend(default_symbol_table);
     }
 
@@ -568,6 +574,7 @@ impl Context {
             builtin(bvsgt, bin_pred_sig.clone()),
             builtin(bvsge, bin_pred_sig.clone()),
         ]);
+        self.touch_symbol_table();
         self.frame.symbol_table.extend(default_symbol_table);
 
         if self.get_theories().iter().any(|t| t.has_int()) {
@@ -581,6 +588,7 @@ impl Context {
                 builtin(int2bv, to_bv_sig.clone()),
             ]);
 
+            self.touch_symbol_table();
             self.frame.symbol_table.extend(more_symbols);
         }
     }
@@ -649,6 +657,7 @@ impl Context {
             builtin(singleton, singleton_sig),
             builtin(card, card_sig),
         ]);
+        self.touch_symbol_table();
         self.frame.symbol_table.extend(default_symbol_table);
     }
 

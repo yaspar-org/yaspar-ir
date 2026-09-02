@@ -40,6 +40,13 @@ pub trait GlobalSubst<E> {
     fn gsubst_with_names(&self, global_names: &HashSet<Str>, env: &mut E) -> Self::Out;
 
     /// Apply global substitutions to all global definitions
+    ///
+    /// Resolving the set of defined symbols costs a scan of the whole symbol table, so it is
+    /// proportional to the number of *declared* symbols however few are defined. With the `cache`
+    /// feature the set is memoized until the symbol table is next written to, which is what keeps
+    /// a loop of per-term calls from being quadratic in script size; without it every call pays
+    /// the scan. Calling this once on a `&[Term]` is better still, since a batch also shares one
+    /// term memoization cache.
     fn gsubst_all(&self, env: &mut E) -> Self::Out;
 }
 
