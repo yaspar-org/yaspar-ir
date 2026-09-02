@@ -15,10 +15,13 @@
 //! same index — which is what the previous version could not tell you, since it printed nothing
 //! per case and a hung run gets killed before any summary.
 //!
-//! Progress goes to stderr from spawned worker threads, which bypasses libtest's per-test
-//! output capture (that only surfaces a test's own-thread output once the test completes) and
-//! so streams live even when a case never returns. Each line is a single `eprintln!`, which
-//! holds the stderr lock for the whole line, so concurrent workers cannot interleave mid-line.
+//! Progress goes to stderr as one `eprintln!` per line, which holds the stderr lock for the whole
+//! line, so concurrent workers cannot interleave mid-line.
+//!
+//! `--nocapture` is REQUIRED for that progress to be visible. Spawning a thread does not escape
+//! libtest's output capture -- `std::thread` propagates the capture sink to child threads -- so
+//! without it every progress line sits in a buffer that is flushed only when the test function
+//! returns, and is lost outright if the run is cancelled or killed. The CI workflow passes it.
 //!
 //! This test only runs in release mode with the `regression` feature enabled:
 //! ```sh
@@ -35,7 +38,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use yaspar_ir::ast::fv::FreeLocalVars;
-use yaspar_ir::ast::{ACommand, CommandAllocator, Context, GlobalSubst, LetElim, Repr, Typecheck};
+use yaspar_ir::ast::{
+    ACommand, CommandAllocator, Context, GlobalSubst, LetElim, Repr, Term, Typecheck,
+};
 use yaspar_ir::untyped::UntypedAst;
 
 /// An entry in the root `result.json`.
@@ -152,14 +157,29 @@ fn run_test(path: &Path, steps: &[String]) -> Result<(), String> {
             //   (1,696,948 definitions, 82 MB)
             "gsubst" => {
                 let t = typed.ok_or("gsubst requires a preceding typecheck step")?;
-                // Resolve the set of defined symbols once, then expand each assertion against it.
-                // `gsubst_all` rebuilds that set on every call, which is quadratic over a script
-                // with many assertions: on a file with ~1.3M of them, hoisting it out is the
-                // difference between seconds and over six minutes.
+                // Expand every assertion in ONE batched call, not one call per assertion.
+                //
+                // `gsubst_all` resolves the set of defined symbols by scanning the whole symbol
+                // table, so calling it per assertion is quadratic in script size. The two 93 MB
+                // labyrinth cases are the worst shape possible for that: 1,324,671 assertions
+                // over a 419,215-entry symbol table holding exactly 2 definitions, so each of
+                // those 1.3M calls spent ~3.3 ms rebuilding a 2-element set — measured at over
+                // an hour per file, versus 0.8 s batched. Batching also shares one memo cache across
+                // assertions, which is most of the 60x on the Certora QF_UFLIA cases.
+                let terms: Vec<Term> = t
+                    .iter()
+                    .filter_map(|c| match c.repr() {
+                        ACommand::Assert(term) => Some(term.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let mut substituted = terms.as_slice().gsubst_all(&mut context).into_iter();
                 let mut expanded = Vec::with_capacity(t.len());
                 for c in t {
-                    if let ACommand::Assert(term) = c.repr() {
-                        let r = term.gsubst_all(&mut context);
+                    if matches!(c.repr(), ACommand::Assert(_)) {
+                        let r = substituted
+                            .next()
+                            .ok_or("gsubst returned fewer terms than assertions")?;
                         expanded.push(context.assert(r));
                     } else {
                         expanded.push(c);
