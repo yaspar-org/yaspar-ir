@@ -97,6 +97,7 @@ use num_traits::Signed;
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
+use yaspar_macros::stack_safe;
 
 /// A cvc5 sort, tied to the lifetime of the [`TermManager`] that created it.
 pub type CSort<'tm> = cvc5::Sort<'tm>;
@@ -510,16 +511,23 @@ where
     type Output = Sort;
 
     fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort> {
-        if let Some(s) = fenv.sort_cache.get_by_right(self) {
-            return Ok(s.clone());
-        }
-        let s = translate_sort_from_cvc5(self, fenv)?;
-        fenv.sort_cache.insert(s.clone(), self.clone());
-        Ok(s)
+        conv_csort(self.clone(), fenv)
     }
 }
 
-fn translate_sort_from_cvc5<'tm, Ctx>(cs: &CSort<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort>
+fn conv_csort<'tm, Ctx>(cs: CSort<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort>
+where
+    Ctx: HasMutRef<Context>,
+{
+    if let Some(s) = fenv.sort_cache.get_by_right(&cs) {
+        return Ok(s.clone());
+    }
+    let s = translate_sort_from_cvc5(cs.clone(), fenv)?;
+    fenv.sort_cache.insert(s.clone(), cs);
+    Ok(s)
+}
+
+fn translate_sort_from_cvc5<'tm, Ctx>(cs: CSort<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort>
 where
     Ctx: HasMutRef<Context>,
 {
@@ -542,13 +550,13 @@ where
         return Ok(fenv.ctx.ref_mut().bv_sort(cs.bv_size().into()));
     }
     if cs.is_array() {
-        let idx = cs.array_index_sort().conv_from_cvc5(fenv)?;
-        let elem = cs.array_element_sort().conv_from_cvc5(fenv)?;
+        let idx = conv_csort(cs.array_index_sort(), fenv)?;
+        let elem = conv_csort(cs.array_element_sort(), fenv)?;
         return Ok(fenv.ctx.ref_mut().array_sort(idx, elem));
     }
     #[cfg(feature = "finite-set")]
     if cs.is_set() {
-        let elem = cs.set_element_sort().conv_from_cvc5(fenv)?;
+        let elem = conv_csort(cs.set_element_sort(), fenv)?;
         return Ok(fenv.ctx.ref_mut().fset_sort(elem));
     }
     // Instantiated parametric datatype (e.g. (List Int))
@@ -556,7 +564,10 @@ where
         let dt = cs.datatype();
         let name = dt.name();
         let params = cs.instantiated_parameters();
-        let ir_params: Vec<Sort> = params.conv_from_cvc5(fenv)?;
+        let mut ir_params: Vec<Sort> = Vec::with_capacity(params.len());
+        for p in params.iter() {
+            ir_params.push(conv_csort(p.clone(), fenv)?);
+        }
         let mut rf = fenv.ctx.ref_mut();
         let sym = rf.allocate_symbol(name);
         return Ok(rf.sort_n(sym, ir_params));
@@ -572,10 +583,10 @@ where
         let base = cs.uninterpreted_sort_constructor();
         let name = base.symbol();
         let params = cs.instantiated_parameters();
-        let ir_params: Vec<Sort> = params
-            .iter()
-            .map(|p| p.conv_from_cvc5(fenv))
-            .collect::<Res<_>>()?;
+        let mut ir_params: Vec<Sort> = Vec::with_capacity(params.len());
+        for p in params.iter() {
+            ir_params.push(conv_csort(p.clone(), fenv)?);
+        }
         let mut rf = fenv.ctx.ref_mut();
         let sym = rf.allocate_symbol(name);
         return Ok(rf.sort_n(sym, ir_params));
@@ -597,7 +608,11 @@ where
     type Output = Vec<T::Output>;
 
     fn conv_from_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Self::Output> {
-        self.iter().map(|s| s.conv_from_cvc5(env)).collect()
+        let mut out = Vec::with_capacity(self.len());
+        for s in self {
+            out.push(s.conv_from_cvc5(env)?);
+        }
+        Ok(out)
     }
 }
 
@@ -608,16 +623,740 @@ where
     type Output = Term;
 
     fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term> {
+        conv_cterm(self.clone(), fenv)
+    }
+}
+
+#[stack_safe(data_in_frame)]
+mod cterm_cycle {
+    use super::*;
+
+    pub(super) fn conv_cterm<'tm, Ctx>(ct: CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term>
+    where
+        Ctx: HasMutRef<Context>,
+    {
         // Reverse lookup: a plain CTerm corresponds to a `WithPattern` with empty
         // patterns (the quantifier case never reaches us as a standalone CTerm).
-        let key = WithPattern::from(self.clone());
+        let key = WithPattern::from(ct.clone());
         if let Some(t) = fenv.term_cache.get_by_right(&key) {
             return Ok(t.clone());
         }
-        let t = translate_term_from_cvc5(self, fenv)?;
+        let t = translate_term_from_cvc5(ct.clone(), fenv)?;
         fenv.term_cache.insert(t.clone(), key);
         Ok(t)
     }
+
+    pub(super) fn translate_term_from_cvc5<'tm, Ctx>(
+        ct: CTerm<'tm>,
+        fenv: &mut Cvc5Env<'tm, Ctx>,
+    ) -> Res<Term>
+    where
+        Ctx: HasMutRef<Context>,
+    {
+        let kind: Kind = ct.kind();
+        let unsupported: String = format!("unsupported cvc5 term kind: {kind:?}");
+
+        // ── Constants ────────────────────────────────────────────
+        if ct.is_boolean_value() {
+            let mut rf = fenv.ctx.ref_mut();
+            let sort = Some(rf.bool_sort());
+            return Ok(rf.allocate_term(ATerm::Constant(Constant::Bool(ct.boolean_value()), sort)));
+        }
+        if ct.is_integer_value() {
+            let sort = conv_csort(ct.sort(), fenv)?;
+            // cvc5 gives a negative value as a signed string (e.g. "-5"), so parse signed.
+            let n: IBig = ct
+                .integer_value()
+                .parse::<IBig>()
+                .map_err(|e| format!("Big integer parse error: {e}"))?;
+            return Ok(signed_int_term(&mut fenv.ctx.ref_mut(), n, sort));
+        }
+        if ct.is_real_value() {
+            let sort = conv_csort(ct.sort(), fenv)?;
+            let s = ct.real_value();
+            let mut rf = fenv.ctx.ref_mut();
+            // cvc5 returns rationals as "num/den" or just "num"
+            if let Some((num_s, den_s)) = s.split_once('/') {
+                let num: DBig = format!("{num_s}.0").parse::<DBig>().unwrap();
+                let d = Constant::Decimal(format!("{den_s}.0").parse::<DBig>().unwrap());
+                let numer = signed_decimal_term(&mut rf, num, sort.clone());
+                let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
+                let sym = rf.allocate_symbol(RDIV);
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.app(qid, vec![numer, denom], Some(sort)));
+            }
+            // No division — parse as a single decimal
+            let n: DBig = format!("{s}.0")
+                .parse::<DBig>()
+                .map_err(|e| format!("{e}"))?;
+            return Ok(signed_decimal_term(&mut rf, n, sort));
+        }
+        if ct.is_string_value() {
+            let sort = conv_csort(ct.sort(), fenv)?;
+            let chars = ct.u32string_value();
+            let s: String = chars
+                .iter()
+                .map(|&c| char::from_u32(c).unwrap_or('\u{FFFD}'))
+                .collect();
+
+            let mut rf = fenv.ctx.ref_mut();
+            let str_val = rf.allocate_str(&s);
+            return Ok(rf.allocate_term(ATerm::Constant(Constant::String(str_val), Some(sort))));
+        }
+        if ct.is_bv_value() {
+            let sort = conv_csort(ct.sort(), fenv)?;
+            let bits: String = ct.bv_value(2);
+            let (bytes, len) = match UntypedAst
+                .parse_term_str(&format!("#b{bits}"))
+                .map_err(|e| format!("{e}"))?
+                .repr()
+            {
+                ATerm::Constant(alg::Constant::Binary(bytes, len), _) => (bytes.clone(), *len),
+                _ => return Err(format!("bit vector literal {bits} cannot be parsed!")),
+            };
+
+            return Ok(fenv
+                .ctx
+                .ref_mut()
+                .allocate_term(ATerm::Constant(Constant::Binary(bytes, len), Some(sort))));
+        }
+
+        // ── Logical connectives ─────────────────────────────────
+        match kind {
+            Kind::And => {
+                let children = translate_children(ct.clone(), fenv)?;
+                return Ok(fenv.ctx.ref_mut().and(children));
+            }
+            Kind::Or => {
+                let children = translate_children(ct.clone(), fenv)?;
+                return Ok(fenv.ctx.ref_mut().or(children));
+            }
+            Kind::Xor => {
+                let children = translate_children(ct.clone(), fenv)?;
+                return Ok(fenv.ctx.ref_mut().xor(children));
+            }
+            Kind::Not => {
+                let child = conv_cterm(ct.child(0), fenv)?;
+                return Ok(fenv.ctx.ref_mut().not(child));
+            }
+            Kind::Implies => {
+                let n: usize = ct.num_children();
+                let mut premises = Vec::with_capacity(n - 1);
+                for i in 0..n - 1 {
+                    premises.push(conv_cterm(ct.child(i), fenv)?);
+                }
+                let concl = conv_cterm(ct.child(n - 1), fenv)?;
+
+                return Ok(fenv.ctx.ref_mut().implies(premises, concl));
+            }
+            Kind::Equal => {
+                let children = translate_children(ct.clone(), fenv)?;
+                let mut rf = fenv.ctx.ref_mut();
+
+                if children.len() == 2 {
+                    return Ok(rf.eq(children[0].clone(), children[1].clone()));
+                }
+                // Chain: (= a b c) → (and (= a b) (= b c))
+                let mut eqs = Vec::with_capacity(children.len() - 1);
+                for i in 0..children.len() - 1 {
+                    eqs.push(rf.eq(children[i].clone(), children[i + 1].clone()));
+                }
+                return Ok(rf.and(eqs));
+            }
+            Kind::Distinct => {
+                let children = translate_children(ct.clone(), fenv)?;
+
+                return Ok(fenv.ctx.ref_mut().distinct(children));
+            }
+            Kind::Ite => {
+                let b = conv_cterm(ct.child(0), fenv)?;
+                let t = conv_cterm(ct.child(1), fenv)?;
+                let e = conv_cterm(ct.child(2), fenv)?;
+
+                return Ok(fenv.ctx.ref_mut().ite(b, t, e));
+            }
+            // ── Quantifiers ─────────────────────────────────────────
+            Kind::Forall | Kind::Exists => {
+                let vlist: CTerm<'tm> = ct.child(0);
+                let body_ct: CTerm<'tm> = ct.child(1);
+                let mut scope_ids = Vec::new();
+                for i in 0..vlist.num_children() {
+                    let v: CTerm<'tm> = vlist.child(i);
+                    let cvc5_id = v.id();
+                    let name = v.symbol().to_string();
+                    let vs = conv_csort(v.sort(), fenv)?;
+
+                    let mut rf = fenv.ctx.ref_mut();
+                    let id = rf.new_local();
+                    let sym = rf.allocate_symbol(&name);
+                    fenv.locals_from.insert(cvc5_id, VarBinding(sym, id, vs));
+                    scope_ids.push(cvc5_id);
+                }
+                fenv.push_scope_from(scope_ids);
+
+                // Collect cvc5 patterns first (without translating to ir Terms yet).
+                // This lets us probe the bimap with `WithPattern { body_ct, cvc5_patterns }`
+                // on the right side and short-circuit body translation on a hit.
+                let cvc5_patterns: Vec<Vec<CTerm<'tm>>> = if ct.num_children() > 2 {
+                    let plist: CTerm<'tm> = ct.child(2);
+                    let mut pats = Vec::with_capacity(plist.num_children());
+                    for i in 0..plist.num_children() {
+                        let pat: CTerm<'tm> = plist.child(i);
+                        if pat.kind() == Kind::InstPattern {
+                            let mut pat_cterms = Vec::with_capacity(pat.num_children());
+                            for j in 0..pat.num_children() {
+                                pat_cterms.push(pat.child(j));
+                            }
+                            pats.push(pat_cterms);
+                        }
+                    }
+                    pats
+                } else {
+                    vec![]
+                };
+
+                let result = translate_quantifier_body_from_cvc5(body_ct, cvc5_patterns, fenv);
+
+                let bindings = fenv.pop_scope_from();
+                let body = result?;
+
+                return if kind == Kind::Forall {
+                    Ok(fenv.ctx.ref_mut().forall(bindings, body))
+                } else {
+                    Ok(fenv.ctx.ref_mut().exists(bindings, body))
+                };
+            }
+            // ── Negation (unary minus) ──────────────────────────────
+            Kind::Neg => {
+                let child = conv_cterm(ct.child(0), fenv)?;
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(SUB);
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.app(qid, vec![child], Some(sort)));
+            }
+
+            // ── Function application (UF, constructors, selectors, testers) ──
+            Kind::Constant => {
+                // Uninterpreted constant (declared symbol)
+                let name = ct.symbol().to_string();
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(&name);
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.global(qid, Some(sort)));
+            }
+            Kind::ApplyUf => {
+                let head: CTerm<'tm> = ct.child(0);
+                let name = head.symbol().to_string();
+                let mut args = Vec::with_capacity(ct.num_children() - 1);
+                for i in 1..ct.num_children() {
+                    args.push(conv_cterm(ct.child(i), fenv)?);
+                }
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(&name);
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.app(qid, args, Some(sort)));
+            }
+            Kind::ApplyConstructor => {
+                let head: CTerm<'tm> = ct.child(0);
+                let name = if head.has_symbol() {
+                    head.symbol().to_string()
+                } else {
+                    // Parametric constructor: get name from the sort's datatype
+                    let dt: cvc5::Datatype<'tm> = ct.sort().datatype();
+                    let mut found = false;
+                    let mut name = String::new();
+                    for i in 0..dt.num_constructors() {
+                        let ctor = dt.constructor(i);
+                        if ctor.term() == head || ctor.num_selectors() == ct.num_children() - 1 {
+                            name = ctor.name().to_string();
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        return Err(format!(
+                            "fatal error: term {head} cannot find a case for its datatype {dt}!"
+                        ));
+                    }
+                    name
+                };
+                let n: usize = ct.num_children();
+                if n == 1 {
+                    // Nullary constructor → global
+                    let sort = conv_csort(ct.sort(), fenv)?;
+
+                    let mut rf = fenv.ctx.ref_mut();
+                    let sym = rf.allocate_symbol(&name);
+                    let qid = if ct.sort().is_dt() && ct.sort().datatype().is_parametric() {
+                        QualifiedIdentifier::simple_sorted(sym, sort.clone())
+                    } else {
+                        QualifiedIdentifier::simple(sym)
+                    };
+                    return Ok(rf.global(qid, Some(sort)));
+                }
+                let mut args = Vec::with_capacity(n - 1);
+                for i in 1..n {
+                    args.push(conv_cterm(ct.child(i), fenv)?);
+                }
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(&name);
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.app(qid, args, Some(sort)));
+            }
+            Kind::ApplySelector => {
+                let head: CTerm<'tm> = ct.child(0);
+                let name = if head.has_symbol() {
+                    head.symbol().to_string()
+                } else {
+                    format!("{head}")
+                };
+                let arg = conv_cterm(ct.child(1), fenv)?;
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(&name);
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.app(qid, vec![arg], Some(sort)));
+            }
+            Kind::ApplyTester => {
+                let head: CTerm<'tm> = ct.child(0);
+                let tester_name = if head.has_symbol() {
+                    head.symbol().to_string()
+                } else {
+                    format!("{head}")
+                };
+                // cvc5 tester names are "is_<ctor>"; extract the constructor name.
+                let ctor_name: String = tester_name
+                    .strip_prefix("is_")
+                    .unwrap_or(&tester_name)
+                    .to_string();
+                let arg = conv_cterm(ct.child(1), fenv)?;
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let is_sym = rf.allocate_symbol(IS);
+                let ctor_sym = rf.allocate_symbol(&ctor_name);
+                let id = alg::Identifier {
+                    symbol: is_sym,
+                    indices: vec![Index::Symbol(ctor_sym)],
+                };
+                let qid = QualifiedIdentifier::from(id);
+                return Ok(rf.app(qid, vec![arg], Some(sort)));
+            }
+
+            // ── Variable (bound) ────────────────────────────────────
+            Kind::Variable => {
+                let cvc5_id = ct.id();
+                if let Some(vb) = fenv.locals_from.get(&cvc5_id) {
+                    return Ok(fenv.ctx.ref_mut().local(alg::Local {
+                        id: vb.1,
+                        symbol: vb.0.clone(),
+                        sort: vb.2.clone(),
+                    }));
+                }
+                return Err(format!(
+                    "unexpected and fatal scope management error: local variable {ct} is not bound!"
+                ));
+            }
+            // ── Nullary regexp constants ───────────────────────────────
+            Kind::RegexpNone | Kind::RegexpAll | Kind::RegexpAllchar => {
+                let ik = cvc5_kind_to_ident_kind(kind).unwrap();
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(ik.name());
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.global(qid, Some(sort)));
+            }
+
+            // ── BitvectorToNat ──────────────────────────────────────
+            Kind::BitvectorToNat => {
+                let child = conv_cterm(ct.child(0), fenv)?;
+                let sort = conv_csort(ct.sort(), fenv)?;
+
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(BV2NAT);
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.app(qid, vec![child], Some(sort)));
+            }
+
+            // ── Match expressions ───────────────────────────────────
+            Kind::Match => {
+                let scrutinee = conv_cterm(ct.child(0), fenv)?;
+                let n: usize = ct.num_children();
+                let cases: Vec<CTerm<'tm>> = (1..n).map(|i| ct.child(i)).collect();
+                let mut arms = Vec::with_capacity(cases.len());
+                for case in cases {
+                    arms.push(translate_match_case_from_cvc5(case, fenv)?);
+                }
+
+                return Ok(fenv.ctx.ref_mut().matching(scrutinee, arms));
+            }
+            // ── Const array ──────────────────────────────────────────
+            Kind::ConstArray => {
+                let value = conv_cterm(ct.const_array_base(), fenv)?;
+                let arr_sort = conv_csort(ct.sort(), fenv)?;
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(CONST);
+                let qid = QualifiedIdentifier::simple_sorted(sym, arr_sort.clone());
+                return Ok(rf.app(qid, vec![value], Some(arr_sort)));
+            }
+
+            // ── Uninterpreted sort value (from models) ──────────────
+            Kind::UninterpretedSortValue => {
+                let name = ct.uninterpreted_sort_value();
+                let sort = conv_csort(ct.sort(), fenv)?;
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(&name);
+                fenv.uninterpreted_values.insert(sym.clone());
+                let qid = QualifiedIdentifier::simple(sym);
+                return Ok(rf.global(qid, Some(sort)));
+            }
+
+            // ── Lambda ──────────────────────────────────────────────
+            Kind::Lambda => return Err("higher order functions are not supported!".into()),
+
+            // ── Sequences ───────────────────────────────────────────
+            Kind::ConstSequence => return Err("sequence operations are not supported!".into()),
+
+            // ── Sets ────────────────────────────────────────────────
+            // Nullary set constants need the result sort to emit `(as set.empty …)`
+            // / `(as set.universe …)`; the n-ary connectives flow through the
+            // generic `cvc5_kind_to_ident_kind` path below.
+            #[cfg(feature = "finite-set")]
+            Kind::SetEmpty | Kind::SetUniverse => {
+                let name = if kind == Kind::SetEmpty {
+                    SET_EMPTY
+                } else {
+                    SET_UNIVERSE
+                };
+                let sort = conv_csort(ct.sort(), fenv)?;
+                let mut rf = fenv.ctx.ref_mut();
+                let sym = rf.allocate_symbol(name);
+                let qid = QualifiedIdentifier::simple_sorted(sym, sort.clone());
+                return Ok(rf.global(qid, Some(sort)));
+            }
+            #[cfg(not(feature = "finite-set"))]
+            Kind::SetEmpty
+            | Kind::SetUniverse
+            | Kind::SetSingleton
+            | Kind::SetUnion
+            | Kind::SetInter
+            | Kind::SetMinus
+            | Kind::SetMember
+            | Kind::SetSubset
+            | Kind::SetComplement
+            | Kind::SetCard => {
+                return Err("set operations are not supported!".into());
+            }
+            Kind::SetInsert => {
+                return Err("the set.insert operation is not supported!".into());
+            }
+
+            // ── Floating point ──────────────────────────────────────
+            Kind::ConstFloatingpoint | Kind::ConstRoundingmode | Kind::FloatingpointFp => {
+                return Err("floating point operations are not supported!".into());
+            }
+
+            _ => {}
+        }
+
+        // ── Known operator kinds ────────────────────────────────
+        if let Some(ik) = cvc5_kind_to_ident_kind(kind) {
+            let op_name: &'static str = ik.name();
+            let sort = conv_csort(ct.sort(), fenv)?;
+            let children = translate_children(ct, fenv)?;
+
+            let mut rf = fenv.ctx.ref_mut();
+            let sym = rf.allocate_symbol(op_name);
+            let qid = QualifiedIdentifier::simple(sym);
+            return Ok(rf.app(qid, children, Some(sort)));
+        }
+
+        // ── Indexed operators ───────────────────────────────────
+        if ct.has_op() {
+            let op: cvc5::Op<'tm> = ct.op();
+            let indexed = translate_indexed_from_cvc5(ct.clone(), op, fenv)?;
+            if let Some(term) = indexed {
+                return Ok(term);
+            }
+        }
+
+        Err(unsupported)
+    }
+
+    pub(super) fn translate_children<'tm, Ctx>(
+        ct: CTerm<'tm>,
+        fenv: &mut Cvc5Env<'tm, Ctx>,
+    ) -> Res<Vec<Term>>
+    where
+        Ctx: HasMutRef<Context>,
+    {
+        let n: usize = ct.num_children();
+        let mut children = Vec::with_capacity(n);
+        for i in 0..n {
+            children.push(conv_cterm(ct.child(i), fenv)?);
+        }
+        Ok(children)
+    }
+
+    pub(super) fn translate_match_case_from_cvc5<'tm, Ctx>(
+        case: CTerm<'tm>,
+        fenv: &mut Cvc5Env<'tm, Ctx>,
+    ) -> Res<alg::PatternArm<Str, Term>>
+    where
+        Ctx: HasMutRef<Context>,
+    {
+        let case_kind: Kind = case.kind();
+        match case_kind {
+            Kind::MatchCase => {
+                // Children: [pattern (ApplyConstructor), body]
+                let pattern_ct: CTerm<'tm> = case.child(0);
+                // Nullary constructor: ApplyConstructor with just the ctor term
+                let ctor_term: CTerm<'tm> = pattern_ct.child(0);
+                let ctor_name = if ctor_term.has_symbol() {
+                    ctor_term.symbol().to_string()
+                } else {
+                    // Parametric constructor: the ctor_term is sort-qualified (e.g. `(as nil (List Int))`).
+                    // Compare against instantiated constructor terms from the datatype.
+                    let dt = pattern_ct.sort().datatype();
+                    let sort = pattern_ct.sort();
+                    let mut found = false;
+                    let mut name = String::new();
+                    for i in 0..dt.num_constructors() {
+                        let c = dt.constructor(i);
+                        if c.instantiated_term(sort.clone()) == ctor_term {
+                            name = c.name().to_string();
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        return Err(format!(
+                            "fatal error: term {ctor_term} cannot find a case for its datatype {dt}!"
+                        ));
+                    }
+                    name
+                };
+                let body = conv_cterm(case.child(1), fenv)?;
+
+                let sym = fenv.ctx.ref_mut().allocate_symbol(&ctor_name);
+                Ok(alg::PatternArm {
+                    pattern: Pattern::Ctor(sym),
+                    body,
+                })
+            }
+            Kind::MatchBindCase => {
+                // Children: [variable_list, pattern, body]
+                let vlist = case.child(0);
+                let pattern_ct: CTerm<'tm> = case.child(1);
+                let body_ct = case.child(2);
+
+                // Determine if this is a wildcard or an applied constructor pattern
+                let pat_kind = pattern_ct.kind();
+                if pat_kind == Kind::Variable {
+                    // Wildcard pattern: pattern is the same variable as in vlist
+                    let v: CTerm<'tm> = vlist.child(0);
+                    let cvc5_id = v.id();
+                    let vs = conv_csort(v.sort(), fenv)?;
+
+                    if v.has_symbol() {
+                        let name = v.symbol().to_string();
+                        let mut rf = fenv.ctx.ref_mut();
+                        let id = rf.new_local();
+                        let sym = rf.allocate_symbol(&name);
+                        drop(rf);
+                        let vb = VarBinding(sym.clone(), id, vs);
+                        fenv.locals_from.insert(cvc5_id, vb);
+                        fenv.push_scope_from(vec![cvc5_id]);
+
+                        let result = conv_cterm(body_ct.clone(), fenv);
+                        fenv.pop_scope_from();
+                        let body = result?;
+                        Ok(alg::PatternArm {
+                            pattern: Pattern::Wildcard(Some((sym, id))),
+                            body,
+                        })
+                    } else {
+                        // Anonymous wildcard — no variable binding
+                        let body = conv_cterm(body_ct.clone(), fenv)?;
+                        Ok(alg::PatternArm {
+                            pattern: Pattern::Wildcard(None),
+                            body,
+                        })
+                    }
+                } else {
+                    // Applied constructor pattern: pattern is ApplyConstructor
+                    let ctor_term: CTerm<'tm> = pattern_ct.child(0);
+                    let ctor_name = if ctor_term.has_symbol() {
+                        ctor_term.symbol().to_string()
+                    } else {
+                        format!("{ctor_term}")
+                    };
+                    let num_args = pattern_ct.num_children() - 1;
+
+                    let mut scope_ids = Vec::new();
+                    let mut arguments = Vec::with_capacity(num_args);
+
+                    for i in 0..num_args {
+                        let arg: CTerm<'tm> = pattern_ct.child(i + 1);
+                        let cvc5_id = arg.id();
+                        scope_ids.push(cvc5_id);
+                        if arg.has_symbol() {
+                            let name = arg.symbol().to_string();
+                            let vs = conv_csort(arg.sort(), fenv)?;
+                            let mut rf = fenv.ctx.ref_mut();
+                            let id = rf.new_local();
+                            let sym = rf.allocate_symbol(&name);
+                            fenv.locals_from
+                                .insert(cvc5_id, VarBinding(sym.clone(), id, vs));
+                            arguments.push(Some((sym, id)));
+                        } else {
+                            arguments.push(None);
+                        }
+                    }
+                    fenv.push_scope_from(scope_ids);
+
+                    let result = conv_cterm(body_ct.clone(), fenv);
+                    fenv.pop_scope_from();
+                    let body = result?;
+
+                    let ctor_sym = fenv.ctx.ref_mut().allocate_symbol(&ctor_name);
+                    Ok(alg::PatternArm {
+                        pattern: Pattern::Applied {
+                            ctor: ctor_sym,
+                            arguments,
+                        },
+                        body,
+                    })
+                }
+            }
+            _ => Err(format!("unsupported match case kind: {:?}", case_kind)),
+        }
+    }
+
+    pub(super) fn translate_indexed_from_cvc5<'tm, Ctx>(
+        ct: CTerm<'tm>,
+        op: cvc5::Op<'tm>,
+        fenv: &mut Cvc5Env<'tm, Ctx>,
+    ) -> Res<Option<Term>>
+    where
+        Ctx: HasMutRef<Context>,
+    {
+        let op_kind: Kind = op.kind();
+        let children = translate_children(ct.clone(), fenv)?;
+        let sort = conv_csort(ct.sort(), fenv)?;
+
+        let idx_ubig = |i: usize| -> Res<UBig> {
+            let idx_term = op.index(i);
+            idx_term
+                .integer_value()
+                .parse::<UBig>()
+                .map_err(|e| format!("Big integer parse error: {e}"))
+        };
+
+        let (name, indices) = match op_kind {
+            Kind::BitvectorExtract => {
+                let hi = idx_ubig(0)?;
+                let lo = idx_ubig(1)?;
+                (BV_EXTRACT, vec![Index::Numeral(hi), Index::Numeral(lo)])
+            }
+            Kind::BitvectorRepeat => {
+                let i0 = idx_ubig(0)?;
+                (BV_REPEAT, vec![Index::Numeral(i0)])
+            }
+            Kind::BitvectorZeroExtend => {
+                let i0 = idx_ubig(0)?;
+                (BV_ZERO_EXTEND, vec![Index::Numeral(i0)])
+            }
+            Kind::BitvectorSignExtend => {
+                let i0 = idx_ubig(0)?;
+                (BV_SIGN_EXTEND, vec![Index::Numeral(i0)])
+            }
+            Kind::BitvectorRotateLeft => {
+                let i0 = idx_ubig(0)?;
+                (BV_ROTATE_LEFT, vec![Index::Numeral(i0)])
+            }
+            Kind::BitvectorRotateRight => {
+                let i0 = idx_ubig(0)?;
+                (BV_ROTATE_RIGHT, vec![Index::Numeral(i0)])
+            }
+            Kind::IntToBitvector => {
+                let i0 = idx_ubig(0)?;
+                (INT2BV, vec![Index::Numeral(i0)])
+            }
+            Kind::RegexpRepeat => {
+                let i0 = idx_ubig(0)?;
+                (RE_POWER, vec![Index::Numeral(i0)])
+            }
+            Kind::RegexpLoop => {
+                let lo = idx_ubig(0)?;
+                let hi = idx_ubig(1)?;
+                (RE_LOOP, vec![Index::Numeral(lo), Index::Numeral(hi)])
+            }
+            _ => return Ok(None),
+        };
+
+        let mut rf = fenv.ctx.ref_mut();
+        let sym = rf.allocate_symbol(name);
+        let id = alg::Identifier {
+            symbol: sym,
+            indices,
+        };
+        let qid = QualifiedIdentifier::from(id);
+        Ok(Some(rf.app(qid, children, Some(sort))))
+    }
+}
+
+/// Translate a quantifier body together with its `:pattern` triggers.
+fn translate_quantifier_body_from_cvc5<'tm, Ctx>(
+    body_ct: CTerm<'tm>,
+    cvc5_patterns: Vec<Vec<CTerm<'tm>>>,
+    fenv: &mut Cvc5Env<'tm, Ctx>,
+) -> Res<Term>
+where
+    Ctx: HasMutRef<Context>,
+{
+    let probe = WithPattern {
+        term: body_ct.clone(),
+        patterns: cvc5_patterns.clone(),
+        #[cfg(feature = "no-pattern")]
+        no_patterns: vec![],
+    };
+    if let Some(cached) = fenv.term_cache.get_by_right(&probe) {
+        return Ok(cached.clone());
+    }
+    let body = conv_cterm(body_ct.clone(), fenv)?;
+    if cvc5_patterns.is_empty() {
+        return Ok(body);
+    }
+    let mut attrs: Vec<Attribute> = Vec::with_capacity(cvc5_patterns.len());
+    let mut pi = 0usize;
+    while pi < cvc5_patterns.len() {
+        let mut trigger: Vec<Term> = Vec::with_capacity(cvc5_patterns[pi].len());
+        let mut ti = 0usize;
+        while ti < cvc5_patterns[pi].len() {
+            let t: CTerm<'tm> = cvc5_patterns[pi][ti].clone();
+            trigger.push(conv_cterm(t, fenv)?);
+            ti += 1;
+        }
+        attrs.push(Attribute::Pattern(trigger));
+        pi += 1;
+    }
+    let annotated = fenv.ctx.ref_mut().annotated(body, attrs);
+    // Mirror the forward-direction shape: `Annotated(body, [:pattern …])` maps to a
+    // `WithPattern` whose `term` is the body's CTerm and whose `patterns` carry the pattern
+    // triggers (later absorbed into `INST_PATTERN_LIST`).
+    fenv.term_cache.insert(annotated.clone(), probe);
+    Ok(annotated)
 }
 
 /// Allocate an integer term for a possibly-negative `IBig`.
@@ -652,672 +1391,6 @@ fn signed_decimal_term(rf: &mut Context, value: DBig, sort: Sort) -> Term {
         }
         Sign::Positive => num,
     }
-}
-
-fn translate_term_from_cvc5<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term>
-where
-    Ctx: HasMutRef<Context>,
-{
-    let kind = ct.kind();
-
-    // ── Constants ────────────────────────────────────────────
-    if ct.is_boolean_value() {
-        let mut rf = fenv.ctx.ref_mut();
-        let sort = Some(rf.bool_sort());
-        return Ok(rf.allocate_term(ATerm::Constant(Constant::Bool(ct.boolean_value()), sort)));
-    }
-    if ct.is_integer_value() {
-        let sort = ct.sort().conv_from_cvc5(fenv)?;
-        // cvc5 gives a negative value as a signed string (e.g. "-5"), so parse signed.
-        let n: IBig = ct
-            .integer_value()
-            .parse()
-            .map_err(|e| format!("Big integer parse error: {e}"))?;
-        return Ok(signed_int_term(&mut fenv.ctx.ref_mut(), n, sort));
-    }
-    if ct.is_real_value() {
-        let sort = ct.sort().conv_from_cvc5(fenv)?;
-        let s = ct.real_value();
-        let mut rf = fenv.ctx.ref_mut();
-        // cvc5 returns rationals as "num/den" or just "num"
-        if let Some((num_s, den_s)) = s.split_once('/') {
-            let num = format!("{num_s}.0").parse().unwrap();
-            let d = Constant::Decimal(format!("{den_s}.0").parse().unwrap());
-            let numer = signed_decimal_term(&mut rf, num, sort.clone());
-            let denom = rf.allocate_term(ATerm::Constant(d, Some(sort.clone())));
-            let sym = rf.allocate_symbol(RDIV);
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.app(qid, vec![numer, denom], Some(sort)));
-        }
-        // No division — parse as a single decimal
-        let n: DBig = format!("{s}.0").parse().map_err(|e| format!("{e}"))?;
-        return Ok(signed_decimal_term(&mut rf, n, sort));
-    }
-    if ct.is_string_value() {
-        let sort = ct.sort().conv_from_cvc5(fenv)?;
-        let chars = ct.u32string_value();
-        let s: String = chars
-            .iter()
-            .map(|&c| char::from_u32(c).unwrap_or('\u{FFFD}'))
-            .collect();
-
-        let mut rf = fenv.ctx.ref_mut();
-        let str_val = rf.allocate_str(&s);
-        return Ok(rf.allocate_term(ATerm::Constant(Constant::String(str_val), Some(sort))));
-    }
-    if ct.is_bv_value() {
-        let sort = ct.sort().conv_from_cvc5(fenv)?;
-        let bits = ct.bv_value(2);
-        let (bytes, len) = match UntypedAst
-            .parse_term_str(&format!("#b{bits}"))
-            .map_err(|e| format!("{e}"))?
-            .repr()
-        {
-            ATerm::Constant(alg::Constant::Binary(bytes, len), _) => (bytes.clone(), *len),
-            _ => return Err(format!("bit vector literal {bits} cannot be parsed!")),
-        };
-
-        return Ok(fenv
-            .ctx
-            .ref_mut()
-            .allocate_term(ATerm::Constant(Constant::Binary(bytes, len), Some(sort))));
-    }
-
-    // ── Logical connectives ─────────────────────────────────
-    match kind {
-        Kind::And => {
-            let children = translate_children(ct, fenv)?;
-            return Ok(fenv.ctx.ref_mut().and(children));
-        }
-        Kind::Or => {
-            let children = translate_children(ct, fenv)?;
-            return Ok(fenv.ctx.ref_mut().or(children));
-        }
-        Kind::Xor => {
-            let children = translate_children(ct, fenv)?;
-            return Ok(fenv.ctx.ref_mut().xor(children));
-        }
-        Kind::Not => {
-            let child = ct.child(0).conv_from_cvc5(fenv)?;
-            return Ok(fenv.ctx.ref_mut().not(child));
-        }
-        Kind::Implies => {
-            let n = ct.num_children();
-            let mut premises = Vec::with_capacity(n - 1);
-            for i in 0..n - 1 {
-                premises.push(ct.child(i).conv_from_cvc5(fenv)?);
-            }
-            let concl = ct.child(n - 1).conv_from_cvc5(fenv)?;
-
-            return Ok(fenv.ctx.ref_mut().implies(premises, concl));
-        }
-        Kind::Equal => {
-            let children = translate_children(ct, fenv)?;
-            let mut rf = fenv.ctx.ref_mut();
-
-            if children.len() == 2 {
-                return Ok(rf.eq(children[0].clone(), children[1].clone()));
-            }
-            // Chain: (= a b c) → (and (= a b) (= b c))
-            let mut eqs = Vec::with_capacity(children.len() - 1);
-            for i in 0..children.len() - 1 {
-                eqs.push(rf.eq(children[i].clone(), children[i + 1].clone()));
-            }
-            return Ok(rf.and(eqs));
-        }
-        Kind::Distinct => {
-            let children = translate_children(ct, fenv)?;
-
-            return Ok(fenv.ctx.ref_mut().distinct(children));
-        }
-        Kind::Ite => {
-            let b = ct.child(0).conv_from_cvc5(fenv)?;
-            let t = ct.child(1).conv_from_cvc5(fenv)?;
-            let e = ct.child(2).conv_from_cvc5(fenv)?;
-
-            return Ok(fenv.ctx.ref_mut().ite(b, t, e));
-        }
-        // ── Quantifiers ─────────────────────────────────────────
-        Kind::Forall | Kind::Exists => {
-            let vlist = ct.child(0);
-            let body_ct = ct.child(1);
-            let mut scope_ids = Vec::new();
-            for i in 0..vlist.num_children() {
-                let v = vlist.child(i);
-                let cvc5_id = v.id();
-                let name = v.symbol().to_string();
-                let vs = v.sort().conv_from_cvc5(fenv)?;
-
-                let mut rf = fenv.ctx.ref_mut();
-                let id = rf.new_local();
-                let sym = rf.allocate_symbol(&name);
-                fenv.locals_from.insert(cvc5_id, VarBinding(sym, id, vs));
-                scope_ids.push(cvc5_id);
-            }
-            fenv.push_scope_from(scope_ids);
-
-            // Collect cvc5 patterns first (without translating to ir Terms yet).
-            // This lets us probe the bimap with `WithPattern { body_ct, cvc5_patterns }`
-            // on the right side and short-circuit body translation on a hit.
-            let cvc5_patterns: Vec<Vec<CTerm<'tm>>> = if ct.num_children() > 2 {
-                let plist = ct.child(2);
-                let mut pats = Vec::with_capacity(plist.num_children());
-                for i in 0..plist.num_children() {
-                    let pat = plist.child(i);
-                    if pat.kind() == Kind::InstPattern {
-                        let mut pat_cterms = Vec::with_capacity(pat.num_children());
-                        for j in 0..pat.num_children() {
-                            pat_cterms.push(pat.child(j));
-                        }
-                        pats.push(pat_cterms);
-                    }
-                }
-                pats
-            } else {
-                vec![]
-            };
-
-            let result = 'inner: {
-                let probe = WithPattern {
-                    term: body_ct.clone(),
-                    patterns: cvc5_patterns.clone(),
-                    #[cfg(feature = "no-pattern")]
-                    no_patterns: vec![],
-                };
-                if let Some(cached) = fenv.term_cache.get_by_right(&probe) {
-                    break 'inner Ok(cached.clone());
-                }
-                body_ct.conv_from_cvc5(fenv).and_then(|body| {
-                    if cvc5_patterns.is_empty() {
-                        return Ok(body);
-                    }
-                    let attrs = cvc5_patterns
-                        .iter()
-                        .map(|pats| {
-                            Ok(Attribute::Pattern(
-                                pats.iter()
-                                    .map(|t| t.conv_from_cvc5(fenv))
-                                    .collect::<Res<Vec<_>>>()?,
-                            ))
-                        })
-                        .collect::<Res<Vec<_>>>()?;
-                    let annotated = fenv.ctx.ref_mut().annotated(body, attrs);
-                    // Mirror the forward-direction shape: `Annotated(body, [:pattern …])`
-                    // maps to a `WithPattern` whose `term` is the body's CTerm and whose
-                    // `patterns` carry the pattern triggers (later absorbed into
-                    // `INST_PATTERN_LIST`).
-                    fenv.term_cache.insert(annotated.clone(), probe);
-                    Ok(annotated)
-                })
-            };
-
-            let bindings = fenv.pop_scope_from();
-            let body = result?;
-
-            return if kind == Kind::Forall {
-                Ok(fenv.ctx.ref_mut().forall(bindings, body))
-            } else {
-                Ok(fenv.ctx.ref_mut().exists(bindings, body))
-            };
-        }
-        // ── Negation (unary minus) ──────────────────────────────
-        Kind::Neg => {
-            let child = ct.child(0).conv_from_cvc5(fenv)?;
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(SUB);
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.app(qid, vec![child], Some(sort)));
-        }
-
-        // ── Function application (UF, constructors, selectors, testers) ──
-        Kind::Constant => {
-            // Uninterpreted constant (declared symbol)
-            let name = ct.symbol().to_string();
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(&name);
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.global(qid, Some(sort)));
-        }
-        Kind::ApplyUf => {
-            let head = ct.child(0);
-            let name = head.symbol().to_string();
-            let mut args = Vec::with_capacity(ct.num_children() - 1);
-            for i in 1..ct.num_children() {
-                args.push(ct.child(i).conv_from_cvc5(fenv)?);
-            }
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(&name);
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.app(qid, args, Some(sort)));
-        }
-        Kind::ApplyConstructor => {
-            let head = ct.child(0);
-            let name = if head.has_symbol() {
-                head.symbol().to_string()
-            } else {
-                // Parametric constructor: get name from the sort's datatype
-                let dt = ct.sort().datatype();
-                let mut found = false;
-                let mut name = String::new();
-                for i in 0..dt.num_constructors() {
-                    let ctor = dt.constructor(i);
-                    if ctor.term() == head || ctor.num_selectors() == ct.num_children() - 1 {
-                        name = ctor.name().to_string();
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    return Err(format!(
-                        "fatal error: term {head} cannot find a case for its datatype {dt}!"
-                    ));
-                }
-                name
-            };
-            let n = ct.num_children();
-            if n == 1 {
-                // Nullary constructor → global
-                let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-                let mut rf = fenv.ctx.ref_mut();
-                let sym = rf.allocate_symbol(&name);
-                let qid = if ct.sort().is_dt() && ct.sort().datatype().is_parametric() {
-                    QualifiedIdentifier::simple_sorted(sym, sort.clone())
-                } else {
-                    QualifiedIdentifier::simple(sym)
-                };
-                return Ok(rf.global(qid, Some(sort)));
-            }
-            let mut args = Vec::with_capacity(n - 1);
-            for i in 1..n {
-                args.push(ct.child(i).conv_from_cvc5(fenv)?);
-            }
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(&name);
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.app(qid, args, Some(sort)));
-        }
-        Kind::ApplySelector => {
-            let head = ct.child(0);
-            let name = if head.has_symbol() {
-                head.symbol().to_string()
-            } else {
-                format!("{head}")
-            };
-            let arg = ct.child(1).conv_from_cvc5(fenv)?;
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(&name);
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.app(qid, vec![arg], Some(sort)));
-        }
-        Kind::ApplyTester => {
-            let head = ct.child(0);
-            let tester_name = if head.has_symbol() {
-                head.symbol().to_string()
-            } else {
-                format!("{head}")
-            };
-            // cvc5 tester names are "is_<ctor>"; extract the constructor name
-            let ctor_name = tester_name.strip_prefix("is_").unwrap_or(&tester_name);
-            let arg = ct.child(1).conv_from_cvc5(fenv)?;
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let is_sym = rf.allocate_symbol(IS);
-            let ctor_sym = rf.allocate_symbol(ctor_name);
-            let id = alg::Identifier {
-                symbol: is_sym,
-                indices: vec![Index::Symbol(ctor_sym)],
-            };
-            let qid = QualifiedIdentifier::from(id);
-            return Ok(rf.app(qid, vec![arg], Some(sort)));
-        }
-
-        // ── Variable (bound) ────────────────────────────────────
-        Kind::Variable => {
-            let cvc5_id = ct.id();
-            if let Some(vb) = fenv.locals_from.get(&cvc5_id) {
-                return Ok(fenv.ctx.ref_mut().local(alg::Local {
-                    id: vb.1,
-                    symbol: vb.0.clone(),
-                    sort: vb.2.clone(),
-                }));
-            }
-            return Err(format!(
-                "unexpected and fatal scope management error: local variable {ct} is not bound!"
-            ));
-        }
-        // ── Nullary regexp constants ───────────────────────────────
-        Kind::RegexpNone | Kind::RegexpAll | Kind::RegexpAllchar => {
-            let ik = cvc5_kind_to_ident_kind(kind).unwrap();
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(ik.name());
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.global(qid, Some(sort)));
-        }
-
-        // ── BitvectorToNat ──────────────────────────────────────
-        Kind::BitvectorToNat => {
-            let child = ct.child(0).conv_from_cvc5(fenv)?;
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(BV2NAT);
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.app(qid, vec![child], Some(sort)));
-        }
-
-        // ── Match expressions ───────────────────────────────────
-        Kind::Match => {
-            let scrutinee = ct.child(0).conv_from_cvc5(fenv)?;
-            let n = ct.num_children();
-            let mut arms = Vec::with_capacity(n - 1);
-            for i in 1..n {
-                let case = ct.child(i);
-                let arm = translate_match_case_from_cvc5(&case, fenv)?;
-                arms.push(arm);
-            }
-
-            return Ok(fenv.ctx.ref_mut().matching(scrutinee, arms));
-        }
-        // ── Const array ──────────────────────────────────────────
-        Kind::ConstArray => {
-            let value = ct.const_array_base().conv_from_cvc5(fenv)?;
-            let arr_sort = ct.sort().conv_from_cvc5(fenv)?;
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(CONST);
-            let qid = QualifiedIdentifier::simple_sorted(sym, arr_sort.clone());
-            return Ok(rf.app(qid, vec![value], Some(arr_sort)));
-        }
-
-        // ── Uninterpreted sort value (from models) ──────────────
-        Kind::UninterpretedSortValue => {
-            let name = ct.uninterpreted_sort_value();
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(&name);
-            fenv.uninterpreted_values.insert(sym.clone());
-            let qid = QualifiedIdentifier::simple(sym);
-            return Ok(rf.global(qid, Some(sort)));
-        }
-
-        // ── Lambda ──────────────────────────────────────────────
-        Kind::Lambda => return Err("higher order functions are not supported!".into()),
-
-        // ── Sequences ───────────────────────────────────────────
-        Kind::ConstSequence => return Err("sequence operations are not supported!".into()),
-
-        // ── Sets ────────────────────────────────────────────────
-        // Nullary set constants need the result sort to emit `(as set.empty …)`
-        // / `(as set.universe …)`; the n-ary connectives flow through the
-        // generic `cvc5_kind_to_ident_kind` path below.
-        #[cfg(feature = "finite-set")]
-        Kind::SetEmpty | Kind::SetUniverse => {
-            let name = if kind == Kind::SetEmpty {
-                SET_EMPTY
-            } else {
-                SET_UNIVERSE
-            };
-            let sort = ct.sort().conv_from_cvc5(fenv)?;
-            let mut rf = fenv.ctx.ref_mut();
-            let sym = rf.allocate_symbol(name);
-            let qid = QualifiedIdentifier::simple_sorted(sym, sort.clone());
-            return Ok(rf.global(qid, Some(sort)));
-        }
-        #[cfg(not(feature = "finite-set"))]
-        Kind::SetEmpty
-        | Kind::SetUniverse
-        | Kind::SetSingleton
-        | Kind::SetUnion
-        | Kind::SetInter
-        | Kind::SetMinus
-        | Kind::SetMember
-        | Kind::SetSubset
-        | Kind::SetComplement
-        | Kind::SetCard => {
-            return Err("set operations are not supported!".into());
-        }
-        Kind::SetInsert => {
-            return Err("the set.insert operation is not supported!".into());
-        }
-
-        // ── Floating point ──────────────────────────────────────
-        Kind::ConstFloatingpoint | Kind::ConstRoundingmode | Kind::FloatingpointFp => {
-            return Err("floating point operations are not supported!".into());
-        }
-
-        _ => {}
-    }
-
-    // ── Known operator kinds ────────────────────────────────
-    if let Some(ik) = cvc5_kind_to_ident_kind(kind) {
-        let children = translate_children(ct, fenv)?;
-        let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-        let name = ik.name();
-        let mut rf = fenv.ctx.ref_mut();
-        let sym = rf.allocate_symbol(name);
-        let qid = QualifiedIdentifier::simple(sym);
-        return Ok(rf.app(qid, children, Some(sort)));
-    }
-
-    // ── Indexed operators ───────────────────────────────────
-    if ct.has_op() {
-        let op = ct.op();
-        if let Some(term) = translate_indexed_from_cvc5(ct, &op, fenv)? {
-            return Ok(term);
-        }
-    }
-
-    Err(format!("unsupported cvc5 term kind: {:?}", kind))
-}
-
-fn translate_children<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Vec<Term>>
-where
-    Ctx: HasMutRef<Context>,
-{
-    let n = ct.num_children();
-    let mut children = Vec::with_capacity(n);
-    for i in 0..n {
-        children.push(ct.child(i).conv_from_cvc5(fenv)?);
-    }
-    Ok(children)
-}
-
-fn translate_match_case_from_cvc5<'tm, Ctx>(
-    case: &CTerm<'tm>,
-    fenv: &mut Cvc5Env<'tm, Ctx>,
-) -> Res<alg::PatternArm<Str, Term>>
-where
-    Ctx: HasMutRef<Context>,
-{
-    let case_kind = case.kind();
-    match case_kind {
-        Kind::MatchCase => {
-            // Children: [pattern (ApplyConstructor), body]
-            let pattern_ct = case.child(0);
-            // Nullary constructor: ApplyConstructor with just the ctor term
-            let ctor_term = pattern_ct.child(0);
-            let ctor_name = if ctor_term.has_symbol() {
-                ctor_term.symbol().to_string()
-            } else {
-                // Parametric constructor: the ctor_term is sort-qualified (e.g. `(as nil (List Int))`).
-                // Compare against instantiated constructor terms from the datatype.
-                let dt = pattern_ct.sort().datatype();
-                let sort = pattern_ct.sort();
-                let mut found = false;
-                let mut name = String::new();
-                for i in 0..dt.num_constructors() {
-                    let c = dt.constructor(i);
-                    if c.instantiated_term(sort.clone()) == ctor_term {
-                        name = c.name().to_string();
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    return Err(format!(
-                        "fatal error: term {ctor_term} cannot find a case for its datatype {dt}!"
-                    ));
-                }
-                name
-            };
-            let body = case.child(1).conv_from_cvc5(fenv)?;
-
-            let sym = fenv.ctx.ref_mut().allocate_symbol(&ctor_name);
-            Ok(alg::PatternArm {
-                pattern: Pattern::Ctor(sym),
-                body,
-            })
-        }
-        Kind::MatchBindCase => {
-            // Children: [variable_list, pattern, body]
-            let vlist = case.child(0);
-            let pattern_ct = case.child(1);
-            let body_ct = case.child(2);
-
-            // Determine if this is a wildcard or an applied constructor pattern
-            let pat_kind = pattern_ct.kind();
-            if pat_kind == Kind::Variable {
-                // Wildcard pattern: pattern is the same variable as in vlist
-                let v = vlist.child(0);
-                let cvc5_id = v.id();
-                let vs = v.sort().conv_from_cvc5(fenv)?;
-
-                if v.has_symbol() {
-                    let name = v.symbol().to_string();
-                    let mut rf = fenv.ctx.ref_mut();
-                    let id = rf.new_local();
-                    let sym = rf.allocate_symbol(&name);
-                    drop(rf);
-                    let vb = VarBinding(sym.clone(), id, vs);
-                    fenv.locals_from.insert(cvc5_id, vb);
-                    fenv.push_scope_from(vec![cvc5_id]);
-
-                    let result = body_ct.conv_from_cvc5(fenv);
-                    fenv.pop_scope_from();
-                    let body = result?;
-                    Ok(alg::PatternArm {
-                        pattern: Pattern::Wildcard(Some((sym, id))),
-                        body,
-                    })
-                } else {
-                    // Anonymous wildcard — no variable binding
-                    let body = body_ct.conv_from_cvc5(fenv)?;
-                    Ok(alg::PatternArm {
-                        pattern: Pattern::Wildcard(None),
-                        body,
-                    })
-                }
-            } else {
-                // Applied constructor pattern: pattern is ApplyConstructor
-                let ctor_term = pattern_ct.child(0);
-                let ctor_name = if ctor_term.has_symbol() {
-                    ctor_term.symbol().to_string()
-                } else {
-                    format!("{ctor_term}")
-                };
-                let num_args = pattern_ct.num_children() - 1;
-
-                let mut scope_ids = Vec::new();
-                let mut arguments = Vec::with_capacity(num_args);
-
-                for i in 0..num_args {
-                    let arg = pattern_ct.child(i + 1);
-                    let cvc5_id = arg.id();
-                    scope_ids.push(cvc5_id);
-                    if arg.has_symbol() {
-                        let name = arg.symbol().to_string();
-                        let vs = arg.sort().conv_from_cvc5(fenv)?;
-                        let mut rf = fenv.ctx.ref_mut();
-                        let id = rf.new_local();
-                        let sym = rf.allocate_symbol(&name);
-                        fenv.locals_from
-                            .insert(cvc5_id, VarBinding(sym.clone(), id, vs));
-                        arguments.push(Some((sym, id)));
-                    } else {
-                        arguments.push(None);
-                    }
-                }
-                fenv.push_scope_from(scope_ids);
-
-                let result = body_ct.conv_from_cvc5(fenv);
-                fenv.pop_scope_from();
-                let body = result?;
-
-                let ctor_sym = fenv.ctx.ref_mut().allocate_symbol(&ctor_name);
-                Ok(alg::PatternArm {
-                    pattern: Pattern::Applied {
-                        ctor: ctor_sym,
-                        arguments,
-                    },
-                    body,
-                })
-            }
-        }
-        _ => Err(format!("unsupported match case kind: {:?}", case_kind)),
-    }
-}
-
-fn translate_indexed_from_cvc5<'tm, Ctx>(
-    ct: &CTerm<'tm>,
-    op: &cvc5::Op<'tm>,
-    fenv: &mut Cvc5Env<'tm, Ctx>,
-) -> Res<Option<Term>>
-where
-    Ctx: HasMutRef<Context>,
-{
-    let op_kind = op.kind();
-    let children = translate_children(ct, fenv)?;
-    let sort = ct.sort().conv_from_cvc5(fenv)?;
-
-    let idx_ubig = |i: usize| -> Res<UBig> {
-        let idx_term = op.index(i);
-        idx_term
-            .integer_value()
-            .parse::<UBig>()
-            .map_err(|e| format!("Big integer parse error: {e}"))
-    };
-
-    let (name, indices) = match op_kind {
-        Kind::BitvectorExtract => (
-            BV_EXTRACT,
-            vec![Index::Numeral(idx_ubig(0)?), Index::Numeral(idx_ubig(1)?)],
-        ),
-        Kind::BitvectorRepeat => (BV_REPEAT, vec![Index::Numeral(idx_ubig(0)?)]),
-        Kind::BitvectorZeroExtend => (BV_ZERO_EXTEND, vec![Index::Numeral(idx_ubig(0)?)]),
-        Kind::BitvectorSignExtend => (BV_SIGN_EXTEND, vec![Index::Numeral(idx_ubig(0)?)]),
-        Kind::BitvectorRotateLeft => (BV_ROTATE_LEFT, vec![Index::Numeral(idx_ubig(0)?)]),
-        Kind::BitvectorRotateRight => (BV_ROTATE_RIGHT, vec![Index::Numeral(idx_ubig(0)?)]),
-        Kind::IntToBitvector => (INT2BV, vec![Index::Numeral(idx_ubig(0)?)]),
-        Kind::RegexpRepeat => (RE_POWER, vec![Index::Numeral(idx_ubig(0)?)]),
-        Kind::RegexpLoop => (
-            RE_LOOP,
-            vec![Index::Numeral(idx_ubig(0)?), Index::Numeral(idx_ubig(1)?)],
-        ),
-        _ => return Ok(None),
-    };
-
-    let mut rf = fenv.ctx.ref_mut();
-    let sym = rf.allocate_symbol(name);
-    let id = alg::Identifier {
-        symbol: sym,
-        indices,
-    };
-    let qid = QualifiedIdentifier::from(id);
-    Ok(Some(rf.app(qid, children, Some(sort))))
 }
 
 /// Reverse mapping from cvc5 Kind to yaspar-ir IdentifierKind.
