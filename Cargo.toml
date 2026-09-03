@@ -44,6 +44,8 @@ num-traits = "0.2.19"
 num-order = "1.2.0"
 delegate = "0.13"
 bimap = "0.6"
+yaspar-macros = { path = "/Users/zhonhu/workplace/yaspar-org/yaspar-macros" }
+yaspar-macros-defs = { path = "/Users/zhonhu/workplace/yaspar-org/yaspar-macros/defs" }
 
 [lib]
 name = "yaspar_ir"
