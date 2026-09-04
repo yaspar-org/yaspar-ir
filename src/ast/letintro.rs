@@ -46,12 +46,13 @@
 
 use crate::allocator::{LocalVarAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
-use crate::ast::{ATerm, FetchSort, FreshVar, HasArenaAlt, Local, PatternArm, Str, Term};
+use crate::ast::{ATerm, FetchSort, FreshVar, HasArenaAlt, Local, PatternArm, Sort, Str, Term};
 use crate::traits::Repr;
 use std::cell::RefCell;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::rc::Rc;
+use yaspar_macros::stack_safe;
 
 #[derive(Debug, Clone)]
 struct SecRecord {
@@ -131,28 +132,29 @@ impl Section {
 type FindResult = Vec<(SectionCell, Option<usize>)>;
 
 /// locate the cell of the variable n
+///
+/// Walked rather than recursed: the chain is one link per enclosing binder, so its length follows
+/// the input's binder nesting.
 fn find_bound_section(cell: &SectionCell, n: &str) -> Option<SectionCell> {
-    if cell
-        .borrow()
-        .bound_variables
-        .iter()
-        .any(|v| v.as_str() == n)
-    {
-        Some(cell.clone())
-    } else {
-        cell.borrow()
-            .parent
-            .as_ref()
-            .and_then(|p| find_bound_section(p, n))
+    let mut it = cell.clone();
+    loop {
+        if it.borrow().bound_variables.iter().any(|v| v.as_str() == n) {
+            return Some(it);
+        }
+        let parent = it.borrow().parent.clone();
+        it = parent?;
     }
 }
 
 /// Find the root of the binding stack
 fn find_root(cell: &SectionCell) -> SectionCell {
-    if let Some(parent) = cell.borrow().parent.as_ref() {
-        find_root(parent)
-    } else {
-        cell.clone()
+    let mut it = cell.clone();
+    loop {
+        let parent = it.borrow().parent.clone();
+        match parent {
+            Some(p) => it = p,
+            None => return it,
+        }
     }
 }
 
@@ -234,48 +236,41 @@ impl FindSectionsImpl for Term {
         &self,
         tail: &SectionCell,
         binders: &mut HashMap<Term, SectionCell>,
-        mut insert: bool,
+        insert: bool,
     ) -> FindResult {
-        fn find_sections_slice(
-            ts: &[Term],
-            tail: &SectionCell,
-            binders: &mut HashMap<Term, SectionCell>,
-        ) -> FindResult {
-            let res = ts
-                .iter()
-                .map(|t| t.find_sections(tail, binders, true))
-                .collect::<Vec<_>>();
-            match glbs(&res) {
-                Some(r) if !r.is_empty() => incr_result(r),
-                _ => {
-                    // in this case, it means app has no argument, then we can just bubble it to the top level.
-                    let root = find_root(tail);
-                    vec![(root, Some(0))]
-                }
-            }
-        }
+        find_sections_of(self, tail, binders, insert)
+    }
+}
 
-        fn find_sections_binder<T>(
-            vs: &[VarBinding<Str, T>],
-            t: &Term,
-            tail: &SectionCell,
-            binders: &mut HashMap<Term, SectionCell>,
-        ) -> FindResult {
-            let sub = extend_cell(
-                tail.clone(),
-                &vs.iter().map(|v| v.0.clone()).collect::<Vec<_>>(),
-            );
-            binders.insert(t.clone(), sub.clone());
-            let mut r = t.find_sections(&sub, binders, true);
-            if let Some((c, _)) = r.last()
-                && c.borrow().level == sub.borrow().level
-            {
-                r.pop();
-            }
-            r
+/// Where a slice's results end up: the greatest lower bound of the parts, or the top level when
+/// there are no parts to bound. Split out of the recursion so both a slice and an `ite` can use it.
+fn combine(res: Vec<FindResult>, tail: &SectionCell) -> FindResult {
+    match glbs(&res) {
+        Some(r) if !r.is_empty() => incr_result(r),
+        _ => {
+            // in this case, it means app has no argument, then we can just bubble it to the top level.
+            let root = find_root(tail);
+            vec![(root, Some(0))]
         }
+    }
+}
 
-        let r = match self.repr() {
+/// The body of [`FindSectionsImpl::find_sections`], together with the two helpers it recurses
+/// through. Free functions rather than a trait method and two nested `fn`s, because `#[stack_safe]`
+/// writes each rewritten body beside its member and a trait impl has no room for one; the three
+/// share one driver, so a nested term never costs a native frame.
+#[stack_safe(data_in_frame)]
+mod sections {
+    use super::*;
+
+    pub(super) fn find_sections_of(
+        this: &Term,
+        tail: &SectionCell,
+        binders: &mut HashMap<Term, SectionCell>,
+        insert: bool,
+    ) -> FindResult {
+        let mut insert = insert;
+        let r: FindResult = match this.repr() {
             ATerm::Constant(_, _) => vec![],
             ATerm::Global(_, _) => vec![],
             ATerm::Local(id) => {
@@ -301,10 +296,10 @@ impl FindSectionsImpl for Term {
             ATerm::Exists(vs, t) | ATerm::Forall(vs, t) => {
                 find_sections_binder(vs, t, tail, binders)
             }
-            ATerm::Annotated(t, _) => t.find_sections(tail, binders, insert),
+            ATerm::Annotated(t, _) => find_sections_of(t, tail, binders, insert),
             ATerm::Eq(a, b) => {
-                let ra = a.find_sections(tail, binders, true);
-                let rb = b.find_sections(tail, binders, true);
+                let ra = find_sections_of(a, tail, binders, true);
+                let rb = find_sections_of(b, tail, binders, true);
                 glb(&ra, &rb)
             }
             ATerm::App(_, ts, _)
@@ -314,18 +309,27 @@ impl FindSectionsImpl for Term {
             | ATerm::Xor(ts) => find_sections_slice(ts, tail, binders),
             ATerm::Implies(a, b) => {
                 let ra = find_sections_slice(a, tail, binders);
-                let rb = b.find_sections(tail, binders, true);
+                let rb = find_sections_of(b, tail, binders, true);
                 glb(&ra, &rb)
             }
-            ATerm::Not(t) => t.find_sections(tail, binders, true),
+            ATerm::Not(t) => find_sections_of(t, tail, binders, true),
             ATerm::Ite(b, t, e) => {
-                find_sections_slice(&[b.clone(), t.clone(), e.clone()], tail, binders)
+                // the three branches are combined exactly as a slice's elements are, but naming
+                // them here keeps the built `[b, t, e]` out of the recursive call.
+                let rb = find_sections_of(b, tail, binders, true);
+                let rt = find_sections_of(t, tail, binders, true);
+                let re = find_sections_of(e, tail, binders, true);
+                let res: Vec<FindResult> = vec![rb, rt, re];
+                combine(res, tail)
             }
             ATerm::Matching(t, cases) => {
-                let tr = t.find_sections(tail, binders, true);
-                let mut vc = vec![tr];
-                for case in cases {
-                    let sub = extend_cell(
+                let tr = find_sections_of(t, tail, binders, true);
+                let mut vc: Vec<FindResult> = vec![tr];
+                let arms: &[PatternArm] = cases;
+                let mut i = 0usize;
+                while i < arms.len() {
+                    let case = &arms[i];
+                    let sub: SectionCell = extend_cell(
                         tail.clone(),
                         &case
                             .pattern
@@ -335,7 +339,7 @@ impl FindSectionsImpl for Term {
                             .collect::<Vec<_>>(),
                     );
                     binders.insert(case.body.clone(), sub.clone());
-                    let mut r = case.body.find_sections(tail, binders, true);
+                    let mut r = find_sections_of(&case.body, tail, binders, true);
                     if let Some((c, _)) = r.last()
                         && c.borrow().level == sub.borrow().level
                     {
@@ -344,6 +348,7 @@ impl FindSectionsImpl for Term {
                         r.pop();
                     }
                     vc.push(r);
+                    i += 1;
                 }
                 // unwrap here because we know it is non-empty
                 glbs(&vc).unwrap()
@@ -354,7 +359,7 @@ impl FindSectionsImpl for Term {
             let mut b = r.borrow_mut();
             let rec = b
                 .let_hierarchy
-                .entry(self.clone())
+                .entry(this.clone())
                 .or_insert_with(|| SecRecord {
                     referenced: 0,
                     level: *lvl,
@@ -364,22 +369,55 @@ impl FindSectionsImpl for Term {
 
         r
     }
+
+    pub(super) fn find_sections_slice(
+        ts: &[Term],
+        tail: &SectionCell,
+        binders: &mut HashMap<Term, SectionCell>,
+    ) -> FindResult {
+        let mut res: Vec<FindResult> = Vec::with_capacity(ts.len());
+        let mut i = 0usize;
+        while i < ts.len() {
+            res.push(find_sections_of(&ts[i], tail, binders, true));
+            i += 1;
+        }
+        combine(res, tail)
+    }
+
+    /// `T` is concrete where the nested `fn` this came from was generic: a cycle shares one driver,
+    /// so a member's parameter has one instantiation for the whole group, and `find_sections_of`
+    /// calls this at `Sort`. That was the only instantiation the nested `fn` ever had.
+    pub(super) fn find_sections_binder(
+        vs: &[VarBinding<Str, Sort>],
+        t: &Term,
+        tail: &SectionCell,
+        binders: &mut HashMap<Term, SectionCell>,
+    ) -> FindResult {
+        let mut names: Vec<Str> = Vec::with_capacity(vs.len());
+        let mut i = 0usize;
+        while i < vs.len() {
+            names.push(vs[i].0.clone());
+            i += 1;
+        }
+        let sub: SectionCell = extend_cell(tail.clone(), &names);
+        binders.insert(t.clone(), sub.clone());
+        // Read before the recursion: `sub` is lent to it, and a section's level never changes once
+        // it is built, so reading it early is the same answer.
+        let sub_level = sub.borrow().level;
+        let mut r = find_sections_of(t, &sub, binders, true);
+        if let Some((c, _)) = r.last()
+            && c.borrow().level == sub_level
+        {
+            r.pop();
+        }
+        r
+    }
 }
 
 /// Re-introduce let bindings to `Self` when appropriate
 ///
 /// This is implementation detailed; not to be exposed
 trait TopoLetIntroImpl<E> {
-    /// Invariant: if a term is in let_hierarchy and referenced more than once, then it has to be in vars
-    fn let_intro_body(
-        &self,
-        cell: SectionCell,
-        binders: &mut HashMap<Term, SectionCell>,
-        vars: &mut HashMap<Term, Local>,
-        top: bool,
-        env: &mut E,
-    ) -> Self;
-
     /// Reconstruct Self with lets, given necessary information
     fn let_intro(
         &self,
@@ -390,24 +428,10 @@ trait TopoLetIntroImpl<E> {
     ) -> Self;
 }
 
-impl<E, T> TopoLetIntroImpl<E> for Vec<T>
+impl<E> TopoLetIntroImpl<E> for Term
 where
     E: HasArenaAlt,
-    T: TopoLetIntroImpl<E>,
 {
-    fn let_intro_body(
-        &self,
-        cell: SectionCell,
-        binders: &mut HashMap<Term, SectionCell>,
-        vars: &mut HashMap<Term, Local>,
-        top: bool,
-        env: &mut E,
-    ) -> Self {
-        self.iter()
-            .map(|t| t.let_intro_body(cell.clone(), binders, vars, top, env))
-            .collect()
-    }
-
     fn let_intro(
         &self,
         cell: SectionCell,
@@ -415,30 +439,36 @@ where
         vars: &mut HashMap<Term, Local>,
         env: &mut E,
     ) -> Self {
-        self.iter()
-            .map(|t| t.let_intro(cell.clone(), binders, vars, env))
-            .collect()
+        introduce::let_intro_of(self, cell, binders, vars, env)
     }
 }
 
-impl<E> TopoLetIntroImpl<E> for Term
-where
-    E: HasArenaAlt,
-{
-    fn let_intro_body(
-        &self,
+/// The bodies of [`TopoLetIntroImpl`] for a term, and the two helpers they recurse through. Free
+/// functions for the same reason as [`sections`]: `#[stack_safe]` writes each rewritten body beside
+/// its member, and a trait impl has no room for one. All four share a driver, so a term's depth and
+/// its let-nesting both cost heap rather than stack.
+#[stack_safe(data_in_frame)]
+mod introduce {
+    use super::*;
+
+    /// Invariant: if a term is in let_hierarchy and referenced more than once, then it has to be in vars
+    pub(super) fn let_intro_body_of<E>(
+        this: &Term,
         cell: SectionCell,
         binders: &mut HashMap<Term, SectionCell>,
         vars: &mut HashMap<Term, Local>,
         top: bool,
         env: &mut E,
-    ) -> Self {
+    ) -> Term
+    where
+        E: HasArenaAlt,
+    {
         if !top {
             let mut it = cell.clone();
             loop {
-                if let Some(rec) = it.borrow().let_hierarchy.get(self) {
+                if let Some(rec) = it.borrow().let_hierarchy.get(this) {
                     if rec.referenced > 1 {
-                        return env.arena_alt().local(vars.get(self).unwrap().clone());
+                        return env.arena_alt().local(vars.get(this).unwrap().clone());
                     } else {
                         break;
                     }
@@ -451,116 +481,160 @@ where
                 it = p;
             }
         }
-        match self.repr() {
-            ATerm::Constant(_, _) | ATerm::Global(_, _) | ATerm::Local(_) => self.clone(),
+        match this.repr() {
+            ATerm::Constant(_, _) | ATerm::Global(_, _) | ATerm::Local(_) => this.clone(),
             ATerm::App(id, ts, sort) => {
-                let args = ts.let_intro_body(cell, binders, vars, false, env);
+                let args = let_intro_body_vec(ts, cell, binders, vars, false, env);
                 env.arena_alt().app(id.clone(), args, sort.clone())
             }
             ATerm::Let(_, _) => unreachable!(),
             ATerm::Exists(vs, t) => {
                 let sub = binders.get(t).unwrap().clone();
-                let nt = t.let_intro(sub, binders, vars, env);
+                let nt = let_intro_of(t, sub, binders, vars, env);
                 env.arena_alt().exists(vs.clone(), nt)
             }
             ATerm::Forall(vs, t) => {
                 let sub = binders.get(t).unwrap().clone();
-                let nt = t.let_intro(sub, binders, vars, env);
+                let nt = let_intro_of(t, sub, binders, vars, env);
                 env.arena_alt().forall(vs.clone(), nt)
             }
             ATerm::Annotated(t, ans) => {
-                let nt = t.let_intro_body(cell, binders, vars, top, env);
+                let nt = let_intro_body_of(t, cell, binders, vars, top, env);
                 env.arena_alt().annotated(nt, ans.clone())
             }
             ATerm::Eq(a, b) => {
-                let na = a.let_intro_body(cell.clone(), binders, vars, false, env);
-                let nb = b.let_intro_body(cell, binders, vars, false, env);
+                let na = let_intro_body_of(a, cell.clone(), binders, vars, false, env);
+                let nb = let_intro_body_of(b, cell, binders, vars, false, env);
                 env.arena_alt().eq(na, nb)
             }
             ATerm::Distinct(ts) => {
-                let nts = ts.let_intro_body(cell, binders, vars, false, env);
+                let nts = let_intro_body_vec(ts, cell, binders, vars, false, env);
                 env.arena_alt().distinct(nts)
             }
             ATerm::And(ts) => {
-                let nts = ts.let_intro_body(cell, binders, vars, false, env);
+                let nts = let_intro_body_vec(ts, cell, binders, vars, false, env);
                 env.arena_alt().and(nts)
             }
             ATerm::Or(ts) => {
-                let nts = ts.let_intro_body(cell, binders, vars, false, env);
+                let nts = let_intro_body_vec(ts, cell, binders, vars, false, env);
                 env.arena_alt().or(nts)
             }
             ATerm::Xor(ts) => {
-                let nts = ts.let_intro_body(cell, binders, vars, false, env);
+                let nts = let_intro_body_vec(ts, cell, binders, vars, false, env);
                 env.arena_alt().xor(nts)
             }
             ATerm::Implies(a, b) => {
-                let na = a.let_intro_body(cell.clone(), binders, vars, false, env);
-                let nb = b.let_intro_body(cell, binders, vars, false, env);
+                let na = let_intro_body_vec(a, cell.clone(), binders, vars, false, env);
+                let nb = let_intro_body_of(b, cell, binders, vars, false, env);
                 env.arena_alt().implies(na, nb)
             }
             ATerm::Not(t) => {
-                let nt = t.let_intro_body(cell, binders, vars, false, env);
+                let nt = let_intro_body_of(t, cell, binders, vars, false, env);
                 env.arena_alt().not(nt)
             }
             ATerm::Ite(b, t, e) => {
-                let nb = b.let_intro_body(cell.clone(), binders, vars, false, env);
-                let nt = t.let_intro_body(cell.clone(), binders, vars, false, env);
-                let ne = e.let_intro_body(cell, binders, vars, false, env);
+                let nb = let_intro_body_of(b, cell.clone(), binders, vars, false, env);
+                let nt = let_intro_body_of(t, cell.clone(), binders, vars, false, env);
+                let ne = let_intro_body_of(e, cell, binders, vars, false, env);
                 env.arena_alt().ite(nb, nt, ne)
             }
             ATerm::Matching(t, cases) => {
-                let nt = t.let_intro_body(cell, binders, vars, false, env);
-                let mut ncases = vec![];
-                for case in cases {
-                    let sub = binders.get(&case.body).unwrap().clone();
-                    let nbody = case.body.let_intro(sub, binders, vars, env);
+                let nt = let_intro_body_of(t, cell, binders, vars, false, env);
+                let mut ncases: Vec<PatternArm> = vec![];
+                let arms: &[PatternArm] = cases;
+                let mut i = 0usize;
+                while i < arms.len() {
+                    let sub = binders.get(&arms[i].body).unwrap().clone();
+                    let nbody = let_intro_of(&arms[i].body, sub, binders, vars, env);
                     let ncase = PatternArm {
-                        pattern: case.pattern.clone(),
+                        pattern: arms[i].pattern.clone(),
                         body: nbody,
                     };
                     ncases.push(ncase);
+                    i += 1;
                 }
                 env.arena_alt().matching(nt, ncases)
             }
         }
     }
 
-    fn let_intro(
-        &self,
+    /// [`let_intro_body_of`] over a term's arguments. The slice's own [`TopoLetIntroImpl`] would
+    /// recurse into the trait, which starts a fresh driver per level.
+    pub(super) fn let_intro_body_vec<E>(
+        ts: &[Term],
+        cell: SectionCell,
+        binders: &mut HashMap<Term, SectionCell>,
+        vars: &mut HashMap<Term, Local>,
+        top: bool,
+        env: &mut E,
+    ) -> Vec<Term>
+    where
+        E: HasArenaAlt,
+    {
+        let mut out: Vec<Term> = Vec::with_capacity(ts.len());
+        let mut i = 0usize;
+        while i < ts.len() {
+            out.push(let_intro_body_of(
+                &ts[i],
+                cell.clone(),
+                binders,
+                vars,
+                top,
+                env,
+            ));
+            i += 1;
+        }
+        out
+    }
+
+    pub(super) fn let_intro_of<E>(
+        this: &Term,
         cell: SectionCell,
         binders: &mut HashMap<Term, SectionCell>,
         vars: &mut HashMap<Term, Local>,
         env: &mut E,
-    ) -> Self {
-        fn rec<E: HasArenaAlt>(
-            t: &Term,
-            cell: SectionCell,
-            binders: &mut HashMap<Term, SectionCell>,
-            vars: &mut HashMap<Term, Local>,
-            env: &mut E,
-            bindings: Vec<Vec<Term>>,
-            i: usize,
-        ) -> Term {
-            if i >= bindings.len() {
-                t.let_intro_body(cell, binders, vars, true, env)
-            } else {
-                let mut vs = vec![];
-                for t in &bindings[i] {
-                    let id = env.arena_alt().new_local();
-                    let symbol = env.arena_alt().fresh_x();
-                    let sort = t.get_sort(env);
-                    let nt = t.let_intro_body(cell.clone(), binders, vars, true, env);
-                    vs.push(VarBinding(symbol.clone(), id, nt.clone()));
-                    let loc = Local { id, symbol, sort };
-                    vars.insert(t.clone(), loc);
-                }
-                let res = rec(t, cell, binders, vars, env, bindings, 1 + i);
-                env.arena_alt().let_term(vs, res)
-            }
-        }
-
+    ) -> Term
+    where
+        E: HasArenaAlt,
+    {
         let bindings = cell.borrow().get_let_bindings();
-        rec(self, cell, binders, vars, env, bindings, 0)
+        wrap_level(this, cell, binders, vars, env, bindings, 0)
+    }
+
+    /// Wrap one dependency level of let-bindings around `t`, then the next, innermost last.
+    pub(super) fn wrap_level<E>(
+        t: &Term,
+        cell: SectionCell,
+        binders: &mut HashMap<Term, SectionCell>,
+        vars: &mut HashMap<Term, Local>,
+        env: &mut E,
+        bindings: Vec<Vec<Term>>,
+        i: usize,
+    ) -> Term
+    where
+        E: HasArenaAlt,
+    {
+        if i >= bindings.len() {
+            let_intro_body_of(t, cell, binders, vars, true, env)
+        } else {
+            let mut vs = vec![];
+            let mut k = 0usize;
+            while k < bindings[i].len() {
+                // Cloned rather than borrowed: `bindings` moves into the next level below, and a
+                // term is a handle, so the clone costs nothing.
+                let bt: Term = bindings[i][k].clone();
+                let id = env.arena_alt().new_local();
+                let symbol = env.arena_alt().fresh_x();
+                let sort = bt.get_sort(env);
+                let nt = let_intro_body_of(&bt, cell.clone(), binders, vars, true, env);
+                vs.push(VarBinding(symbol.clone(), id, nt.clone()));
+                let loc = Local { id, symbol, sort };
+                vars.insert(bindings[i][k].clone(), loc);
+                k += 1;
+            }
+            let res = wrap_level(t, cell, binders, vars, env, bindings, 1 + i);
+            env.arena_alt().let_term(vs, res)
+        }
     }
 }
 
@@ -654,5 +728,46 @@ mod tests {
             s,
             "(let ((x-0 (+ 1 2))) (and (forall ((x Int) (y Int)) (let ((x-1 (+ x y))) (let ((x-2 (* x-0 x-1))) (= (+ x-2 x-2) 10)))) (= x-0 10)))"
         );
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::allocator::ObjectAllocatorExt;
+    use crate::ast::letintro::TopoLetIntro;
+    use crate::ast::{Arena, FlatConnectivesExt};
+
+    /// `(and x (or x (and x (or x …))))`, nested `depth` deep. Alternating so that `flat_and` and
+    /// `flat_or` cannot collapse the nesting.
+    fn deep_alternating(arena: &mut Arena, depth: usize) -> Term {
+        let bs = arena.bool_sort();
+        let x = arena.simple_sorted_symbol("x", bs);
+        let mut t = x.clone();
+        for i in 0..depth {
+            t = if i % 2 == 0 {
+                arena.flat_or(vec![x.clone(), t])
+            } else {
+                arena.flat_and(vec![x.clone(), t])
+            };
+        }
+        t
+    }
+
+    /// Covers both cycles: `topo_let_intro` runs `find_sections` and then `let_intro`.
+    #[test]
+    fn topo_let_intro_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut arena = Arena::default();
+                let t = deep_alternating(&mut arena, 20_000);
+                let out = t.topo_let_intro(&mut arena);
+                std::mem::forget((t, out));
+                true
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }
