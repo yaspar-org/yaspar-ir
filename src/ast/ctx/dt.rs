@@ -21,6 +21,7 @@ use crate::statics::{IS, IS_DASH};
 use crate::traits::{AllocatableString, Contains, HasMutRef};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+use yaspar_macros::stack_safe;
 
 struct DatatypeDefs {
     /// The names of datatypes to be defined
@@ -438,6 +439,7 @@ impl ScopedSortApi for DtDeclContext<'_, '_> {
 ///
 /// * names: the names of the datatypes being defined.
 /// * top: whether the given sort is a top symbol
+#[stack_safe]
 pub(crate) fn wf_sort(names: &[Str], sort: &Sort, env: &mut TCEnv<()>, top: bool) -> bool {
     if env.local.lookup(sort.sort_name()).is_some() {
         // if the sort is a locally bound sort variable, then it's well-formed.
@@ -611,5 +613,39 @@ pub(crate) fn extend_symbols_about_datatypes(defs: &[DatatypeDef], env: &mut Con
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::allocator::ObjectAllocatorExt;
+
+    /// `Array Int (Array Int (… Int))`, nested `depth` deep.
+    fn deep_array(ctx: &mut Context, depth: usize) -> Sort {
+        let mut s = ctx.int_sort();
+        for _ in 0..depth {
+            let idx = ctx.int_sort();
+            s = ctx.array_sort(idx, s);
+        }
+        s
+    }
+
+    #[test]
+    fn wf_sort_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ctx = Context::new();
+                ctx.ensure_logic();
+                let s = deep_array(&mut ctx, 100_000);
+                let mut env = ctx.get_sort_tcenv();
+                let r = wf_sort(&[], &s, &mut env, true);
+                std::mem::forget(s);
+                r
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }

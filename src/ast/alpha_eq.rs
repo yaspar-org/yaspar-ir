@@ -20,10 +20,12 @@
 //!   local never matches a bound one. This is useful for comparing terms that were built in
 //!   different scopes, e.g. bodies extracted from two separately constructed quantifiers.
 
+use crate::ast::alg::PatternArm;
 use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::{ATerm, Attribute, Pattern, Sort, Str, Term};
 use crate::traits::Repr;
 use bimap::BiHashMap;
+use yaspar_macros::stack_safe;
 
 /// Compare `Self` up to renaming of bound variables.
 pub trait AlphaEquiv {
@@ -37,11 +39,11 @@ pub trait AlphaEquiv {
 
 impl AlphaEquiv for Term {
     fn aeq(&self, other: &Self) -> bool {
-        aeq_impl(&mut AEqCtx::new(), self, other, false)
+        aeq::aeq_impl(&mut AEqCtx::new(), self, other, false)
     }
 
     fn aeq_permissive(&self, other: &Self) -> bool {
-        aeq_impl(&mut AEqCtx::new(), self, other, true)
+        aeq::aeq_impl(&mut AEqCtx::new(), self, other, true)
     }
 }
 
@@ -64,10 +66,7 @@ impl AEqCtx {
     }
 
     /// Enter a scope in which each `(id1, id2)` pair of bound variables corresponds.
-    fn enter(
-        &mut self,
-        pairs: impl IntoIterator<Item = (LocalId, LocalId)>,
-    ) -> Option<Vec<LocalId>> {
+    fn enter(&mut self, pairs: Vec<(LocalId, LocalId)>) -> Option<Vec<LocalId>> {
         let mut inserted = vec![];
         for (id1, id2) in pairs {
             let overwritten = self.local_map.insert(id1, id2);
@@ -87,165 +86,6 @@ impl AEqCtx {
             self.local_map.remove_by_left(&id1);
         }
     }
-}
-
-/// Decide alpha equivalence of `t1` and `t2` under the variable correspondence in `ctx`.
-fn aeq_impl(ctx: &mut AEqCtx, t1: &Term, t2: &Term, permissive: bool) -> bool {
-    match (t1.repr(), t2.repr()) {
-        // --- Leaves ---
-        (ATerm::Constant(_, _), ATerm::Constant(_, _))
-        | (ATerm::Global(_, _), ATerm::Global(_, _)) => *t1 == *t2,
-
-        // A bound variable matches only its counterpart; a free variable only itself.
-        (ATerm::Local(l1), ATerm::Local(l2)) => {
-            if l1.sort != l2.sort {
-                return false;
-            }
-            match (
-                ctx.local_map.get_by_left(&l1.id).copied(),
-                ctx.local_map.get_by_right(&l2.id).copied(),
-            ) {
-                (Some(id1), Some(_)) => id1 == l2.id,
-                (None, None) => {
-                    if permissive {
-                        // in the permissive case, two free local variables in retrospect compare equal
-                        ctx.local_map.remove_by_left(&l1.id);
-                        ctx.assoc_local(l1.id, l2.id);
-                        true
-                    } else {
-                        l1.id == l2.id
-                    }
-                }
-                // otherwise, a free variable never matches a bound one
-                _ => false,
-            }
-        }
-
-        // --- Application ---
-        (ATerm::App(f1, ts1, s1), ATerm::App(f2, ts2, s2)) => {
-            f1 == f2 && s1 == s2 && aeq_terms(ctx, ts1, ts2, permissive)
-        }
-
-        // --- Binders ---
-
-        // `let` is parallel: the bound terms live in the enclosing scope, only the body sees
-        // the new bindings.
-        (ATerm::Let(vs1, b1), ATerm::Let(vs2, b2)) => {
-            if vs1.len() != vs2.len() {
-                return false;
-            }
-            let mut id_map = vec![];
-            for (v1, v2) in vs1.iter().zip(vs2.iter()) {
-                if !aeq_impl(ctx, &v1.2, &v2.2, permissive) {
-                    return false;
-                }
-                id_map.push((v1.1, v2.1));
-            }
-            aeq_in_scope(ctx, id_map, b1, b2, permissive)
-        }
-
-        (ATerm::Forall(vs1, b1), ATerm::Forall(vs2, b2))
-        | (ATerm::Exists(vs1, b1), ATerm::Exists(vs2, b2)) => {
-            aeq_quantifier(ctx, vs1, b1, vs2, b2, permissive)
-        }
-
-        // Arms must correspond positionally; each pattern binds its variables in its own body.
-        (ATerm::Matching(s1, arms1), ATerm::Matching(s2, arms2)) => {
-            aeq_impl(ctx, s1, s2, permissive)
-                && arms1.len() == arms2.len()
-                && arms1.iter().zip(arms2).all(|(a1, a2)| {
-                    match aeq_pattern(&a1.pattern, &a2.pattern) {
-                        Some(pairs) => aeq_in_scope(ctx, pairs, &a1.body, &a2.body, permissive),
-                        None => false,
-                    }
-                })
-        }
-
-        // --- Annotation ---
-        (ATerm::Annotated(x1, as1), ATerm::Annotated(x2, as2)) => {
-            aeq_impl(ctx, x1, x2, permissive)
-                && as1.len() == as2.len()
-                && as1
-                    .iter()
-                    .zip(as2)
-                    .all(|(a1, a2)| aeq_attribute(ctx, a1, a2, permissive))
-        }
-
-        // --- Equality and logical connectives ---
-        (ATerm::Eq(a1, b1), ATerm::Eq(a2, b2)) => {
-            aeq_impl(ctx, a1, a2, permissive) && aeq_impl(ctx, b1, b2, permissive)
-        }
-
-        (ATerm::Distinct(ts1), ATerm::Distinct(ts2))
-        | (ATerm::And(ts1), ATerm::And(ts2))
-        | (ATerm::Or(ts1), ATerm::Or(ts2))
-        | (ATerm::Xor(ts1), ATerm::Xor(ts2)) => aeq_terms(ctx, ts1, ts2, permissive),
-
-        (ATerm::Implies(ts1, c1), ATerm::Implies(ts2, c2)) => {
-            aeq_terms(ctx, ts1, ts2, permissive) && aeq_impl(ctx, c1, c2, permissive)
-        }
-
-        (ATerm::Not(x1), ATerm::Not(x2)) => aeq_impl(ctx, x1, x2, permissive),
-
-        (ATerm::Ite(c1, t1, e1), ATerm::Ite(c2, t2, e2)) => {
-            aeq_impl(ctx, c1, c2, permissive)
-                && aeq_impl(ctx, t1, t2, permissive)
-                && aeq_impl(ctx, e1, e2, permissive)
-        }
-
-        // different constructors are never alpha equivalent
-        (_, _) => false,
-    }
-}
-
-/// Pairwise alpha equivalence of two term lists, which must have the same length.
-fn aeq_terms(ctx: &mut AEqCtx, ts1: &[Term], ts2: &[Term], permissive: bool) -> bool {
-    ts1.len() == ts2.len()
-        && ts1
-            .iter()
-            .zip(ts2)
-            .all(|(x, y)| aeq_impl(ctx, x, y, permissive))
-}
-
-/// Compare `b1` and `b2` with `pairs` of bound variables corresponding, then restore the scope.
-fn aeq_in_scope(
-    ctx: &mut AEqCtx,
-    pairs: impl IntoIterator<Item = (LocalId, LocalId)>,
-    b1: &Term,
-    b2: &Term,
-    permissive: bool,
-) -> bool {
-    match ctx.enter(pairs) {
-        None => false,
-        Some(scope) => {
-            let r = aeq_impl(ctx, b1, b2, permissive);
-            ctx.exit(scope);
-            r
-        }
-    }
-}
-
-/// Compare two quantified terms: the bound variables must agree in number and sort (but not in
-/// name), and the bodies must agree with those variables corresponding positionally.
-fn aeq_quantifier(
-    ctx: &mut AEqCtx,
-    vs1: &[VarBinding<Str, Sort>],
-    b1: &Term,
-    vs2: &[VarBinding<Str, Sort>],
-    b2: &Term,
-    permissive: bool,
-) -> bool {
-    if vs1.len() != vs2.len() {
-        return false;
-    }
-    let mut id_map = vec![];
-    for (v1, v2) in vs1.iter().zip(vs2.iter()) {
-        if v1.2 != v2.2 {
-            return false;
-        }
-        id_map.push((v1.1, v2.1));
-    }
-    aeq_in_scope(ctx, id_map, b1, b2, permissive)
 }
 
 /// Match two patterns up to renaming of the variables they bind.
@@ -284,14 +124,216 @@ fn aeq_pattern(p1: &Pattern, p2: &Pattern) -> Option<Vec<(LocalId, LocalId)>> {
     }
 }
 
-/// Compare two attributes, recursing into `:pattern` and `:no-pattern` since they carry terms.
-fn aeq_attribute(ctx: &mut AEqCtx, a1: &Attribute, a2: &Attribute, permissive: bool) -> bool {
-    match (a1, a2) {
-        (Attribute::Pattern(ts1), Attribute::Pattern(ts2)) => aeq_terms(ctx, ts1, ts2, permissive),
-        #[cfg(feature = "no-pattern")]
-        (Attribute::NoPattern(t1), Attribute::NoPattern(t2)) => aeq_impl(ctx, t1, t2, permissive),
-        // the remaining attributes hold no terms, so syntactic equality is exact
-        _ => a1 == a2,
+#[stack_safe]
+mod aeq {
+    use super::*;
+
+    /// Decide alpha equivalence of `t1` and `t2` under the variable correspondence in `ctx`.
+    pub(super) fn aeq_impl(ctx: &mut AEqCtx, t1: &Term, t2: &Term, permissive: bool) -> bool {
+        match (t1.repr(), t2.repr()) {
+            // --- Leaves ---
+            (ATerm::Constant(_, _), ATerm::Constant(_, _))
+            | (ATerm::Global(_, _), ATerm::Global(_, _)) => *t1 == *t2,
+
+            // A bound variable matches only its counterpart; a free variable only itself.
+            (ATerm::Local(l1), ATerm::Local(l2)) => {
+                if l1.sort != l2.sort {
+                    return false;
+                }
+                match (
+                    ctx.local_map.get_by_left(&l1.id).copied(),
+                    ctx.local_map.get_by_right(&l2.id).copied(),
+                ) {
+                    (Some(id1), Some(_)) => id1 == l2.id,
+                    (None, None) => {
+                        if permissive {
+                            // in the permissive case, two free local variables in retrospect compare equal
+                            ctx.local_map.remove_by_left(&l1.id);
+                            ctx.assoc_local(l1.id, l2.id);
+                            true
+                        } else {
+                            l1.id == l2.id
+                        }
+                    }
+                    // otherwise, a free variable never matches a bound one
+                    _ => false,
+                }
+            }
+
+            // --- Application ---
+            (ATerm::App(f1, ts1, s1), ATerm::App(f2, ts2, s2)) => {
+                f1 == f2 && s1 == s2 && aeq_terms(ctx, ts1, ts2, permissive)
+            }
+
+            // --- Binders ---
+
+            // `let` is parallel: the bound terms live in the enclosing scope, only the body sees
+            // the new bindings.
+            (ATerm::Let(vs1, b1), ATerm::Let(vs2, b2)) => {
+                if vs1.len() != vs2.len() {
+                    return false;
+                }
+                let mut id_map = vec![];
+                for (v1, v2) in vs1.iter().zip(vs2.iter()) {
+                    if !aeq_impl(ctx, &v1.2, &v2.2, permissive) {
+                        return false;
+                    }
+                    id_map.push((v1.1, v2.1));
+                }
+                aeq_in_scope(ctx, id_map, b1, b2, permissive)
+            }
+
+            (ATerm::Forall(vs1, b1), ATerm::Forall(vs2, b2))
+            | (ATerm::Exists(vs1, b1), ATerm::Exists(vs2, b2)) => {
+                aeq_quantifier(ctx, vs1, b1, vs2, b2, permissive)
+            }
+
+            // Arms must correspond positionally; each pattern binds its variables in its own body.
+            (ATerm::Matching(s1, arms1), ATerm::Matching(s2, arms2)) => {
+                let arm_lhs: &[PatternArm<Str, Term>] = arms1;
+                let arm_rhs: &[PatternArm<Str, Term>] = arms2;
+                if arm_lhs.len() != arm_rhs.len() || !aeq_impl(ctx, s1, s2, permissive) {
+                    return false;
+                }
+                let mut i: usize = 0;
+                while i < arm_lhs.len() {
+                    let (a1, a2) = (&arm_lhs[i], &arm_rhs[i]);
+                    match aeq_pattern(&a1.pattern, &a2.pattern) {
+                        Some(pairs) => {
+                            if !aeq_in_scope(ctx, pairs, &a1.body, &a2.body, permissive) {
+                                return false;
+                            }
+                        }
+                        None => return false,
+                    }
+                    i += 1;
+                }
+                true
+            }
+
+            // --- Annotation ---
+            (ATerm::Annotated(x1, as1), ATerm::Annotated(x2, as2)) => {
+                let attr_lhs: &[Attribute] = as1;
+                let attr_rhs: &[Attribute] = as2;
+                if attr_lhs.len() != attr_rhs.len() || !aeq_impl(ctx, x1, x2, permissive) {
+                    return false;
+                }
+                let mut i: usize = 0;
+                while i < attr_lhs.len() {
+                    if !aeq_attribute(ctx, &attr_lhs[i], &attr_rhs[i], permissive) {
+                        return false;
+                    }
+                    i += 1;
+                }
+                true
+            }
+
+            // --- Equality and logical connectives ---
+            (ATerm::Eq(a1, b1), ATerm::Eq(a2, b2)) => {
+                aeq_impl(ctx, a1, a2, permissive) && aeq_impl(ctx, b1, b2, permissive)
+            }
+
+            (ATerm::Distinct(ts1), ATerm::Distinct(ts2))
+            | (ATerm::And(ts1), ATerm::And(ts2))
+            | (ATerm::Or(ts1), ATerm::Or(ts2))
+            | (ATerm::Xor(ts1), ATerm::Xor(ts2)) => aeq_terms(ctx, ts1, ts2, permissive),
+
+            (ATerm::Implies(ts1, c1), ATerm::Implies(ts2, c2)) => {
+                aeq_terms(ctx, ts1, ts2, permissive) && aeq_impl(ctx, c1, c2, permissive)
+            }
+
+            (ATerm::Not(x1), ATerm::Not(x2)) => aeq_impl(ctx, x1, x2, permissive),
+
+            (ATerm::Ite(c1, t1, e1), ATerm::Ite(c2, t2, e2)) => {
+                aeq_impl(ctx, c1, c2, permissive)
+                    && aeq_impl(ctx, t1, t2, permissive)
+                    && aeq_impl(ctx, e1, e2, permissive)
+            }
+
+            // different constructors are never alpha equivalent
+            (_, _) => false,
+        }
+    }
+
+    /// Pairwise alpha equivalence of two term lists, which must have the same length.
+    pub(super) fn aeq_terms(
+        ctx: &mut AEqCtx,
+        ts1: &[Term],
+        ts2: &[Term],
+        permissive: bool,
+    ) -> bool {
+        if ts1.len() != ts2.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < ts1.len() {
+            if !aeq_impl(ctx, &ts1[i], &ts2[i], permissive) {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// Compare `b1` and `b2` with `pairs` of bound variables corresponding, then restore the scope.
+    pub(super) fn aeq_in_scope(
+        ctx: &mut AEqCtx,
+        pairs: Vec<(LocalId, LocalId)>,
+        b1: &Term,
+        b2: &Term,
+        permissive: bool,
+    ) -> bool {
+        match ctx.enter(pairs) {
+            None => false,
+            Some(scope) => {
+                let r = aeq_impl(ctx, b1, b2, permissive);
+                ctx.exit(scope);
+                r
+            }
+        }
+    }
+
+    /// Compare two quantified terms: the bound variables must agree in number and sort (but not in
+    /// name), and the bodies must agree with those variables corresponding positionally.
+    pub(super) fn aeq_quantifier(
+        ctx: &mut AEqCtx,
+        vs1: &[VarBinding<Str, Sort>],
+        b1: &Term,
+        vs2: &[VarBinding<Str, Sort>],
+        b2: &Term,
+        permissive: bool,
+    ) -> bool {
+        if vs1.len() != vs2.len() {
+            return false;
+        }
+        let mut id_map = vec![];
+        for (v1, v2) in vs1.iter().zip(vs2.iter()) {
+            if v1.2 != v2.2 {
+                return false;
+            }
+            id_map.push((v1.1, v2.1));
+        }
+        aeq_in_scope(ctx, id_map, b1, b2, permissive)
+    }
+
+    /// Compare two attributes, recursing into `:pattern` and `:no-pattern` since they carry terms.
+    pub(super) fn aeq_attribute(
+        ctx: &mut AEqCtx,
+        a1: &Attribute,
+        a2: &Attribute,
+        permissive: bool,
+    ) -> bool {
+        match (a1, a2) {
+            (Attribute::Pattern(ts1), Attribute::Pattern(ts2)) => {
+                aeq_terms(ctx, ts1, ts2, permissive)
+            }
+            #[cfg(feature = "no-pattern")]
+            (Attribute::NoPattern(t1), Attribute::NoPattern(t2)) => {
+                aeq_impl(ctx, t1, t2, permissive)
+            }
+            // the remaining attributes hold no terms, so syntactic equality is exact
+            _ => a1 == a2,
+        }
     }
 }
 
@@ -694,5 +736,42 @@ mod tests {
         assert!(t2.aeq_permissive(&t1));
         // a bound variable cannot correspond to a free one, even permissively
         assert!(!t1.aeq_permissive(&t3));
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::ast::{CheckedApi, Context, Typecheck};
+    use crate::untyped::UntypedAst;
+
+    fn deep_not(ctx: &mut Context, depth: usize) -> Term {
+        let mut t = UntypedAst
+            .parse_term_str("true")
+            .unwrap()
+            .type_check(ctx)
+            .unwrap();
+        for _ in 0..depth {
+            t = ctx.typed_not(t).unwrap();
+        }
+        t
+    }
+
+    #[test]
+    fn aeq_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ctx = Context::new();
+                ctx.ensure_logic();
+                let a = deep_not(&mut ctx, 100_000);
+                let b = a.clone();
+                let r = a.aeq(&b) && a.aeq_permissive(&b);
+                std::mem::forget((a, b));
+                r
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }
