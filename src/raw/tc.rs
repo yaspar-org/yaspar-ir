@@ -50,6 +50,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use unif::SortSubst;
 use yaspar::ast::Keyword;
+use yaspar_macros::stack_safe;
 
 mod app;
 pub(crate) mod unif;
@@ -417,15 +418,30 @@ where
     type Out = Sort;
 
     fn type_check(&self, env: &mut TCEnvGen<L>) -> TC<Self::Out> {
-        let sorts = self
-            .inner()
-            .repr()
-            .1
-            .iter()
-            .map(|s| s.type_check(env))
-            .collect::<TC<Vec<_>>>()?;
-        tc_sort(env, &self.inner().repr().0, sorts)
+        tc_sort_rec(self, env)
     }
+}
+
+/// The body of [`Typecheck::type_check`] for a sort, which recurses over a sort of unbounded
+/// nesting. It lives out here because `#[stack_safe]` writes the rewritten body beside the member,
+/// and a trait impl may hold nothing but the trait's own members. The impl above forwards to it, and
+/// the recursion below stays out of trait dispatch so a nested sort re-enters this driver rather
+/// than starting a new one.
+#[stack_safe]
+fn tc_sort_rec<St, So, L>(this: &So, env: &mut TCEnvGen<L>) -> TC<Sort>
+where
+    St: AllocatableString<Arena>,
+    So: Contains<T: Repr<T = alg::Sort<St, So>>> + Display,
+    L: Mapping<Key = Str, Value = (LocalId, ())>,
+{
+    let args = &this.inner().repr().1;
+    let mut sorts: Vec<Sort> = Vec::with_capacity(args.len());
+    let mut i = 0usize;
+    while i < args.len() {
+        sorts.push(tc_sort_rec(&args[i], env)?);
+        i += 1;
+    }
+    tc_sort(env, &this.inner().repr().0, sorts)
 }
 
 /// Build a typed [`Term`] from a [`Constant`], inferring its sort.
@@ -1207,5 +1223,41 @@ where
             #[cfg(feature = "no-pattern")]
             alg::Attribute::NoPattern(t) => Ok(Attribute::NoPattern(t.type_check(env)?)),
         }
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use crate::allocator::ObjectAllocatorExt;
+    use crate::ast::{Context, ScopedSortApi, Sort, Typecheck};
+
+    /// `Array Int (Array Int (… Int))`, nested `depth` deep.
+    fn deep_array(ctx: &mut Context, depth: usize) -> Sort {
+        let mut s = ctx.int_sort();
+        for _ in 0..depth {
+            let idx = ctx.int_sort();
+            s = ctx.array_sort(idx, s);
+        }
+        s
+    }
+
+    /// Re-checking a typed sort walks it the same way checking an untyped one does.
+    #[test]
+    fn tc_sort_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ctx = Context::new();
+                ctx.ensure_logic();
+                let s = deep_array(&mut ctx, 100_000);
+                let mut env = ctx.get_sort_tcenv();
+                let checked = s.type_check(&mut env).unwrap();
+                let r = checked == s;
+                std::mem::forget((s, checked));
+                r
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }

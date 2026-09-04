@@ -20,6 +20,7 @@ use crate::ast::{ATerm, Arena, FlatConnectivesExt, Term};
 use crate::traits::Repr;
 use sat_interface::{Clause, SatSolver, SolverState};
 use std::collections::HashSet;
+use yaspar_macros::stack_safe;
 
 /// A trait that characterizes what a model should do:
 ///
@@ -48,38 +49,61 @@ where
     M: Model,
 {
     fn find_one_implicant_impl(&self, env: &mut Arena, model: &mut M, block: bool) -> Self {
-        match self.repr() {
-            ATerm::Annotated(t, _) => t.find_one_implicant_impl(&mut *env, model, block),
-            ATerm::And(ts) => {
-                let nts = ts
-                    .iter()
-                    .map(|t| t.find_one_implicant_impl(&mut *env, model, block))
-                    .collect();
-                env.flat_and(nts)
-            }
-            ATerm::Or(ts) => ts
-                .iter()
-                .find(|t| model.evaluate(t).unwrap()) // there must be a result due to the CNF conversion
-                .unwrap()
-                .find_one_implicant_impl(&mut *env, model, true),
+        implicant_of(self, env, model, block)
+    }
+}
 
-            // the only possibility for reducing the size of the original formula is the `or` case.
-            // In this case, we rely on the model to find out the first sub-formula that is true.
+/// The body of [`FindImplicantImpl::find_one_implicant_impl`] for a single term, out here because
+/// `#[stack_safe]` writes the rewritten body beside the member, and a trait impl may hold nothing
+/// but the trait's own members. Recursing through the free function also keeps a nested call inside
+/// the same driver.
+#[stack_safe]
+fn implicant_of<M>(this: &Term, env: &mut Arena, model: &mut M, block: bool) -> Term
+where
+    M: Model,
+{
+    match this.repr() {
+        ATerm::Annotated(t, _) => implicant_of(t, env, model, block),
+        ATerm::And(ts) => {
+            let mut nts: Vec<Term> = Vec::with_capacity(ts.len());
+            let mut i = 0usize;
+            while i < ts.len() {
+                nts.push(implicant_of(&ts[i], env, model, block));
+                i += 1;
+            }
+            env.flat_and(nts)
+        }
+        ATerm::Or(ts) => {
+            // the only possibility for reducing the size of the original formula is the `or`
+            // case. In this case, we rely on the model to find out the first sub-formula that
+            // is true.
+            let mut chosen: Option<usize> = None;
+            let mut i = 0usize;
+            while i < ts.len() {
+                if model.evaluate(&ts[i]).unwrap() {
+                    chosen = Some(i);
+                    break;
+                }
+                i += 1;
+            }
+            // there must be a result due to the CNF conversion
+            let j = chosen.unwrap();
+            implicant_of(&ts[j], env, model, true)
+        }
 
-            // we make this case explicit, because we assume negative normal form, so there really
-            // isn't much to do here other than cloning.
-            ATerm::Not(t) => {
-                if block {
-                    model.block(t);
-                }
-                self.clone()
+        // we make this case explicit, because we assume negative normal form, so there really
+        // isn't much to do here other than cloning.
+        ATerm::Not(t) => {
+            if block {
+                model.block(t);
             }
-            _ => {
-                if block {
-                    model.block(self);
-                }
-                self.clone()
+            this.clone()
+        }
+        _ => {
+            if block {
+                model.block(this);
             }
+            this.clone()
         }
     }
 }
@@ -236,5 +260,57 @@ where
             .flat_map(|t| self.cache.var_map.get(&t.uid()).map(|i| -*i))
             .collect();
         self.solver.insert(&Clause::new(vars));
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::allocator::ObjectAllocatorExt;
+
+    /// Says every term is true and forgets what it is asked to block: enough to drive the `or` case,
+    /// which follows the model down one branch.
+    struct AllTrue;
+
+    impl Model for AllTrue {
+        fn evaluate(&mut self, _: &Term) -> Option<bool> {
+            Some(true)
+        }
+
+        fn block(&mut self, _: &Term) {}
+    }
+
+    /// `(and x (or x (and x (or x …))))`, nested `depth` deep. Alternating so that `flat_and` and
+    /// `flat_or` cannot collapse the nesting.
+    fn deep_alternating(arena: &mut Arena, depth: usize) -> Term {
+        let bs = arena.bool_sort();
+        let x = arena.simple_sorted_symbol("x", bs);
+        let mut t = x.clone();
+        for i in 0..depth {
+            // The nesting comes first in each `or`: the model picks the first true child, so a
+            // leaf in front would end the descent at depth one.
+            t = if i % 2 == 0 {
+                arena.flat_or(vec![t, x.clone()])
+            } else {
+                arena.flat_and(vec![t, x.clone()])
+            };
+        }
+        t
+    }
+
+    #[test]
+    fn find_one_implicant_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut arena = Arena::default();
+                let t = deep_alternating(&mut arena, 20_000);
+                let imp = t.find_one_implicant_impl(&mut arena, &mut AllTrue, false);
+                std::mem::forget((t, imp));
+                true
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }
