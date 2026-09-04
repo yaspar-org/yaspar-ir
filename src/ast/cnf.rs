@@ -20,6 +20,7 @@ use crate::ast::{
 use crate::traits::Repr;
 use sat_interface::{Clause, Formula};
 use std::collections::HashMap;
+use yaspar_macros::stack_safe;
 
 /// This trait implements the conjunctive normal form (CNF) conversion from [Self] to a formula.
 ///
@@ -95,6 +96,28 @@ trait CNFConversionHelper<Env> {
 
 impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
     fn nnf_impl(&self, env: &mut CNFEnv<'_>, polarity: bool) -> Self {
+        nnf_of(self, env, polarity)
+    }
+
+    fn cnf_nnf(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
+        pg_of(self, env, formula)
+    }
+
+    fn cnf_nnf_tseitin(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
+        tseitin_of(self, env, formula)
+    }
+}
+
+/// The three conversions, as free functions rather than trait methods: each recurses over a term of
+/// unbounded depth, and `#[stack_safe]` needs the rewritten body beside the member, which a trait
+/// impl has no room for. Recursing here also stays out of trait dispatch, so a nested call re-enters
+/// the driver instead of starting a new one.
+#[stack_safe(data_in_frame)]
+mod convert {
+    use super::*;
+
+    /// The body of [`CNFConversionHelper::nnf_impl`].
+    pub(super) fn nnf_of(this: &Term, env: &mut CNFEnv<'_>, polarity: bool) -> Term {
         // this function implements two things:
         // 1. it performs some immediate simplifications to extract the basic boolean skeleton from the formula
         // 2. it then performs NNF transformation.
@@ -105,14 +128,14 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
         if let Some(r) = &env
             .cache
             .nnf_cache
-            .entry(self.uid())
+            .entry(this.uid())
             .or_insert_with(|| [None, None])[idx]
         {
             return r.clone();
         }
 
-        let r = match self.repr() {
-            ATerm::Annotated(t, _) => t.nnf_impl(env, polarity), // omit attributes
+        let r = match this.repr() {
+            ATerm::Annotated(t, _) => nnf_of(t, env, polarity), // omit attributes
             ATerm::Eq(a, b) => {
                 // 1. check if it's comparing two booleans
                 let bs = env.arena.bool_sort();
@@ -120,9 +143,9 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
                 if sa != bs {
                     // 2. if not, then we regard a = b as an atom
                     if polarity {
-                        self.clone()
+                        this.clone()
                     } else {
-                        env.arena.not(self.clone())
+                        env.arena.not(this.clone())
                     }
                 } else {
                     // 2. if so, then we convert a = b to a <=> b
@@ -130,8 +153,8 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
                     let not_b = env.arena.not(b.clone());
                     let a_i_b = env.arena.flat_or(vec![not_a, b.clone()]);
                     let b_i_a = env.arena.flat_or(vec![not_b, a.clone()]);
-                    let eqf = env.arena.flat_and(vec![a_i_b, b_i_a]);
-                    eqf.nnf_impl(env, polarity)
+                    let eqf: Term = env.arena.flat_and(vec![a_i_b, b_i_a]);
+                    nnf_of(&eqf, env, polarity)
                 }
             }
             ATerm::Distinct(ts) => {
@@ -139,23 +162,28 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
                 let bs = env.arena.bool_sort();
                 let s = ts[0].get_sort(env.arena);
                 match ts.len() {
-                    1 => env.arena.get_true().nnf_impl(env, polarity), // a single term is always distinct
+                    1 => {
+                        // a single term is always distinct
+                        let t: Term = env.arena.get_true();
+                        nnf_of(&t, env, polarity)
+                    }
                     2 => {
                         // If there are two terms, then they must be unequal
                         let eq = env.arena.eq(ts[0].clone(), ts[1].clone());
-                        let eqf = env.arena.not(eq);
-                        eqf.nnf_impl(env, polarity)
+                        let eqf: Term = env.arena.not(eq);
+                        nnf_of(&eqf, env, polarity)
                     }
                     _ => {
                         // If the terms are booleans, then more than two terms cannot be distinct
                         if bs == s {
-                            env.arena.get_false().nnf_impl(env, polarity)
+                            let f: Term = env.arena.get_false();
+                            nnf_of(&f, env, polarity)
                         } else {
                             // Otherwise, we treat the whole Distinct term as atomic
                             if polarity {
-                                self.clone()
+                                this.clone()
                             } else {
-                                env.arena.not(self.clone())
+                                env.arena.not(this.clone())
                             }
                         }
                     }
@@ -163,20 +191,25 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
             }
             ATerm::Constant(AConstant::Bool(b), _) => {
                 if polarity {
-                    self.clone()
+                    this.clone()
                 } else {
                     env.arena.bool(!*b)
                 }
             }
             ATerm::And(ts) => {
                 match ts.len() {
-                    0 => env.arena.get_true().nnf_impl(env, polarity),
-                    1 => ts[0].nnf_impl(env, polarity),
+                    0 => {
+                        let t: Term = env.arena.get_true();
+                        nnf_of(&t, env, polarity)
+                    }
+                    1 => nnf_of(&ts[0], env, polarity),
                     _ => {
-                        let nts = ts
-                            .iter()
-                            .map(|t| t.nnf_impl(&mut *env, polarity))
-                            .collect::<Vec<_>>();
+                        let mut nts: Vec<Term> = Vec::with_capacity(ts.len());
+                        let mut i = 0usize;
+                        while i < ts.len() {
+                            nts.push(nnf_of(&ts[i], env, polarity));
+                            i += 1;
+                        }
                         if polarity {
                             env.arena.flat_and(nts)
                         } else {
@@ -188,13 +221,18 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
             }
             ATerm::Or(ts) => {
                 match ts.len() {
-                    0 => env.arena.get_false().nnf_impl(env, polarity),
-                    1 => ts[0].nnf_impl(env, polarity),
+                    0 => {
+                        let f: Term = env.arena.get_false();
+                        nnf_of(&f, env, polarity)
+                    }
+                    1 => nnf_of(&ts[0], env, polarity),
                     _ => {
-                        let nts = ts
-                            .iter()
-                            .map(|t| t.nnf_impl(env, polarity))
-                            .collect::<Vec<_>>();
+                        let mut nts: Vec<Term> = Vec::with_capacity(ts.len());
+                        let mut i = 0usize;
+                        while i < ts.len() {
+                            nts.push(nnf_of(&ts[i], env, polarity));
+                            i += 1;
+                        }
                         if polarity {
                             env.arena.flat_or(nts)
                         } else {
@@ -206,8 +244,13 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
             }
             ATerm::Implies(ts, b) => {
                 // notice `(=> a1 a2 ... an b)` is `(or (not a1) ... (not an) b)`
-                let mut nts: Vec<_> = ts.iter().map(|t| t.nnf_impl(env, !polarity)).collect();
-                let nb = b.nnf_impl(env, polarity);
+                let mut nts: Vec<Term> = Vec::with_capacity(ts.len() + 1);
+                let mut i = 0usize;
+                while i < ts.len() {
+                    nts.push(nnf_of(&ts[i], env, !polarity));
+                    i += 1;
+                }
+                let nb = nnf_of(b, env, polarity);
                 nts.push(nb);
                 if polarity {
                     env.arena.flat_or(nts)
@@ -215,26 +258,26 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
                     env.arena.flat_and(nts)
                 }
             }
-            ATerm::Not(t) => t.nnf_impl(env, !polarity),
+            ATerm::Not(t) => nnf_of(t, env, !polarity),
             ATerm::Ite(b, t, e) => {
                 // notice `(ite b t e)` is `(or (and b t) (and (not b) e))`
                 let not_b = env.arena.not(b.clone());
                 let bt = env.arena.flat_and(vec![b.clone(), t.clone()]);
                 let not_b_e = env.arena.flat_and(vec![not_b, e.clone()]);
-                let eqf = env.arena.flat_or(vec![bt, not_b_e]);
-                eqf.nnf_impl(env, polarity)
+                let eqf: Term = env.arena.flat_or(vec![bt, not_b_e]);
+                nnf_of(&eqf, env, polarity)
             }
             _ => {
                 // all other cases are regarded as atoms.
                 if polarity {
-                    self.clone()
+                    this.clone()
                 } else {
-                    env.arena.not(self.clone())
+                    env.arena.not(this.clone())
                 }
             }
         };
         // unwrap is safe here because we know we've inserted the array at the beginning.
-        env.cache.nnf_cache.get_mut(&self.uid()).unwrap()[idx] = Some(r.clone());
+        env.cache.nnf_cache.get_mut(&this.uid()).unwrap()[idx] = Some(r.clone());
         if polarity {
             // if polarity is positive, then we know nnf is idempotent, i.e. nnf of nnf gives the same nnf.
             // therefore, we can just update the cache to reflect this fact to save some compute
@@ -244,27 +287,14 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
         r
     }
 
-    /// This function implements Plaisted-Greenbaum (PG) transformation.
-    ///
-    /// Essentially, when given an NNF formula, the transformation assigns one fresh variable for
-    /// each conjunction or disjunction.
-    ///
-    /// There are two interesting cases:
-    ///
-    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the `formula`
-    ///    `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`.
-    ///
-    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, it is sufficient to add to the `formula`
-    ///    `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`.
-    ///
-    /// c.f. <https://dl.acm.org/doi/10.1145/3551349.3556938>
-    fn cnf_nnf(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
+    /// The body of [`CNFConversionHelper::cnf_nnf`].
+    pub(super) fn pg_of(this: &Term, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
         // cache lookup
-        if let Some(i) = env.cache.var_map.get(&self.uid()) {
+        if let Some(i) = env.cache.var_map.get(&this.uid()) {
             return *i;
         }
 
-        let v = match self.repr() {
+        let v = match this.repr() {
             ATerm::Constant(AConstant::Bool(b), _) => {
                 let v = env.new_var();
                 if *b {
@@ -276,60 +306,64 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
                 }
             }
             ATerm::And(ts) => match ts.len() {
-                0 => env.arena.get_true().cnf_nnf(env, formula), // (and) is just true.
-                1 => ts[0].cnf_nnf(env, formula),                // (and a) is just a.
+                0 => {
+                    // (and) is just true.
+                    let t: Term = env.arena.get_true();
+                    pg_of(&t, env, formula)
+                }
+                1 => pg_of(&ts[0], env, formula), // (and a) is just a.
                 _ => {
-                    //
                     let nv = env.new_var();
-                    let vs: Vec<_> = ts.iter().map(|t| t.cnf_nnf(env, formula)).collect();
-                    for v in vs {
-                        formula.add(Clause::new(vec![v, -nv]))
+                    let mut vs: Vec<i32> = Vec::with_capacity(ts.len());
+                    let mut i = 0usize;
+                    while i < ts.len() {
+                        vs.push(pg_of(&ts[i], env, formula));
+                        i += 1;
+                    }
+                    let mut j = 0usize;
+                    while j < vs.len() {
+                        formula.add(Clause::new(vec![vs[j], -nv]));
+                        j += 1;
                     }
                     nv
                 }
             },
             ATerm::Or(ts) => match ts.len() {
-                0 => env.arena.get_false().cnf_nnf(env, formula), // (or) is just false.
-                1 => ts[0].cnf_nnf(env, formula),                 // (or a) is just a.
+                0 => {
+                    // (or) is just false.
+                    let f: Term = env.arena.get_false();
+                    pg_of(&f, env, formula)
+                }
+                1 => pg_of(&ts[0], env, formula), // (or a) is just a.
                 _ => {
                     let nv = env.new_var();
-                    let mut vs: Vec<_> = ts.iter().map(|t| t.cnf_nnf(env, formula)).collect();
+                    let mut vs: Vec<i32> = Vec::with_capacity(ts.len() + 1);
+                    let mut i = 0usize;
+                    while i < ts.len() {
+                        vs.push(pg_of(&ts[i], env, formula));
+                        i += 1;
+                    }
                     vs.push(-nv);
                     formula.add(Clause::new(vs));
                     nv
                 }
             },
-            ATerm::Not(t) => -t.cnf_nnf(env, formula),
+            ATerm::Not(t) => -pg_of(t, env, formula),
             _ => env.new_var(),
         };
-        env.cache.var_map.insert(self.uid(), v);
-        env.cache.var_map_reverse.insert(v, self.uid());
+        env.cache.var_map.insert(this.uid(), v);
+        env.cache.var_map_reverse.insert(v, this.uid());
         v
     }
 
-    /// This function implements Tseitin transformation.
-    ///
-    /// Essentially, when given an NNF formula, the transformation assigns one fresh variable for
-    /// each conjunction or disjunction.
-    ///
-    /// There are two interesting cases:
-    ///
-    /// 1. For `(and a1 a2 ... an)` and a fresh variable `x`, we add to the `formula`
-    ///    `(=> x (and a1 a2 ... an))`, which unfolds to a conjunction of `(or (not x) ai)` for all `i`
-    ///    and `(=> (and a1 a2 ... an) x)`, which unfolds to `(or (not a1) ... (not an) x)``.
-    ///
-    /// 2. `(or a1 a2 ... an)` and a fresh variable `x`, we add to the `formula`
-    ///    `(=> x (or a1 a2 ... an))`, which unfolds to one clause: `(or (not x) a1 ... an)`
-    ///    and `(=> (or a1 a2 ... an) x)`, which unfolds to a conjunction of of `(or x (not ai))` for all `i`
-    ///
-    /// c.f. <https://en.wikipedia.org/wiki/Tseytin_transformation>
-    fn cnf_nnf_tseitin(&self, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
+    /// The body of [`CNFConversionHelper::cnf_nnf_tseitin`].
+    pub(super) fn tseitin_of(this: &Term, env: &mut CNFEnv<'_>, formula: &mut Formula) -> i32 {
         // cache lookup
-        if let Some(i) = env.cache.var_map.get(&self.uid()) {
+        if let Some(i) = env.cache.var_map.get(&this.uid()) {
             return *i;
         }
 
-        let v = match self.repr() {
+        let v = match this.repr() {
             ATerm::Constant(AConstant::Bool(b), _) => {
                 let v = env.new_var();
                 if *b {
@@ -341,40 +375,66 @@ impl CNFConversionHelper<&mut CNFEnv<'_>> for Term {
                 }
             }
             ATerm::And(ts) => match ts.len() {
-                0 => env.arena.get_true().cnf_nnf_tseitin(env, formula), // (and) is just true.
-                1 => ts[0].cnf_nnf_tseitin(env, formula),                // (and a) is just a.
+                0 => {
+                    // (and) is just true.
+                    let t: Term = env.arena.get_true();
+                    tseitin_of(&t, env, formula)
+                }
+                1 => tseitin_of(&ts[0], env, formula), // (and a) is just a.
                 _ => {
                     let nv = env.new_var();
-                    let vs: Vec<_> = ts.iter().map(|t| t.cnf_nnf_tseitin(env, formula)).collect();
-                    for v in vs.clone() {
-                        formula.add(Clause::new(vec![v, -nv]))
+                    let mut vs: Vec<i32> = Vec::with_capacity(ts.len());
+                    let mut i = 0usize;
+                    while i < ts.len() {
+                        vs.push(tseitin_of(&ts[i], env, formula));
+                        i += 1;
                     }
-                    let mut nvs: Vec<_> = vs.iter().map(|l| -l).collect();
+                    let mut j = 0usize;
+                    while j < vs.len() {
+                        formula.add(Clause::new(vec![vs[j], -nv]));
+                        j += 1;
+                    }
+                    let mut nvs: Vec<i32> = Vec::with_capacity(vs.len() + 1);
+                    let mut k = 0usize;
+                    while k < vs.len() {
+                        nvs.push(-vs[k]);
+                        k += 1;
+                    }
                     nvs.push(nv);
                     formula.add(Clause::new(nvs));
                     nv
                 }
             },
             ATerm::Or(ts) => match ts.len() {
-                0 => env.arena.get_false().cnf_nnf_tseitin(env, formula), // (or) is just false.
-                1 => ts[0].cnf_nnf_tseitin(env, formula),                 // (or a) is just a.
+                0 => {
+                    // (or) is just false.
+                    let f: Term = env.arena.get_false();
+                    tseitin_of(&f, env, formula)
+                }
+                1 => tseitin_of(&ts[0], env, formula), // (or a) is just a.
                 _ => {
                     let nv = env.new_var();
-                    let mut vs: Vec<_> =
-                        ts.iter().map(|t| t.cnf_nnf_tseitin(env, formula)).collect();
-                    for v in vs.clone() {
-                        formula.add(Clause::new(vec![-v, nv]))
+                    let mut vs: Vec<i32> = Vec::with_capacity(ts.len() + 1);
+                    let mut i = 0usize;
+                    while i < ts.len() {
+                        vs.push(tseitin_of(&ts[i], env, formula));
+                        i += 1;
+                    }
+                    let mut j = 0usize;
+                    while j < vs.len() {
+                        formula.add(Clause::new(vec![-vs[j], nv]));
+                        j += 1;
                     }
                     vs.push(-nv);
                     formula.add(Clause::new(vs));
                     nv
                 }
             },
-            ATerm::Not(t) => -t.cnf_nnf_tseitin(env, formula),
+            ATerm::Not(t) => -tseitin_of(t, env, formula),
             _ => env.new_var(),
         };
-        env.cache.var_map.insert(self.uid(), v);
-        env.cache.var_map_reverse.insert(v, self.uid());
+        env.cache.var_map.insert(this.uid(), v);
+        env.cache.var_map_reverse.insert(v, this.uid());
         v
     }
 }
@@ -609,5 +669,88 @@ mod tests {
             Clause(vec![inner_and_var, b_var, -outer_or_var])
         );
         assert_eq!(formula.0[6], Clause(vec![outer_or_var]));
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::ast::*;
+
+    /// `(and x (or x (and x (or x …))))`, nested `depth` deep. The connectives alternate so that
+    /// `flat_and`/`flat_or` cannot collapse the nesting into one wide term: depth is the point.
+    fn deep_alternating(arena: &mut Arena, depth: usize) -> Term {
+        let bs = arena.bool_sort();
+        let x = arena.simple_sorted_symbol("x", bs);
+        let mut t = x.clone();
+        for i in 0..depth {
+            t = if i % 2 == 0 {
+                arena.flat_or(vec![x.clone(), t])
+            } else {
+                arena.flat_and(vec![x.clone(), t])
+            };
+        }
+        t
+    }
+
+    const DEEP: usize = 100_000;
+
+    fn on_small_stack(f: impl FnOnce() -> bool + Send + 'static) -> bool {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(f)
+            .expect("spawn")
+            .join()
+            .expect("the conversion overflowed the stack")
+    }
+
+    #[test]
+    fn nnf_is_flat() {
+        assert!(on_small_stack(|| {
+            let mut arena = Arena::default();
+            let mut cache = CNFCache::new();
+            let mut env = CNFEnv {
+                arena: &mut arena,
+                cache: &mut cache,
+            };
+            let t = deep_alternating(env.arena, DEEP);
+            let nnf = t.nnf(&mut env);
+            let ok = nnf == t;
+            std::mem::forget((t, nnf));
+            ok
+        }));
+    }
+
+    #[test]
+    fn cnf_is_flat() {
+        assert!(on_small_stack(|| {
+            let mut arena = Arena::default();
+            let mut cache = CNFCache::new();
+            let mut env = CNFEnv {
+                arena: &mut arena,
+                cache: &mut cache,
+            };
+            let t = deep_alternating(env.arena, DEEP);
+            // Reaching here at all is the assertion; `on_small_stack` fails on an overflow.
+            let f = t.cnf(&mut env);
+            std::mem::forget((t, f));
+            true
+        }));
+    }
+
+    #[test]
+    fn cnf_tseitin_is_flat() {
+        assert!(on_small_stack(|| {
+            let mut arena = Arena::default();
+            let mut cache = CNFCache::new();
+            let mut env = CNFEnv {
+                arena: &mut arena,
+                cache: &mut cache,
+            };
+            let t = deep_alternating(env.arena, DEEP);
+            let f = t.cnf_tseitin(&mut env);
+            std::mem::forget((t, f));
+            true
+        }));
     }
 }
