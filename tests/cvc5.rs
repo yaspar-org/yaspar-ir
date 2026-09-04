@@ -2764,3 +2764,90 @@ fn get_value_negative_rational_pure_real() {
         },
     );
 }
+
+// ── Stack safety of the reverse translation ──────────────────
+
+/// Depth the reverse translation is expected to survive, and a stack far too small to hold that
+/// many native frames: the translation is only flat if it never grows one per level.
+const DEEP: usize = 100_000;
+const SMALL_STACK: usize = 256 * 1024;
+
+/// Runs `f` where a per-level native frame cannot fit.
+///
+/// What comes back is only whether the translation succeeded: printing the result or dropping it
+/// recurses too (`Display` and `Drop` for a hashconsed term are still native recursions), so `f`
+/// leaks what it built rather than testing those here.
+fn on_small_stack(f: impl FnOnce() -> bool + Send + 'static) -> bool {
+    std::thread::Builder::new()
+        .stack_size(SMALL_STACK)
+        .spawn(f)
+        .expect("spawn")
+        .join()
+        .expect("the reverse translation overflowed the stack")
+}
+
+#[test]
+fn deep_term_translation_is_flat() {
+    assert!(on_small_stack(|| {
+        let tm = TermManager::new();
+        let mut ct = tm.mk_true();
+        for _ in 0..DEEP {
+            ct = tm.mk_term(Kind::Not, &[ct]);
+        }
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+        let mut env = Cvc5Env::new(&tm, &mut ctx);
+        let ok = ct.conv_from_cvc5(&mut env).is_ok();
+        std::mem::forget(env);
+        std::mem::forget(ct);
+        std::mem::forget(ctx);
+        std::mem::forget(tm);
+        ok
+    }));
+}
+
+#[test]
+fn deep_sort_translation_is_flat() {
+    assert!(on_small_stack(|| {
+        let tm = TermManager::new();
+        let mut cs = tm.integer_sort();
+        for _ in 0..DEEP {
+            cs = tm.mk_array_sort(tm.integer_sort(), cs);
+        }
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+        let mut env = Cvc5Env::new(&tm, &mut ctx);
+        let ok = cs.conv_from_cvc5(&mut env).is_ok();
+        std::mem::forget(env);
+        std::mem::forget(cs);
+        std::mem::forget(ctx);
+        std::mem::forget(tm);
+        ok
+    }));
+}
+
+/// Nested quantifiers go through the pattern-collecting body translation, which is a member of the
+/// same cycle: nesting them must not cost native frames either.
+#[test]
+fn deep_nested_quantifiers_are_flat() {
+    assert!(on_small_stack(|| {
+        let tm = TermManager::new();
+        let bool_sort = tm.boolean_sort();
+        let mut body = tm.mk_true();
+        for i in 0..DEEP {
+            let v = tm.mk_var(bool_sort.clone(), &format!("x{i}"));
+            let vlist = tm.mk_term(Kind::VariableList, &[v]);
+            body = tm.mk_term(Kind::Forall, &[vlist, body]);
+        }
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+        let mut env = Cvc5Env::new(&tm, &mut ctx);
+        let ok = body.conv_from_cvc5(&mut env).is_ok();
+        std::mem::forget(env);
+        std::mem::forget(body);
+        std::mem::forget(bool_sort);
+        std::mem::forget(ctx);
+        std::mem::forget(tm);
+        ok
+    }));
+}
