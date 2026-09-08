@@ -120,6 +120,14 @@ pub(crate) trait Memoizing<K, V> {
         Self: 'a;
 
     fn cache_mut(&mut self) -> Self::Cache<'_>;
+
+    /// Extra lookup consulted BEFORE `cache_mut`. Used by callers that need
+    /// multiple keys to map to the same result (e.g. alpha-equivalent
+    /// quantifiers sharing a cvc5 proxy), which the bijective `cache_mut`
+    /// forbids. Default: no entries.
+    fn pre_seeded_lookup(&self, _key: &K) -> Option<V> {
+        None
+    }
 }
 
 /// Internal wrapper that interposes caching logic between the traversal engine and
@@ -466,6 +474,9 @@ where
         T: Contains<T: Repr<T = Term<Str, So, T>>>,
     {
         loop {
+            if let Some(r) = recursor.0.pre_seeded_lookup(current) {
+                return Ok(r);
+            }
             if let Some(r) = recursor.0.cache_mut().lookup(current) {
                 return Ok(r);
             }

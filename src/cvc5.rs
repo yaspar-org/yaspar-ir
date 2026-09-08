@@ -285,6 +285,14 @@ pub struct Cvc5Env<'tm, Ctx> {
     scope_stack_from: Vec<Vec<u64>>,
     /// Allocated symbols for uninterpreted sort values encountered during reverse translation.
     uninterpreted_values: HashSet<Str>,
+
+    /// If true, panic on any `on_forall`/`on_exists` reached during forward
+    /// translation. Set by callers substituting proxies at the boundary.
+    forbid_quantifiers: bool,
+
+    /// Non-bijective pre-seed cache — checked before `term_cache` in the
+    /// memo scheme. Multiple Terms can map to the same CTerm here.
+    pre_seeded: HashMap<Term, WithPattern<'tm>>,
 }
 
 impl<'tm, Ctx> Cvc5Env<'tm, Ctx>
@@ -308,6 +316,8 @@ where
             locals_from: HashMap::new(),
             scope_stack_from: Vec::new(),
             uninterpreted_values: HashSet::new(),
+            forbid_quantifiers: false,
+            pre_seeded: HashMap::new(),
         }
     }
 
@@ -336,6 +346,22 @@ where
 }
 
 impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
+    /// Pre-seed the memoization cache so `to_cvc5(t)` returns `wp` without
+    /// descending into `t`. Used to substitute opaque subterms with a proxy.
+    pub fn seed_term(&mut self, t: Term, wp: WithPattern<'tm>) {
+        self.term_cache.insert(t, wp);
+    }
+
+    /// Non-bijective variant of `seed_term`: multiple Terms may share one `wp`.
+    pub fn pre_seed_term(&mut self, t: Term, wp: WithPattern<'tm>) {
+        self.pre_seeded.insert(t, wp);
+    }
+
+    /// When true, panic if `to_cvc5` reaches `on_forall`/`on_exists`.
+    pub fn set_forbid_quantifiers(&mut self, v: bool) {
+        self.forbid_quantifiers = v;
+    }
+
     /// Returns the set of uninterpreted sort value names encountered.
     pub fn uninterpreted_values(&self) -> &HashSet<Str> {
         &self.uninterpreted_values
@@ -393,6 +419,10 @@ impl<'tm, Ctx> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, Ctx> {
 
     fn cache_mut(&mut self) -> Self::Cache<'_> {
         &mut self.term_cache
+    }
+
+    fn pre_seeded_lookup(&self, key: &Term) -> Option<WithPattern<'tm>> {
+        self.pre_seeded.get(key).cloned()
     }
 }
 
@@ -1682,6 +1712,9 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
         _t: &Term,
         t_rec: WithPattern<'tm>,
     ) -> Res<WithPattern<'tm>> {
+        if self.forbid_quantifiers {
+            panic!("Cvc5Env: Exists reached to_cvc5 with forbid_quantifiers=true — proxy seeding missed a subterm");
+        }
         let bound = self.unbind_vars(vs, |v| &v.1)?;
         self.translate_quantifier_body(Kind::Exists, bound, t_rec)
     }
@@ -1693,6 +1726,9 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
         _t: &Term,
         t_rec: Self::Out,
     ) -> Res<WithPattern<'tm>> {
+        if self.forbid_quantifiers {
+            panic!("Cvc5Env: Forall reached to_cvc5 with forbid_quantifiers=true — proxy seeding missed a subterm");
+        }
         let bound = self.unbind_vars(vs, |v| &v.1)?;
         self.translate_quantifier_body(Kind::Forall, bound, t_rec)
     }
