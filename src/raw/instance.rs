@@ -29,6 +29,7 @@ use crate::traits::{Allocatable, Contains, MetaData, Repr};
 use hashconsing::{HConsed, HConsign, HashConsign};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use yaspar_macros::stack_safe;
 
 type P<T> = HConsed<T>;
 
@@ -368,21 +369,76 @@ impl HasArenaAlt for Arena {
     }
 }
 
+/// The body of [`FetchSort::maybe_sort`] for [`Term`]: `Let`, `Annotated`, `Ite` and `Matching`
+/// carry no sort of their own, so the sort of such a term is the sort of a sub-term.
+#[stack_safe]
+fn term_maybe_sort<T: HasArenaAlt>(this: &Term, arena: &mut T) -> Option<Sort> {
+    match this.repr() {
+        alg::Term::Constant(_, s) => s.clone(),
+        alg::Term::Global(_, so) => so.clone(),
+        alg::Term::Local(id) => Some(id.sort.clone()),
+        alg::Term::App(_, _, s) => s.clone(),
+        alg::Term::Let(_, t) => term_maybe_sort(t, arena),
+        alg::Term::Exists(_, _) => Some(arena.arena_alt().bool_sort()),
+        alg::Term::Forall(_, _) => Some(arena.arena_alt().bool_sort()),
+        alg::Term::Annotated(t, _) => term_maybe_sort(t, arena),
+        alg::Term::Ite(_, t, _) => term_maybe_sort(t, arena),
+        alg::Term::Matching(_, arms) => term_maybe_sort(&arms[0].body, arena), // there must be at least one branch
+        _ => Some(arena.arena_alt().bool_sort()),
+    }
+}
+
 impl<T: HasArenaAlt> FetchSort<T> for Term {
+    // A term that carries its own sort is answered here rather than by entering the driver, since
+    // that is what a caller walking a whole term asks about node after node. Only a descent pays
+    // for the flattened recursion.
+    #[inline]
     fn maybe_sort(&self, arena: &mut T) -> Option<Sort> {
+        // unfold the following four cases as fast path as an optimization
         match self.repr() {
             alg::Term::Constant(_, s) => s.clone(),
             alg::Term::Global(_, so) => so.clone(),
             alg::Term::Local(id) => Some(id.sort.clone()),
             alg::Term::App(_, _, s) => s.clone(),
-            alg::Term::Let(_, t) => t.maybe_sort(arena),
-            alg::Term::Exists(_, _) => Some(arena.arena_alt().bool_sort()),
-            alg::Term::Forall(_, _) => Some(arena.arena_alt().bool_sort()),
-            alg::Term::Annotated(t, _) => t.maybe_sort(arena),
-            alg::Term::Ite(_, t, _) => t.maybe_sort(arena),
-            alg::Term::Matching(_, arms) => arms[0].body.maybe_sort(arena), // there must be at least one branch
-            _ => Some(arena.arena_alt().bool_sort()),
+            _ => term_maybe_sort(self, arena),
         }
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+
+    /// `(ite x (ite x (… x) x) x)`, nested `depth` deep in the then-branch, which is the branch
+    /// whose sort [`FetchSort::maybe_sort`] reads.
+    fn deep_ite(arena: &mut Arena, depth: usize) -> Term {
+        let bs = arena.bool_sort();
+        let x = arena.simple_sorted_symbol("x", bs);
+        let mut t = x.clone();
+        for _ in 0..depth {
+            t = arena.ite(x.clone(), t, x.clone());
+        }
+        t
+    }
+
+    /// Reading the sort of a deep `ite` chain descends to its innermost branch.
+    ///
+    /// The term is leaked, because dropping a 100k-deep term recurses as well.
+    #[test]
+    fn maybe_sort_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut arena = Arena::default();
+                let t = deep_ite(&mut arena, 100_000);
+                let s = t.maybe_sort(&mut arena);
+                let r = s == Some(arena.bool_sort());
+                std::mem::forget((t, s, arena));
+                r
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }
 
