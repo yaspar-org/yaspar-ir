@@ -18,12 +18,12 @@ fn run_script(script: &str) {
         .type_check(&mut ctx)
         .unwrap();
     let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
+    let solver = Solver::new(&tm);
     // `set.complement` and `set.universe` are extended set operators in cvc5
     // and require `sets-exp` to be enabled.
     solver.set_option("sets-exp", "true");
     let mut env = Cvc5Env::new(&tm, &mut ctx);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    let mut es = Cvc5EnvSolver::new(&mut env, &solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
     }
@@ -42,9 +42,9 @@ fn sort_round_trip(script: &str, sort_str: &str) {
         .type_check(&mut ctx)
         .unwrap();
     let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
+    let solver = Solver::new(&tm);
     let mut env = Cvc5Env::new(&tm, &mut ctx);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    let mut es = Cvc5EnvSolver::new(&mut env, &solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
     }
@@ -66,9 +66,9 @@ fn term_round_trip(script: &str, term_str: &str) {
         .type_check(&mut ctx)
         .unwrap();
     let tm = TermManager::new();
-    let mut solver = Solver::new(&tm);
+    let solver = Solver::new(&tm);
     let mut env = Cvc5Env::new(&tm, &mut ctx);
-    let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+    let mut es = Cvc5EnvSolver::new(&mut env, &solver);
     for cmd in &cmds {
         cmd.to_cvc5(&mut es).unwrap();
     }
