@@ -2078,8 +2078,16 @@ where
 
 /// Test whether a cvc5 term is a constant
 fn is_const(t: &CTerm) -> bool {
+    is_const_of(t.clone())
+}
+
+/// The body of [`is_const`], which owns the child it descends into rather than borrowing one built
+/// at the call site. The arguments are walked by an explicit loop rather than `all`, since the macro
+/// cannot see a call inside a closure.
+#[stack_safe]
+fn is_const_of(t: CTerm) -> bool {
     // Built-in value types
-    t.is_boolean_value()
+    if t.is_boolean_value()
         || t.is_integer_value()
         || t.is_real_value()
         || t.is_string_value()
@@ -2090,9 +2098,22 @@ fn is_const(t: &CTerm) -> bool {
         || t.is_fp_value()
         || t.is_tuple_value()
         || t.is_sequence_value()
-        // Datatype constructor with all-const args
-        || (t.kind() == Kind::ApplyConstructor
-        && (0..t.num_children()).all(|i| is_const(&t.child(i))))
+    {
+        return true;
+    }
+    // Datatype constructor with all-const args
+    if t.kind() != Kind::ApplyConstructor {
+        return false;
+    }
+    let arity = t.num_children();
+    let mut i = 0usize;
+    while i < arity {
+        if !is_const_of(t.child(i)) {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {

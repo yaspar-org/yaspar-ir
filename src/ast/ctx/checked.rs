@@ -74,6 +74,7 @@ use crate::traits::{AllocatableString, Repr};
 use dashu::integer::{IBig, Sign, UBig};
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
+use yaspar_macros::stack_safe;
 
 /// The trait that represents checked APIs to construct terms.
 ///
@@ -510,6 +511,7 @@ impl Context {
     }
 
     /// Handle top-level named annotations in assertions
+    #[stack_safe]
     fn scan_named(&mut self, t: &Term, acc: &mut HashMap<Str, Term>) -> TC<()> {
         if let ATerm::Annotated(t, annos) = t.repr() {
             for anno in annos {
@@ -669,5 +671,40 @@ impl Context {
         }
         ts.iter().try_for_each(is_quantifier_free)?;
         Ok(self.get_value(ts))
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::ast::Context;
+
+    const DEEP: usize = 100_000;
+
+    /// `(! (! (… x :named n0) …) :named nDEEP)`, i.e. one named annotation per level.
+    ///
+    /// The term is leaked, because dropping a 100k-deep term recurses as well.
+    #[test]
+    fn scan_named_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut context = Context::new();
+                context.ensure_logic();
+                let bs = context.bool_sort();
+                let x = context.simple_sorted_symbol("x", bs);
+                let mut t = x.clone();
+                for i in 0..DEEP {
+                    let name = context.allocate_symbol(&format!("n{i}"));
+                    t = context.annotated(t, vec![Attribute::Named(name)]);
+                }
+                let mut acc = HashMap::new();
+                let r = context.scan_named(&t, &mut acc).is_ok() && acc.len() == DEEP;
+                std::mem::forget((t, acc, context));
+                r
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }
