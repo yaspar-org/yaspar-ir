@@ -1482,6 +1482,67 @@ fn from_cvc5_term_forall_multi_pattern() {
     );
 }
 
+/// Like [`term_round_trip`], but converts back through a *fresh* environment.
+///
+/// One environment caches the forward translation, so converting back through it finds the original
+/// term in the bimap and never rebuilds anything. A fresh one exercises the backward translation.
+fn term_round_trip_rebuilt(script: &str, term_str: &str) {
+    let mut ctx = Context::new();
+    let cmds = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let term = UntypedAst
+        .parse_term_str(term_str)
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let tm = TermManager::new();
+    let solver = Solver::new(&tm);
+    let cterm = {
+        let mut env = Cvc5Env::new(&tm, &mut ctx);
+        let mut es = Cvc5EnvSolver::new(&mut env, &solver);
+        for cmd in &cmds {
+            cmd.to_cvc5(&mut es).unwrap();
+        }
+        term.to_cvc5(&mut *es.env).unwrap()
+    };
+    let mut fresh = Cvc5Env::new(&tm, &mut ctx);
+    let back = cterm.conv_from_cvc5(&mut fresh).unwrap();
+    assert_eq!(term.to_string(), back.to_string());
+}
+
+/// An anti-trigger survives the round trip, i.e. the backward direction reads `INST_NO_PATTERN`.
+#[test]
+#[cfg(feature = "no-pattern")]
+fn from_cvc5_term_forall_no_pattern() {
+    term_round_trip_rebuilt(
+        "(set-logic ALL) (declare-fun f (Int) Int)",
+        "(forall ((x Int)) (! (> (f x) 0) :no-pattern (f x)))",
+    );
+}
+
+/// Triggers and anti-triggers together, which is the order the forward direction writes them in.
+#[test]
+#[cfg(feature = "no-pattern")]
+fn from_cvc5_term_forall_pattern_and_no_pattern() {
+    term_round_trip_rebuilt(
+        "(set-logic ALL) (declare-fun f (Int) Int) (declare-fun g (Int) Int)",
+        "(forall ((x Int)) (! (> (f x) (g x)) :pattern ((f x)) :no-pattern (g x)))",
+    );
+}
+
+/// Two anti-triggers, so that the list is walked rather than just its first entry.
+#[test]
+#[cfg(feature = "no-pattern")]
+fn from_cvc5_term_forall_multi_no_pattern() {
+    term_round_trip_rebuilt(
+        "(set-logic ALL) (declare-fun f (Int) Int) (declare-fun g (Int) Int)",
+        "(forall ((x Int)) (! (> (f x) (g x)) :no-pattern (f x) :no-pattern (g x)))",
+    );
+}
+
 #[test]
 fn from_cvc5_term_forall_multi_var() {
     term_round_trip(

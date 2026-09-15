@@ -808,27 +808,44 @@ mod cterm_cycle {
                 fenv.push_scope_from(scope_ids);
 
                 // Collect cvc5 patterns first (without translating to ir Terms yet).
-                // This lets us probe the bimap with `WithPattern { body_ct, cvc5_patterns }`
-                // on the right side and short-circuit body translation on a hit.
-                let cvc5_patterns: Vec<Vec<CTerm<'tm>>> = if ct.num_children() > 2 {
+                // This lets us probe the bimap with the `WithPattern` built below on the right side
+                // and short-circuit body translation on a hit.
+                let mut cvc5_patterns: Vec<Vec<CTerm<'tm>>> = vec![];
+                // each `INST_NO_PATTERN` holds one anti-trigger, as the forward direction writes it
+                #[cfg(feature = "no-pattern")]
+                let mut cvc5_no_patterns: Vec<CTerm<'tm>> = vec![];
+                if ct.num_children() > 2 {
                     let plist: CTerm<'tm> = ct.child(2);
-                    let mut pats = Vec::with_capacity(plist.num_children());
                     for i in 0..plist.num_children() {
                         let pat: CTerm<'tm> = plist.child(i);
-                        if pat.kind() == Kind::InstPattern {
-                            let mut pat_cterms = Vec::with_capacity(pat.num_children());
-                            for j in 0..pat.num_children() {
-                                pat_cterms.push(pat.child(j));
+                        match pat.kind() {
+                            Kind::InstPattern => {
+                                let mut pat_cterms = Vec::with_capacity(pat.num_children());
+                                for j in 0..pat.num_children() {
+                                    pat_cterms.push(pat.child(j));
+                                }
+                                cvc5_patterns.push(pat_cterms);
                             }
-                            pats.push(pat_cterms);
+                            #[cfg(feature = "no-pattern")]
+                            Kind::InstNoPattern => {
+                                for j in 0..pat.num_children() {
+                                    cvc5_no_patterns.push(pat.child(j));
+                                }
+                            }
+                            // anything else in the list, e.g. `INST_ATTRIBUTE`, is a hint the
+                            // grammar has no annotation for
+                            _ => {}
                         }
                     }
-                    pats
-                } else {
-                    vec![]
-                };
+                }
 
-                let result = translate_quantifier_body_from_cvc5(body_ct, cvc5_patterns, fenv);
+                let probe = WithPattern {
+                    term: body_ct,
+                    patterns: cvc5_patterns,
+                    #[cfg(feature = "no-pattern")]
+                    no_patterns: cvc5_no_patterns,
+                };
+                let result = translate_quantifier_body_from_cvc5(probe, fenv);
 
                 let bindings = fenv.pop_scope_from();
                 let body = result?;
@@ -1332,43 +1349,49 @@ mod cterm_cycle {
 
     /// Translate a quantifier body together with its `:pattern` triggers.
     fn translate_quantifier_body_from_cvc5<'tm, Ctx>(
-        body_ct: CTerm<'tm>,
-        cvc5_patterns: Vec<Vec<CTerm<'tm>>>,
+        probe: WithPattern<'tm>,
         fenv: &mut Cvc5Env<'tm, Ctx>,
     ) -> Res<Term>
     where
         Ctx: HasMutRef<Context>,
     {
-        let probe = WithPattern {
-            term: body_ct.clone(),
-            patterns: cvc5_patterns.clone(),
-            #[cfg(feature = "no-pattern")]
-            no_patterns: vec![],
-        };
         if let Some(cached) = fenv.term_cache.get_by_right(&probe) {
             return Ok(cached.clone());
         }
+        let body_ct: CTerm<'tm> = probe.term.clone();
         let body = conv_cterm(&body_ct, fenv)?;
-        if cvc5_patterns.is_empty() {
-            return Ok(body);
-        }
-        let mut attrs: Vec<Attribute> = Vec::with_capacity(cvc5_patterns.len());
+        let mut attrs: Vec<Attribute> = Vec::with_capacity(probe.patterns.len());
         let mut pi = 0usize;
-        while pi < cvc5_patterns.len() {
-            let mut trigger: Vec<Term> = Vec::with_capacity(cvc5_patterns[pi].len());
+        while pi < probe.patterns.len() {
+            let mut trigger: Vec<Term> = Vec::with_capacity(probe.patterns[pi].len());
             let mut ti = 0usize;
-            while ti < cvc5_patterns[pi].len() {
-                let t: CTerm<'tm> = cvc5_patterns[pi][ti].clone();
+            while ti < probe.patterns[pi].len() {
+                let t: CTerm<'tm> = probe.patterns[pi][ti].clone();
                 trigger.push(conv_cterm(&t, fenv)?);
                 ti += 1;
             }
             attrs.push(Attribute::Pattern(trigger));
             pi += 1;
         }
+        // an anti-trigger is one term rather than a group of them
+        #[cfg(feature = "no-pattern")]
+        {
+            let mut ni = 0usize;
+            while ni < probe.no_patterns.len() {
+                let t: CTerm<'tm> = probe.no_patterns[ni].clone();
+                let anti = conv_cterm(&t, fenv)?;
+                attrs.push(Attribute::NoPattern(anti));
+                ni += 1;
+            }
+        }
+        if attrs.is_empty() {
+            return Ok(body);
+        }
         let annotated = fenv.ctx.ref_mut().annotated(body, attrs);
         // Mirror the forward-direction shape: `Annotated(body, [:pattern …])` maps to a
         // `WithPattern` whose `term` is the body's CTerm and whose `patterns` carry the pattern
-        // triggers (later absorbed into `INST_PATTERN_LIST`).
+        // triggers, and whose `no_patterns` carry the anti-triggers (later absorbed into
+        // `INST_PATTERN_LIST`).
         fenv.term_cache.insert(annotated.clone(), probe);
         Ok(annotated)
     }
