@@ -9,7 +9,7 @@ use crate::containers::Mapping;
 use crate::meta::WithMeta;
 use crate::raw::alg;
 use crate::raw::alg::LocalId;
-use crate::raw::alg::display::Print;
+use crate::raw::alg::display::StructuredPrint;
 use crate::raw::instance::{
     BvInSort, BvOutSort, FetchSort, HasArenaAlt, Index, QualifiedIdentifier, Sig, SigIndex, Sort,
     Str, Term, Theory,
@@ -92,7 +92,7 @@ fn handle_special_identifiers_of_bv<Str, So, L>(
 ) -> TC<Term>
 where
     Str: Display + Contains<T = String>,
-    So: Print,
+    So: StructuredPrint,
 {
     let x = UBig::from_str(cap.get(1).unwrap().as_str())
         .map_err(|e| format!("TC: numeric conversion error: {e}{meta_string}"))?;

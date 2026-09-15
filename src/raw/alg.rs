@@ -20,7 +20,7 @@ use crate::statics::*;
 use crate::traits::{Contains, Repr};
 use dashu::float::DBig;
 use dashu::integer::UBig;
-pub use display::{Print, PrintConfig};
+pub use display::{PrintConfig, StructuredPrint};
 pub use kind::IdentifierKind;
 use num_order::NumHash;
 use serde::{Deserialize, Serialize};
@@ -1122,7 +1122,7 @@ impl<Str, So, T> Display for Attribute<Str, T>
 where
     Str: StrQuote<String> + SymbolQuote<String>,
     So: Contains<T: Repr<T = Sort<Str, So>>>,
-    T: Print + Contains<T: Repr<T = Term<Str, So, T>>>,
+    T: StructuredPrint + Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1156,7 +1156,7 @@ impl Display for BvLenExpr {
 
 impl<So> Display for BvInSort<So>
 where
-    So: Print,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1165,7 +1165,7 @@ where
 
 impl<So> Display for BvOutSort<So>
 where
-    So: Print,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1175,7 +1175,7 @@ where
 impl<Str, So> Display for Sig<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1185,7 +1185,7 @@ where
 impl<Str, So> Display for QualifiedIdentifier<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1195,7 +1195,7 @@ where
 impl<Str, T> Display for VarBinding<Str, T>
 where
     Str: SymbolQuote<String>,
-    T: Print,
+    T: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1216,8 +1216,8 @@ impl<'a, 'b, A, B> AppFmt<'a, 'b, A, B> {
 
 impl<A, B> Display for AppFmt<'_, '_, A, B>
 where
-    A: Print,
-    B: Print,
+    A: StructuredPrint,
+    B: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::BRIEF)
@@ -1235,7 +1235,7 @@ where
 impl<Str, T> Display for PatternArm<Str, T>
 where
     Str: SymbolQuote<String>,
-    T: Print,
+    T: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1256,8 +1256,8 @@ where
 impl<Str, So, T> Display for FunctionDef<Str, So, T>
 where
     Str: SymbolQuote<String>,
-    So: Print,
-    T: Print,
+    So: StructuredPrint,
+    T: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1267,7 +1267,7 @@ where
 impl<Str, So> Display for ConstructorDec<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1277,7 +1277,7 @@ where
 impl<Str, So> Display for DatatypeDec<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
@@ -1287,8 +1287,8 @@ where
 impl<Str, So, T> Display for Command<Str, So, T>
 where
     Str: Clone + StrQuote<String> + SymbolQuote<String>,
-    So: Print + Contains<T: Repr<T = Sort<Str, So>>>,
-    T: Print + Contains<T: Repr<T = Term<Str, So, T>>>,
+    So: StructuredPrint + Contains<T: Repr<T = Sort<Str, So>>>,
+    T: StructuredPrint + Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
