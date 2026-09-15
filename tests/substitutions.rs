@@ -594,3 +594,166 @@ fn test_defined_symbols_tracks_symbol_table_writes() {
     context.remove_symbol("w");
     assert_eq!(context.defined_symbols().len(), 1);
 }
+
+/// A chain of definitions is expanded through, not just one level deep.
+#[test]
+fn test_gsubst_chained_definitions() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-const x Int)
+        (define-fun a () Int (+ x 1))
+        (define-fun b () Int (+ a 1))
+        (define-fun c () Int (+ b 1))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let c = ctx.typed_symbol("c").unwrap();
+    assert_eq!(c.gsubst_all(&mut ctx).to_string(), "(+ (+ (+ x 1) 1) 1)");
+    // asking for the outermost name only still expands what its body mentions, since the body is
+    // expanded before it is cached
+    let c = ctx.typed_symbol("c").unwrap();
+    assert_eq!(
+        c.gsubst(["a", "b", "c"], &mut ctx).to_string(),
+        "(+ (+ (+ x 1) 1) 1)"
+    );
+}
+
+/// A recursive definition keeps its recursive call, i.e. the blocked names stay unexpanded.
+#[test]
+fn test_gsubst_recursive_definition_is_blocked() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-const n Int)
+        (define-fun-rec countdown ((i Int)) Int (ite (= i 0) 0 (countdown (- i 1))))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let n = ctx.typed_symbol("n").unwrap();
+    let call = ctx.typed_simp_app("countdown", [n]).unwrap();
+    assert_eq!(
+        call.gsubst_all(&mut ctx).to_string(),
+        "(ite (= n 0) 0 (countdown (- n 1)))"
+    );
+}
+
+/// Two definitions that recurse through each other stay put in each other's bodies.
+#[test]
+fn test_gsubst_mutual_recursion_is_blocked() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-const n Int)
+        (define-funs-rec
+          ((even ((i Int)) Bool) (odd ((i Int)) Bool))
+          ((ite (= i 0) true (odd (- i 1))) (ite (= i 0) false (even (- i 1)))))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let n = ctx.typed_symbol("n").unwrap();
+    let call = ctx.typed_simp_app("even", [n]).unwrap();
+    assert_eq!(
+        call.gsubst_all(&mut ctx).to_string(),
+        "(ite (= n 0) true (odd (- n 1)))"
+    );
+}
+
+/// A batch shares the work: the same definition is expanded once for every term that mentions it.
+#[test]
+fn test_gsubst_all_over_a_batch() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-const x Int)
+        (define-fun inc ((i Int)) Int (+ i 1))
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    let x = ctx.typed_symbol("x").unwrap();
+    let one = ctx.typed_simp_app("inc", [x.clone()]).unwrap();
+    let two = ctx.typed_simp_app("inc", [one.clone()]).unwrap();
+    let batch = [one, two];
+    let expanded = batch.gsubst_all(&mut ctx);
+    assert_eq!(expanded.len(), 2);
+    assert_eq!(expanded[0].to_string(), "(+ x 1)");
+    assert_eq!(expanded[1].to_string(), "(+ (+ x 1) 1)");
+}
+
+/// Every term form is walked, so an expansion inside a binder, an annotation or a match arrives.
+#[test]
+fn test_gsubst_reaches_every_form() {
+    let mut ctx = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-const p Bool)
+        (declare-fun f (Int) Int)
+        (define-fun inc ((i Int)) Int (+ i 1))
+        (define-fun t () Bool p)
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+
+    for (input, expected) in [
+        (
+            "(let ((y (inc 1))) (= y (inc 2)))",
+            "(let ((y (+ 1 1))) (= y (+ 2 1)))",
+        ),
+        (
+            "(forall ((z Int)) (= (inc z) z))",
+            "(forall ((z Int)) (= (+ z 1) z))",
+        ),
+        (
+            "(exists ((z Int)) (= (inc z) z))",
+            "(exists ((z Int)) (= (+ z 1) z))",
+        ),
+        (
+            "(! (= (inc 1) 2) :named lbl)",
+            "(! (= (+ 1 1) 2) :named lbl)",
+        ),
+        (
+            "(forall ((z Int)) (! (= (f z) (inc z)) :pattern ((f (inc z)))))",
+            "(forall ((z Int)) (! (= (f z) (+ z 1)) :pattern ((f (+ z 1)))))",
+        ),
+        ("(and t (or t (not t)))", "(and p (or p (not p)))"),
+        ("(xor t t)", "(xor p p)"),
+        ("(=> t t t)", "(=> p p p)"),
+        ("(distinct (inc 1) (inc 2))", "(distinct (+ 1 1) (+ 2 1))"),
+        ("(ite t (inc 1) (inc 2))", "(ite p (+ 1 1) (+ 2 1))"),
+    ] {
+        let term = UntypedAst
+            .parse_term_str(input)
+            .unwrap()
+            .type_check(&mut ctx)
+            .unwrap();
+        assert_eq!(
+            term.gsubst_all(&mut ctx).to_string(),
+            expected,
+            "expanding {input}"
+        );
+    }
+}
