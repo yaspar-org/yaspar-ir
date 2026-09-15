@@ -332,6 +332,79 @@ impl WorkSpace {
     }
 }
 
+/// Print `(x1 … xn)`, i.e. a parenthesised sequence of whatever can print itself.
+fn write_seq<'a, X>(xs: impl IntoIterator<Item = &'a X>, w: &mut WorkSpace) -> Res
+where
+    X: Print + 'a,
+{
+    w.group(|w| {
+        for x in xs {
+            x.write_doc(w)?;
+        }
+        Ok(())
+    })
+}
+
+/// Print `(s1 … sn)`, i.e. a parenthesised sequence of symbols.
+fn write_symbols<St>(symbols: &[St], w: &mut WorkSpace) -> Res
+where
+    St: SymbolQuote<String>,
+{
+    w.group(|w| {
+        for s in symbols {
+            w.leaf(s.sym_quote())?;
+        }
+        Ok(())
+    })
+}
+
+/// Print `(par (a …) inner)`, i.e. what wraps something declared with sort parameters.
+fn write_par<St, F>(params: &[St], w: &mut WorkSpace, inner: F) -> Res
+where
+    St: SymbolQuote<String>,
+    F: FnOnce(&mut WorkSpace) -> Res,
+{
+    w.group(|w| {
+        w.leaf(Token::Par.to_string())?;
+        write_symbols(params, w)?;
+        inner(w)
+    })
+}
+
+/// Print `(=> A … B)`, or just the output when the function takes no input.
+fn write_arrow<I, O>(inps: &[I], o: &O, w: &mut WorkSpace) -> Res
+where
+    I: Print,
+    O: Print,
+{
+    if inps.is_empty() {
+        o.write_doc(w)
+    } else {
+        w.group(|w| {
+            w.leaf(IMPLIES)?;
+            for i in inps {
+                i.write_doc(w)?;
+            }
+            o.write_doc(w)
+        })
+    }
+}
+
+/// Print `(=> A …[>= n times] A B)`, i.e. the signature of a variadic function.
+fn write_variadic<I, O>(inp: &I, n: usize, o: &O, w: &mut WorkSpace) -> Res
+where
+    I: Print,
+    O: Print,
+{
+    w.group(|w| {
+        w.leaf(IMPLIES)?;
+        inp.write_doc(w)?;
+        w.leaf(at_least(n))?;
+        inp.write_doc(w)?;
+        o.write_doc(w)
+    })
+}
+
 /// Print a constant literal.
 fn write_constant<St>(c: &alg::Constant<St>, w: &mut WorkSpace) -> Res
 where
@@ -490,12 +563,7 @@ where
             alg::Command::CheckSat => w.leaf(CommandName::CheckSat.to_string())?,
             alg::Command::CheckSatAssuming(ts) => {
                 w.leaf(CommandName::CheckSatAssuming.to_string())?;
-                w.group(|w| {
-                    for t in ts {
-                        write_term(t.inner().repr(), w)?;
-                    }
-                    Ok(())
-                })?;
+                write_seq(ts, w)?;
             }
             alg::Command::DeclareConst(id, s) => {
                 w.leaf(CommandName::DeclareConst.to_string())?;
@@ -519,22 +587,12 @@ where
                     }
                     Ok(())
                 })?;
-                w.group(|w| {
-                    for d in defs {
-                        d.dec.write_doc(w)?;
-                    }
-                    Ok(())
-                })?;
+                write_seq(defs.iter().map(|d| &d.dec), w)?;
             }
             alg::Command::DeclareFun(id, ss, s) => {
                 w.leaf(CommandName::DeclareFun.to_string())?;
                 w.leaf(id.sym_quote())?;
-                w.group(|w| {
-                    for x in ss {
-                        write_sort(x.inner().repr(), w)?;
-                    }
-                    Ok(())
-                })?;
+                write_seq(ss, w)?;
                 write_sort(s.inner().repr(), w)?;
             }
             alg::Command::DeclareSort(id, arity) => {
@@ -563,33 +621,18 @@ where
                     for fd in fds {
                         w.group(|w| {
                             w.leaf(fd.name.sym_quote())?;
-                            w.group(|w| {
-                                for v in &fd.vars {
-                                    v.write_doc(w)?;
-                                }
-                                Ok(())
-                            })?;
+                            write_seq(&fd.vars, w)?;
                             write_sort(fd.out_sort.inner().repr(), w)
                         })?;
                     }
                     Ok(())
                 })?;
-                w.group(|w| {
-                    for fd in fds {
-                        write_term(fd.body.inner().repr(), w)?;
-                    }
-                    Ok(())
-                })?;
+                write_seq(fds.iter().map(|fd| &fd.body), w)?;
             }
             alg::Command::DefineSort(name, params, sort) => {
                 w.leaf(CommandName::DefineSort.to_string())?;
                 w.leaf(name.sym_quote())?;
-                w.group(|w| {
-                    for p in params {
-                        w.leaf(p.sym_quote())?;
-                    }
-                    Ok(())
-                })?;
+                write_symbols(params, w)?;
                 write_sort(sort.inner().repr(), w)?;
             }
             alg::Command::Echo(s) => {
@@ -615,12 +658,7 @@ where
             alg::Command::GetUnsatCore => w.leaf(CommandName::GetUnsatCore.to_string())?,
             alg::Command::GetValue(ts) => {
                 w.leaf(CommandName::GetValue.to_string())?;
-                w.group(|w| {
-                    for t in ts {
-                        write_term(t.inner().repr(), w)?;
-                    }
-                    Ok(())
-                })?;
+                write_seq(ts, w)?;
             }
             alg::Command::Pop(i) => {
                 w.leaf(CommandName::Pop.to_string())?;
@@ -1097,90 +1135,42 @@ where
 {
     fn write_doc(&self, w: &mut WorkSpace) -> Res {
         match self {
+            // the sort parameters wrap the arrow, and the indices wrap that
             alg::Sig::ParFunc(idx, pars, inps, o) => {
-                // the arrow, or just the output sort when the function takes nothing
                 let arrow = |w: &mut WorkSpace| {
-                    if inps.is_empty() {
-                        o.write_doc(w)
-                    } else {
-                        w.group(|w| {
-                            w.leaf(IMPLIES)?;
-                            for i in inps {
-                                i.write_doc(w)?;
-                            }
-                            o.write_doc(w)
-                        })
-                    }
-                };
-                // the sort parameters wrap it, and the indices wrap that
-                let parametrised = |w: &mut WorkSpace| {
                     if pars.is_empty() {
-                        arrow(w)
+                        write_arrow(inps, o, w)
                     } else {
-                        w.group(|w| {
-                            w.leaf(Token::Par.to_string())?;
-                            w.group(|w| {
-                                for p in pars {
-                                    w.leaf(p.sym_quote())?;
-                                }
-                                Ok(())
-                            })?;
-                            arrow(w)
-                        })
+                        write_par(pars, w, |w| write_arrow(inps, o, w))
                     }
                 };
                 if idx.is_empty() {
-                    parametrised(w)
+                    arrow(w)
                 } else {
                     w.group(|w| {
                         w.leaf(INDICES)?;
                         for i in idx {
                             write_sig_index(i, w)?;
                         }
-                        parametrised(w)
+                        arrow(w)
                     })
                 }
             }
-            alg::Sig::VarLenFunc(inp, n, out) => w.group(|w| {
-                w.leaf(IMPLIES)?;
-                inp.write_doc(w)?;
-                w.leaf(at_least(*n))?;
-                inp.write_doc(w)?;
-                out.write_doc(w)
-            }),
+            alg::Sig::VarLenFunc(inp, n, out) => write_variadic(inp, *n, out, w),
             alg::Sig::BvFunc(n, _, _, inps, o) => {
-                let arrow = |w: &mut WorkSpace| {
-                    if inps.is_empty() {
-                        o.write_doc(w)
-                    } else {
-                        w.group(|w| {
-                            w.leaf(IMPLIES)?;
-                            for i in inps {
-                                i.write_doc(w)?;
-                            }
-                            o.write_doc(w)
-                        })
-                    }
-                };
                 if *n == 0 {
-                    arrow(w)
+                    write_arrow(inps, o, w)
                 } else {
                     w.group(|w| {
                         w.leaf(INDICES)?;
                         for _ in 0..*n {
                             w.leaf(reserved(Token::RWNumeral))?;
                         }
-                        arrow(w)
+                        write_arrow(inps, o, w)
                     })
                 }
             }
-            alg::Sig::BvVarLenFunc(_, inp, n, o) => w.group(|w| {
-                w.leaf(IMPLIES)?;
-                inp.write_doc(w)?;
-                w.leaf(at_least(*n))?;
-                inp.write_doc(w)?;
-                o.write_doc(w)
-            }),
+            alg::Sig::BvVarLenFunc(_, inp, n, o) => write_variadic(inp, *n, o, w),
             alg::Sig::BvConcat => {
                 w.leaf("(=> (_ BitVec l1) ... (_ BitVec ln) (_ BitVec (+ l1 ... ln)))")
             }
@@ -1211,28 +1201,11 @@ where
     So: Print,
 {
     fn write_doc(&self, w: &mut WorkSpace) -> Res {
-        let constructors = |w: &mut WorkSpace| {
-            w.group(|w| {
-                for c in &self.constructors {
-                    c.write_doc(w)?;
-                }
-                Ok(())
-            })
-        };
         if self.params.is_empty() {
-            constructors(w)
+            write_seq(&self.constructors, w)
         } else {
             // the parameters wrap the constructors, i.e. `(par (a) ((c a)))`
-            w.group(|w| {
-                w.leaf(Token::Par.to_string())?;
-                w.group(|w| {
-                    for p in &self.params {
-                        w.leaf(p.sym_quote())?;
-                    }
-                    Ok(())
-                })?;
-                constructors(w)
-            })
+            write_par(&self.params, w, |w| write_seq(&self.constructors, w))
         }
     }
 }
@@ -1245,12 +1218,7 @@ where
 {
     fn write_doc(&self, w: &mut WorkSpace) -> Res {
         w.leaf(self.name.sym_quote())?;
-        w.group(|w| {
-            for v in &self.vars {
-                v.write_doc(w)?;
-            }
-            Ok(())
-        })?;
+        write_seq(&self.vars, w)?;
         self.out_sort.write_doc(w)?;
         self.body.write_doc(w)
     }
