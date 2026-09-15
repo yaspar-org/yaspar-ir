@@ -52,9 +52,9 @@
 //!     .unwrap();
 //!
 //! let tm = TermManager::new();
-//! let mut solver = Solver::new(&tm);
+//! let solver = Solver::new(&tm);
 //! let mut env = Cvc5Env::new(&tm, &mut ctx);
-//! let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+//! let mut es = Cvc5EnvSolver::new(&mut env, &solver);
 //! for cmd in &cmds {
 //!     cmd.to_cvc5(&mut es).unwrap();
 //! }
@@ -103,20 +103,24 @@ use yaspar_macros::stack_safe;
 pub type CSort<'tm> = cvc5::Sort<'tm>;
 /// A cvc5 term, tied to the lifetime of the [`TermManager`] that created it.
 pub type CTerm<'tm> = cvc5::Term<'tm>;
-/// A cvc5 satisfiability result, tied to the lifetime of the [`TermManager`].
-pub type CResult<'tm> = cvc5::Result<'tm>;
-/// A cvc5 proof object, tied to the lifetime of the [`TermManager`].
-pub type CProof<'tm> = cvc5::Proof<'tm>;
+/// A cvc5 satisfiability result, tied to the lifetime of the [`Solver`] that produced it.
+pub type CResult<'s> = cvc5::Result<'s>;
+/// A cvc5 proof object, tied to the lifetime of the [`Solver`] that produced it.
+pub type CProof<'s> = cvc5::Proof<'s>;
 type Res<T> = std::result::Result<T, String>;
 
 /// The result of translating and executing a single SMTLib command via cvc5.
+///
+/// `'p` is the [`Solver`] borrow held by the [`Cvc5EnvSolver`] the command ran on: cvc5
+/// allocates satisfiability results and proofs in the solver's arena and frees them with it, so
+/// [`CheckSat`](Self::CheckSat) and [`GetProof`](Self::GetProof) borrow the solver for `'p`.
 #[derive(Debug)]
-pub enum CommandResult<'tm> {
+pub enum CommandResult<'p> {
     /// No meaningful return value (declarations, definitions, `assert`, `set-logic`,
     /// `set-info`, `set-option`, `define-sort`, `reset-assertions`, `echo`, `exit`).
     None,
     /// Result of `check-sat` or `check-sat-assuming`.
-    CheckSat(CResult<'tm>),
+    CheckSat(CResult<'p>),
     /// Result of `get-value`: a list of yaspar-ir terms (each cvc5-returned value
     /// is backward-translated into [`Term`]).
     GetValue(Vec<Term>),
@@ -130,7 +134,7 @@ pub enum CommandResult<'tm> {
     /// Result of `get-info` or `get-option`: a string response.
     Info(String),
     /// Result of `get-proof`: the full proof tree.
-    GetProof(Vec<CProof<'tm>>),
+    GetProof(Vec<CProof<'p>>),
 }
 
 /// Convert a yaspar-ir typed AST node to its cvc5 counterpart.
@@ -412,21 +416,21 @@ impl<'tm, Ctx> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, Ctx> {
 ///
 /// let tm = TermManager::new();
 /// let mut ctx = Context::new();
-/// let mut solver = Solver::new(&tm);
+/// let solver = Solver::new(&tm);
 /// let mut env = Cvc5Env::new(&tm, &mut ctx);
-/// let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
+/// let mut es = Cvc5EnvSolver::new(&mut env, &solver);
 /// // now use es.to_cvc5() on Command values
 /// ```
 pub struct Cvc5EnvSolver<'a, 'tm, Ctx> {
     /// The translation environment for sorts and terms.
     pub env: &'a mut Cvc5Env<'tm, Ctx>,
     /// The cvc5 solver instance.
-    pub solver: &'a mut Solver<'tm>,
+    pub solver: &'a Solver<'tm>,
 }
 
 impl<'a, 'tm, Ctx> Cvc5EnvSolver<'a, 'tm, Ctx> {
     /// Create a new command-translation environment from a [`Cvc5Env`] and a [`Solver`].
-    pub fn new(env: &'a mut Cvc5Env<'tm, Ctx>, solver: &'a mut Solver<'tm>) -> Self {
+    pub fn new(env: &'a mut Cvc5Env<'tm, Ctx>, solver: &'a Solver<'tm>) -> Self {
         Self { env, solver }
     }
 }
@@ -2395,16 +2399,18 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
 }
 
 // ── Command translation ──────────────────────────────────────
-impl<'tm, Ctx> ConvertToCvc5<Cvc5EnvSolver<'_, 'tm, Ctx>> for Command
+impl<'p, 'tm, Ctx> ConvertToCvc5<Cvc5EnvSolver<'p, 'tm, Ctx>> for Command
 where
     Ctx: HasMutRef<Context>,
 {
-    type Output = CommandResult<'tm>;
+    type Output = CommandResult<'p>;
 
-    fn to_cvc5(&self, es: &mut Cvc5EnvSolver<'_, 'tm, Ctx>) -> Res<Self::Output> {
+    fn to_cvc5(&self, es: &mut Cvc5EnvSolver<'p, 'tm, Ctx>) -> Res<Self::Output> {
         use alg::Command as AC;
         let env = &mut *es.env;
-        let solver = &mut *es.solver;
+        // `&Solver` is `Copy`, so this hands out the solver for the whole `'p` — results and
+        // proofs may therefore outlive this call while still borrowing the solver.
+        let solver = es.solver;
         match self.inner().repr() {
             AC::SetLogic(l) => {
                 solver.set_logic(l);
@@ -2573,7 +2579,7 @@ where
 }
 
 // ── Command helper methods ───────────────────────────────────
-impl<'tm, Ctx> Cvc5EnvSolver<'_, 'tm, Ctx>
+impl<'p, 'tm, Ctx> Cvc5EnvSolver<'p, 'tm, Ctx>
 where
     Ctx: HasMutRef<Context>,
 {
@@ -2581,7 +2587,7 @@ where
         &mut self,
         fd: &alg::FunctionDef<Str, Sort, Term>,
         recursive: bool,
-    ) -> Res<CommandResult<'tm>> {
+    ) -> Res<CommandResult<'p>> {
         let env = &mut *self.env;
         let out = fd.out_sort.to_cvc5(env)?;
         env.bind_vars(&fd.vars)?;
@@ -2600,7 +2606,7 @@ where
     fn translate_define_funs_rec(
         &mut self,
         fds: &[alg::FunctionDef<Str, Sort, Term>],
-    ) -> Res<CommandResult<'tm>> {
+    ) -> Res<CommandResult<'p>> {
         let env = &mut *self.env;
         // First pass: declare all function constants so they can reference each other
         let mut funs = Vec::with_capacity(fds.len());
@@ -2639,7 +2645,7 @@ where
     fn translate_declare_datatypes(
         &mut self,
         defs: &[alg::DatatypeDef<Str, Sort>],
-    ) -> Res<CommandResult<'tm>> {
+    ) -> Res<CommandResult<'p>> {
         let env = &mut *self.env;
         // Pre-register unresolved sorts so self/mutual references resolve
         for def in defs {
