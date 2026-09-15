@@ -15,7 +15,7 @@
 //! parenthesised, its members separated by a space. So `(and x y)` is a node over three leaves, and
 //! the shape of the document is the shape of the term.
 //!
-//! [`WorkSpace`] builds one. It keeps the *tail* of the document — the forests still open, i.e. its
+//! [`PrintSpace`] builds one. It keeps the *tail* of the document — the forests still open, i.e. its
 //! right spine — in a `Vec`, together with the size of what has been emitted. Printing does two
 //! things to it: push a leaf onto the innermost forest, or, once a parenthesised group is finished,
 //! pop that forest, wrap it in a `Tree::Node`, and push it onto the forest beneath. When the scan
@@ -23,10 +23,10 @@
 //!
 //! # The budget
 //!
-//! [`PrintConfig::max_length`] caps [`WorkSpace::size`], which counts parentheses and separators as
+//! `PrintConfig::max_length` caps `PrintSpace::size`, which counts parentheses and separators as
 //! well as tokens, so it tracks what the document will render to. It is checked after each token, so
-//! the cap holds to within one token: once it is spent the descent returns [`Elided`], which unwinds
-//! to `WorkSpace::finish`, where the marker `...` is pushed and every open forest is closed — so a
+//! the cap holds to within one token: once it is spent the descent gives up, which unwinds
+//! to `PrintSpace::finish`, where the marker `...` is pushed and every open forest is closed — so a
 //! cut-short document is still a tree, still balances, and says so where it was cut. Nothing past the cut is ever visited, so
 //! printing the first 200 bytes of a huge term costs about 200 bytes of work.
 //!
@@ -70,7 +70,7 @@ pub struct PrintConfig {
     /// Stop once the document has reached this many bytes, or print all of it when [`None`].
     ///
     /// The cap holds to within one token, since it is checked between tokens.
-    pub max_length: Option<usize>,
+    max_length: Option<usize>,
 }
 
 impl PrintConfig {
@@ -86,6 +86,17 @@ impl PrintConfig {
             max_length: Some(max_length),
         }
     }
+
+    /// A configuration to build on, which prints everything until told otherwise.
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Cap the output at `max_length` bytes, replacing whatever cap was set.
+    pub fn with_max_length(&mut self, max_length: usize) -> &mut Self {
+        self.max_length = Some(max_length);
+        self
+    }
 }
 
 impl Default for PrintConfig {
@@ -96,7 +107,7 @@ impl Default for PrintConfig {
 
 /// A printed document: a leaf is a token, and a node is a parenthesised forest.
 ///
-/// It is the printer's own scaffolding: [`Print`] hands back the text it renders to.
+/// It is the printer's own scaffolding: [`StructuredPrint`] hands back the text it renders to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Tree {
     /// One token of output: a symbol, a literal, a keyword.
@@ -161,17 +172,17 @@ mod render {
 /// Writing is what an implementor supplies, which is what lets the grammar be printed generically: a
 /// `VarBinding<Str, T>` or a `Sig<Str, So>` knows nothing about its payload beyond this, and both the
 /// typed and the untyped AST supply it — a wrapper writes whatever it wraps. Rendering the document is
-/// the same for all of them, so [`Print::print`] is a default.
-pub trait Print {
+/// the same for all of them, so [`StructuredPrint::print`] is a default.
+pub trait StructuredPrint {
     /// Push the tokens of `self` onto `w`, failing once its budget is spent.
-    fn write_doc(&self, w: &mut WorkSpace) -> Res;
+    fn write_doc(&self, w: &mut PrintSpace) -> Res;
 
     /// Write to `out`, stopping once the budget in `config` is spent.
     ///
     /// What is written carries `...` where the budget ran out.
     fn print<W: Write>(&self, out: &mut W, config: &PrintConfig) -> std::fmt::Result {
-        let mut w = WorkSpace::new(config);
-        let cut = self.write_doc(&mut w).is_err();
+        let mut w = PrintSpace::new(config);
+        let cut = self.write_doc(&mut w).is_none();
         write_forest(&w.finish(cut), out)
     }
 
@@ -184,46 +195,42 @@ pub trait Print {
     }
 }
 
-impl<St, So, T> Print for alg::Term<St, So, T>
+impl<St, So, T> StructuredPrint for alg::Term<St, So, T>
 where
     St: StrQuote<String> + SymbolQuote<String>,
-    So: Print + Contains<T: Repr<T = alg::Sort<St, So>>>,
+    So: StructuredPrint + Contains<T: Repr<T = alg::Sort<St, So>>>,
     T: Contains<T: Repr<T = alg::Term<St, So, T>>>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_term(self, w)
     }
 }
 
-impl<St, So> Print for alg::Sort<St, So>
+impl<St, So> StructuredPrint for alg::Sort<St, So>
 where
     St: SymbolQuote<String>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_sort(self, w)
     }
 }
 
 /// A wrapper writes what it wraps, which is how a handle of either AST is printed.
-impl<X> Print for X
+impl<X> StructuredPrint for X
 where
-    X: Contains<T: Repr<T: Print>>,
+    X: Contains<T: Repr<T: StructuredPrint>>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         self.inner().repr().write_doc(w)
     }
 }
 
-/// The budget ran out; unwinds the descent to `WorkSpace::finish`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Elided;
-
-/// What a step of a descent returns: `Err` means the budget is spent.
-type Res = Result<(), Elided>;
+/// What a step of a descent returns: [`None`] means the budget is spent.
+pub type Res = Option<()>;
 
 /// A document under construction: what it will render to so far, and the forests still open.
-pub struct WorkSpace {
+pub struct PrintSpace {
     /// Length the document would render to, so far.
     sz: usize,
     /// The innermost forest, i.e. the one a tree is pushed onto.
@@ -237,7 +244,7 @@ pub struct WorkSpace {
     limit: usize,
 }
 
-impl WorkSpace {
+impl PrintSpace {
     /// A workspace that will honour `config`.
     pub fn new(config: &PrintConfig) -> Self {
         Self {
@@ -269,9 +276,9 @@ impl WorkSpace {
     /// Fail once the budget is spent, which unwinds the descent.
     fn check(&mut self) -> Res {
         if self.sz >= self.limit {
-            Err(Elided)
+            None
         } else {
-            Ok(())
+            Some(())
         }
     }
 
@@ -279,25 +286,26 @@ impl WorkSpace {
     ///
     /// It takes either of the two forms a token arrives in: one of the grammar's fixed words, or text
     /// that had to be built, e.g. a quoted symbol.
-    fn leaf(&mut self, s: impl Into<String>) -> Res {
+    pub fn leaf(&mut self, s: impl Into<String>) -> Res {
         let s = s.into();
         let len = s.len();
         self.push(Tree::Leaf(s), len);
         self.check()
     }
 
-    /// Print a parenthesised group: open it, let `f` fill it, then close it.
+    /// print a parenthesised group: open it, let `f` fill it, then close it.
     ///
-    /// A spent budget leaves the group open, which is what [`WorkSpace::finish`] expects.
-    fn group(&mut self, f: impl FnOnce(&mut Self) -> Res) -> Res {
+    /// A spent budget leaves the group open, which is what `PrintSpace::finish` expects.
+    #[inline]
+    pub fn group(&mut self, f: impl FnOnce(&mut Self) -> Res) -> Res {
         self.open()?;
         f(self)?;
         self.close();
-        Ok(())
+        Some(())
     }
 
     /// Open a group: put the forest in progress aside and start one for the group.
-    fn open(&mut self) -> Res {
+    pub fn open(&mut self) -> Res {
         // its parentheses, and the separator in front of it if it has a predecessor
         self.sz += 2 + usize::from(!self.last.is_empty());
         self.forests.push(std::mem::take(&mut self.last));
@@ -306,9 +314,9 @@ impl WorkSpace {
 
     /// Close the innermost group: wrap its forest and push it onto the one it was opened in.
     ///
-    /// The parentheses were charged for by [`WorkSpace::open`], so closing costs nothing and cannot
+    /// The parentheses were charged for by [`PrintSpace::open`], so closing costs nothing and cannot
     /// take the document over budget.
-    fn close(&mut self) {
+    pub fn close(&mut self) {
         // nothing to close unless a group was opened
         if let Some(enclosing) = self.forests.pop() {
             let forest = std::mem::replace(&mut self.last, enclosing);
@@ -333,20 +341,20 @@ impl WorkSpace {
 }
 
 /// Print `(x1 … xn)`, i.e. a parenthesised sequence of whatever can print itself.
-fn write_seq<'a, X>(xs: impl IntoIterator<Item = &'a X>, w: &mut WorkSpace) -> Res
+fn write_seq<'a, X>(xs: impl IntoIterator<Item = &'a X>, w: &mut PrintSpace) -> Res
 where
-    X: Print + 'a,
+    X: StructuredPrint + 'a,
 {
     w.group(|w| {
         for x in xs {
             x.write_doc(w)?;
         }
-        Ok(())
+        Some(())
     })
 }
 
 /// Print `(s1 … sn)`, i.e. a parenthesised sequence of symbols.
-fn write_symbols<St>(symbols: &[St], w: &mut WorkSpace) -> Res
+fn write_symbols<St>(symbols: &[St], w: &mut PrintSpace) -> Res
 where
     St: SymbolQuote<String>,
 {
@@ -354,15 +362,15 @@ where
         for s in symbols {
             w.leaf(s.sym_quote())?;
         }
-        Ok(())
+        Some(())
     })
 }
 
 /// Print `(par (a …) inner)`, i.e. what wraps something declared with sort parameters.
-fn write_par<St, F>(params: &[St], w: &mut WorkSpace, inner: F) -> Res
+fn write_par<St, F>(params: &[St], w: &mut PrintSpace, inner: F) -> Res
 where
     St: SymbolQuote<String>,
-    F: FnOnce(&mut WorkSpace) -> Res,
+    F: FnOnce(&mut PrintSpace) -> Res,
 {
     w.group(|w| {
         w.leaf(Token::Par.to_string())?;
@@ -372,10 +380,10 @@ where
 }
 
 /// Print `(=> A … B)`, or just the output when the function takes no input.
-fn write_arrow<I, O>(inps: &[I], o: &O, w: &mut WorkSpace) -> Res
+fn write_arrow<I, O>(inps: &[I], o: &O, w: &mut PrintSpace) -> Res
 where
-    I: Print,
-    O: Print,
+    I: StructuredPrint,
+    O: StructuredPrint,
 {
     if inps.is_empty() {
         o.write_doc(w)
@@ -391,10 +399,10 @@ where
 }
 
 /// Print `(=> A …[>= n times] A B)`, i.e. the signature of a variadic function.
-fn write_variadic<I, O>(inp: &I, n: usize, o: &O, w: &mut WorkSpace) -> Res
+fn write_variadic<I, O>(inp: &I, n: usize, o: &O, w: &mut PrintSpace) -> Res
 where
-    I: Print,
-    O: Print,
+    I: StructuredPrint,
+    O: StructuredPrint,
 {
     w.group(|w| {
         w.leaf(IMPLIES)?;
@@ -405,8 +413,8 @@ where
     })
 }
 
-/// Print a constant literal.
-fn write_constant<St>(c: &alg::Constant<St>, w: &mut WorkSpace) -> Res
+/// print a constant literal.
+fn write_constant<St>(c: &alg::Constant<St>, w: &mut PrintSpace) -> Res
 where
     St: StrQuote<String>,
 {
@@ -438,7 +446,7 @@ where
 }
 
 /// Print one index of an indexed identifier.
-fn write_index<St>(i: &alg::Index<St>, w: &mut WorkSpace) -> Res
+fn write_index<St>(i: &alg::Index<St>, w: &mut PrintSpace) -> Res
 where
     St: SymbolQuote<String>,
 {
@@ -450,7 +458,7 @@ where
 }
 
 /// Print an identifier: `f`, or `(_ f i …)` when it is indexed.
-fn write_identifier<St>(id: &alg::Identifier<St>, w: &mut WorkSpace) -> Res
+fn write_identifier<St>(id: &alg::Identifier<St>, w: &mut PrintSpace) -> Res
 where
     St: SymbolQuote<String>,
 {
@@ -465,13 +473,13 @@ where
                 write_index(&id.indices[i], w)?;
                 i += 1;
             }
-            Ok(())
+            Some(())
         })
     }
 }
 
-/// Print the pattern of a match arm.
-fn write_pattern<St>(p: &alg::Pattern<St>, w: &mut WorkSpace) -> Res
+/// print the pattern of a match arm.
+fn write_pattern<St>(p: &alg::Pattern<St>, w: &mut PrintSpace) -> Res
 where
     St: SymbolQuote<String>,
 {
@@ -489,13 +497,13 @@ where
                 }
                 i += 1;
             }
-            Ok(())
+            Some(())
         }),
     }
 }
 
-/// Print a signature index, i.e. what an indexed identifier admits in one position.
-fn write_sig_index<St>(i: &alg::SigIndex<St>, w: &mut WorkSpace) -> Res
+/// print a signature index, i.e. what an indexed identifier admits in one position.
+fn write_sig_index<St>(i: &alg::SigIndex<St>, w: &mut PrintSpace) -> Res
 where
     St: SymbolQuote<String>,
 {
@@ -514,9 +522,9 @@ where
     }
 }
 
-/// Print a bit-vector length expression, e.g. the `(+ x0 x1)` of a concatenation.
+/// print a bit-vector length expression, e.g. the `(+ x0 x1)` of a concatenation.
 #[stack_safe]
-fn write_bv_len(e: &alg::BvLenExpr, w: &mut WorkSpace) -> Res {
+fn write_bv_len(e: &alg::BvLenExpr, w: &mut PrintSpace) -> Res {
     match e {
         alg::BvLenExpr::Fixed(n) => w.leaf(n.to_string()),
         alg::BvLenExpr::Var(n) => w.leaf(format!("x{n}")),
@@ -526,7 +534,7 @@ fn write_bv_len(e: &alg::BvLenExpr, w: &mut WorkSpace) -> Res {
             write_bv_len(left.as_ref(), w)?;
             write_bv_len(right.as_ref(), w)?;
             w.close();
-            Ok(())
+            Some(())
         }
         alg::BvLenExpr::Sub { left, right } => {
             w.open()?;
@@ -534,7 +542,7 @@ fn write_bv_len(e: &alg::BvLenExpr, w: &mut WorkSpace) -> Res {
             write_bv_len(left.as_ref(), w)?;
             write_bv_len(right.as_ref(), w)?;
             w.close();
-            Ok(())
+            Some(())
         }
         alg::BvLenExpr::Mul { left, right } => {
             w.open()?;
@@ -542,13 +550,13 @@ fn write_bv_len(e: &alg::BvLenExpr, w: &mut WorkSpace) -> Res {
             write_bv_len(left.as_ref(), w)?;
             write_bv_len(right.as_ref(), w)?;
             w.close();
-            Ok(())
+            Some(())
         }
     }
 }
 
-/// Print a command, i.e. `(assert t)` and its kin.
-fn write_command<St, So, T>(c: &alg::Command<St, So, T>, w: &mut WorkSpace) -> Res
+/// print a command, i.e. `(assert t)` and its kin.
+fn write_command<St, So, T>(c: &alg::Command<St, So, T>, w: &mut PrintSpace) -> Res
 where
     St: Clone + StrQuote<String> + SymbolQuote<String>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>>,
@@ -585,7 +593,7 @@ where
                             w.leaf(d.dec.params.len().to_string())
                         })?;
                     }
-                    Ok(())
+                    Some(())
                 })?;
                 write_seq(defs.iter().map(|d| &d.dec), w)?;
             }
@@ -625,7 +633,7 @@ where
                             write_sort(fd.out_sort.inner().repr(), w)
                         })?;
                     }
-                    Ok(())
+                    Some(())
                 })?;
                 write_seq(fds.iter().map(|fd| &fd.body), w)?;
             }
@@ -683,15 +691,15 @@ where
                 write_attribute(op, w)?;
             }
         }
-        Ok(())
+        Some(())
     })
 }
 
-/// Print a sort: `Int`, or `(Array Int Int)` when it has arguments.
+/// print a sort: `Int`, or `(Array Int Int)` when it has arguments.
 ///
 /// One self-recursive function, so the whole descent shares one driver.
 #[stack_safe]
-fn write_sort<St, So>(node: &alg::Sort<St, So>, w: &mut WorkSpace) -> Res
+fn write_sort<St, So>(node: &alg::Sort<St, So>, w: &mut PrintSpace) -> Res
 where
     St: SymbolQuote<String>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>>,
@@ -707,7 +715,7 @@ where
             i += 1;
         }
         w.close();
-        Ok(())
+        Some(())
     }
 }
 
@@ -719,11 +727,11 @@ where
 mod term {
     use super::*;
 
-    /// Print a term.
-    pub(super) fn write_term<St, So, T>(node: &alg::Term<St, So, T>, w: &mut WorkSpace) -> Res
+    /// print a term.
+    pub(super) fn write_term<St, So, T>(node: &alg::Term<St, So, T>, w: &mut PrintSpace) -> Res
     where
         St: StrQuote<String> + SymbolQuote<String>,
-        So: Print + Contains<T: Repr<T = alg::Sort<St, So>>>,
+        So: StructuredPrint + Contains<T: Repr<T = alg::Sort<St, So>>>,
         T: Contains<T: Repr<T = alg::Term<St, So, T>>>,
     {
         match node {
@@ -740,7 +748,7 @@ mod term {
                     i += 1;
                 }
                 w.close();
-                Ok(())
+                Some(())
             }
             alg::Term::Eq(a, b) => {
                 w.open()?;
@@ -748,14 +756,14 @@ mod term {
                 write_term(a.inner().repr(), w)?;
                 write_term(b.inner().repr(), w)?;
                 w.close();
-                Ok(())
+                Some(())
             }
             alg::Term::Not(t) => {
                 w.open()?;
                 w.leaf(NOT)?;
                 write_term(t.inner().repr(), w)?;
                 w.close();
-                Ok(())
+                Some(())
             }
             alg::Term::Ite(b, t, e) => {
                 w.open()?;
@@ -764,7 +772,7 @@ mod term {
                 write_term(t.inner().repr(), w)?;
                 write_term(e.inner().repr(), w)?;
                 w.close();
-                Ok(())
+                Some(())
             }
             alg::Term::Distinct(ts) => {
                 w.open()?;
@@ -775,7 +783,7 @@ mod term {
                     i += 1;
                 }
                 w.close();
-                Ok(())
+                Some(())
             }
             alg::Term::And(ts) => {
                 w.open()?;
@@ -786,7 +794,7 @@ mod term {
                     i += 1;
                 }
                 w.close();
-                Ok(())
+                Some(())
             }
             alg::Term::Or(ts) => {
                 w.open()?;
@@ -797,7 +805,7 @@ mod term {
                     i += 1;
                 }
                 w.close();
-                Ok(())
+                Some(())
             }
             alg::Term::Xor(ts) => {
                 w.open()?;
@@ -808,7 +816,7 @@ mod term {
                     i += 1;
                 }
                 w.close();
-                Ok(())
+                Some(())
             }
             // `(=> p1 … pn q)`, i.e. the premises then the conclusion
             alg::Term::Implies(ts, r) => {
@@ -821,7 +829,7 @@ mod term {
                 }
                 write_term(r.inner().repr(), w)?;
                 w.close();
-                Ok(())
+                Some(())
             }
             // `(let ((x e) …) body)`
             alg::Term::Let(vs, body) => {
@@ -839,7 +847,7 @@ mod term {
                 w.close();
                 write_term(body.inner().repr(), w)?;
                 w.close();
-                Ok(())
+                Some(())
             }
             // `(exists ((x S) …) body)`
             alg::Term::Exists(vs, body) => {
@@ -857,7 +865,7 @@ mod term {
                 w.close();
                 write_term(body.inner().repr(), w)?;
                 w.close();
-                Ok(())
+                Some(())
             }
             // `(forall ((x S) …) body)`
             alg::Term::Forall(vs, body) => {
@@ -875,7 +883,7 @@ mod term {
                 w.close();
                 write_term(body.inner().repr(), w)?;
                 w.close();
-                Ok(())
+                Some(())
             }
             // `(! t :key val …)`
             alg::Term::Annotated(t, anns) => {
@@ -893,7 +901,7 @@ mod term {
                     i += 1;
                 }
                 w.close();
-                Ok(())
+                Some(())
             }
             // `(match t ((p body) …))`
             alg::Term::Matching(scrutinee, arms) => {
@@ -915,7 +923,7 @@ mod term {
                 }
                 w.close();
                 w.close();
-                Ok(())
+                Some(())
             }
         }
     }
@@ -925,11 +933,11 @@ mod term {
     /// `:pattern` and `:no-pattern` hold terms, which is why this is a member of the same cycle as
     /// [`write_term`] rather than a function it calls: a call between members is a step of the one driver,
     /// so annotations nested to any depth cost no native frames.
-    pub(super) fn write_attribute<St, So, T>(a: &alg::Attribute<St, T>, w: &mut WorkSpace) -> Res
+    pub(super) fn write_attribute<St, So, T>(a: &alg::Attribute<St, T>, w: &mut PrintSpace) -> Res
     where
         St: StrQuote<String> + SymbolQuote<String>,
         So: Contains<T: Repr<T = alg::Sort<St, So>>>,
-        T: Print + Contains<T: Repr<T = alg::Term<St, So, T>>>,
+        T: StructuredPrint + Contains<T: Repr<T = alg::Term<St, So, T>>>,
     {
         match a {
             alg::Attribute::Keyword(kw) => w.leaf(kw.to_string()),
@@ -954,7 +962,7 @@ mod term {
                     i += 1;
                 }
                 w.close();
-                Ok(())
+                Some(())
             }
             #[cfg(feature = "no-pattern")]
             alg::Attribute::NoPattern(t) => {
@@ -965,63 +973,63 @@ mod term {
     }
 }
 
-impl<St> Print for alg::Constant<St>
+impl<St> StructuredPrint for alg::Constant<St>
 where
     St: StrQuote<String>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_constant(self, w)
     }
 }
 
-impl<St> Print for alg::Index<St>
+impl<St> StructuredPrint for alg::Index<St>
 where
     St: SymbolQuote<String>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_index(self, w)
     }
 }
 
-impl<St> Print for alg::Identifier<St>
+impl<St> StructuredPrint for alg::Identifier<St>
 where
     St: SymbolQuote<String>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_identifier(self, w)
     }
 }
 
-impl<St> Print for alg::Pattern<St>
+impl<St> StructuredPrint for alg::Pattern<St>
 where
     St: SymbolQuote<String>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_pattern(self, w)
     }
 }
 
-impl<St> Print for alg::SigIndex<St>
+impl<St> StructuredPrint for alg::SigIndex<St>
 where
     St: SymbolQuote<String>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_sig_index(self, w)
     }
 }
 
-impl Print for alg::BvLenExpr {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+impl StructuredPrint for alg::BvLenExpr {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_bv_len(self, w)
     }
 }
 
-impl<St, So> Print for alg::QualifiedIdentifier<St, So>
+impl<St, So> StructuredPrint for alg::QualifiedIdentifier<St, So>
 where
     St: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         match &self.1 {
             None => write_identifier(&self.0, w),
             Some(s) => w.group(|w| {
@@ -1033,12 +1041,12 @@ where
     }
 }
 
-impl<St, T> Print for alg::VarBinding<St, T>
+impl<St, T> StructuredPrint for alg::VarBinding<St, T>
 where
     St: SymbolQuote<String>,
-    T: Print,
+    T: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         w.group(|w| {
             w.leaf(self.0.sym_quote())?;
             self.2.write_doc(w)
@@ -1046,12 +1054,12 @@ where
     }
 }
 
-impl<St, T> Print for alg::PatternArm<St, T>
+impl<St, T> StructuredPrint for alg::PatternArm<St, T>
 where
     St: SymbolQuote<String>,
-    T: Print,
+    T: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         w.group(|w| {
             write_pattern(&self.pattern, w)?;
             self.body.write_doc(w)
@@ -1059,22 +1067,22 @@ where
     }
 }
 
-impl<St, So, T> Print for alg::Attribute<St, T>
+impl<St, So, T> StructuredPrint for alg::Attribute<St, T>
 where
     St: StrQuote<String> + SymbolQuote<String>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>>,
-    T: Print + Contains<T: Repr<T = alg::Term<St, So, T>>>,
+    T: StructuredPrint + Contains<T: Repr<T = alg::Term<St, So, T>>>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_attribute::<St, So, T>(self, w)
     }
 }
 
-impl<So> Print for alg::BvInSort<So>
+impl<So> StructuredPrint for alg::BvInSort<So>
 where
-    So: Print,
+    So: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         match self {
             alg::BvInSort::BitVec(n) => w.group(|w| {
                 w.leaf(Token::Underscore.to_string())?;
@@ -1086,11 +1094,11 @@ where
     }
 }
 
-impl<So> Print for alg::BvOutSort<So>
+impl<So> StructuredPrint for alg::BvOutSort<So>
 where
-    So: Print,
+    So: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         match self {
             alg::BvOutSort::BitVec(e) => w.group(|w| {
                 w.leaf(Token::Underscore.to_string())?;
@@ -1103,41 +1111,41 @@ where
 }
 
 /// A value carrying meta-data prints as the value, which is what the diagnostics want.
-impl<A, B> Print for crate::meta::WithMeta<A, B>
+impl<A, B> StructuredPrint for crate::meta::WithMeta<A, B>
 where
-    A: Print,
+    A: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         self.data.write_doc(w)
     }
 }
 
-impl<A, B> Print for alg::AppFmt<'_, '_, A, B>
+impl<A, B> StructuredPrint for alg::AppFmt<'_, '_, A, B>
 where
-    A: Print,
-    B: Print,
+    A: StructuredPrint,
+    B: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         w.group(|w| {
             self.func.write_doc(w)?;
             for a in self.args {
                 a.write_doc(w)?;
             }
-            Ok(())
+            Some(())
         })
     }
 }
 
-impl<St, So> Print for alg::Sig<St, So>
+impl<St, So> StructuredPrint for alg::Sig<St, So>
 where
     St: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         match self {
             // the sort parameters wrap the arrow, and the indices wrap that
             alg::Sig::ParFunc(idx, pars, inps, o) => {
-                let arrow = |w: &mut WorkSpace| {
+                let arrow = |w: &mut PrintSpace| {
                     if pars.is_empty() {
                         write_arrow(inps, o, w)
                     } else {
@@ -1179,28 +1187,28 @@ where
     }
 }
 
-impl<St, So> Print for alg::ConstructorDec<St, So>
+impl<St, So> StructuredPrint for alg::ConstructorDec<St, So>
 where
     St: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         w.group(|w| {
             w.leaf(self.ctor.sym_quote())?;
             for a in &self.args {
                 a.write_doc(w)?;
             }
-            Ok(())
+            Some(())
         })
     }
 }
 
-impl<St, So> Print for alg::DatatypeDec<St, So>
+impl<St, So> StructuredPrint for alg::DatatypeDec<St, So>
 where
     St: SymbolQuote<String>,
-    So: Print,
+    So: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         if self.params.is_empty() {
             write_seq(&self.constructors, w)
         } else {
@@ -1210,13 +1218,13 @@ where
     }
 }
 
-impl<St, So, T> Print for alg::FunctionDef<St, So, T>
+impl<St, So, T> StructuredPrint for alg::FunctionDef<St, So, T>
 where
     St: SymbolQuote<String>,
-    So: Print,
-    T: Print,
+    So: StructuredPrint,
+    T: StructuredPrint,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         w.leaf(self.name.sym_quote())?;
         write_seq(&self.vars, w)?;
         self.out_sort.write_doc(w)?;
@@ -1224,13 +1232,13 @@ where
     }
 }
 
-impl<St, So, T> Print for alg::Command<St, So, T>
+impl<St, So, T> StructuredPrint for alg::Command<St, So, T>
 where
     St: Clone + StrQuote<String> + SymbolQuote<String>,
-    So: Print + Contains<T: Repr<T = alg::Sort<St, So>>>,
-    T: Print + Contains<T: Repr<T = alg::Term<St, So, T>>>,
+    So: StructuredPrint + Contains<T: Repr<T = alg::Sort<St, So>>>,
+    T: StructuredPrint + Contains<T: Repr<T = alg::Term<St, So, T>>>,
 {
-    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+    fn write_doc(&self, w: &mut PrintSpace) -> Res {
         write_command(self, w)
     }
 }
@@ -1277,8 +1285,8 @@ mod tests {
     #[test]
     fn document_is_a_tree() {
         let t = parse("(and x (or y z))");
-        let mut w = WorkSpace::new(&PrintConfig::UNLIMITED);
-        let cut = write_term(t.repr(), &mut w).is_err();
+        let mut w = PrintSpace::new(&PrintConfig::UNLIMITED);
+        let cut = write_term(t.repr(), &mut w).is_none();
         assert_eq!(
             Tree::Node(w.finish(cut)),
             Tree::Node(vec![Tree::Node(vec![
@@ -1461,8 +1469,8 @@ mod stack_safety {
         on_small_stack(|| {
             let mut arena = Arena::default();
             let t = deep_not(&mut arena, DEEP);
-            let mut w = WorkSpace::new(&PrintConfig::UNLIMITED);
-            let cut = write_term(t.repr(), &mut w).is_err();
+            let mut w = PrintSpace::new(&PrintConfig::UNLIMITED);
+            let cut = write_term(t.repr(), &mut w).is_none();
             drop(w.finish(cut));
             std::mem::forget((t, arena));
         });
