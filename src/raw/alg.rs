@@ -25,7 +25,7 @@ pub use kind::IdentifierKind;
 use num_order::NumHash;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Mul, Sub};
 pub use yaspar::ast::Keyword;
@@ -1100,31 +1100,21 @@ where
     }
 }
 
-pub(crate) fn fmt_vec(f: &mut impl Write, v: &[impl Display]) -> std::fmt::Result {
-    for i in 0..v.len() {
-        write!(f, "{}", v[i])?;
-        if i != v.len() - 1 {
-            write!(f, " ")?;
-        }
-    }
-    Ok(())
-}
-
 impl<Str: StrQuote<String>> Display for Constant<Str> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str: SymbolQuote<String>> Display for Index<Str> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str: SymbolQuote<String>> Display for Identifier<Str> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1135,7 +1125,7 @@ where
     T: Print + Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1145,7 +1135,7 @@ where
     So: Contains<T: Repr<T = Sort<Str, So>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1154,13 +1144,13 @@ where
     Str: SymbolQuote<String>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl Display for BvLenExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1169,7 +1159,7 @@ where
     So: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1178,7 +1168,7 @@ where
     So: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1188,7 +1178,7 @@ where
     So: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1198,7 +1188,7 @@ where
     So: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1208,18 +1198,8 @@ where
     T: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
-}
-
-pub(crate) fn fmt_app(
-    f: &mut impl Write,
-    func: impl Display,
-    args: &[impl Display],
-) -> std::fmt::Result {
-    write!(f, "({} ", func)?;
-    fmt_vec(f, args)?;
-    write!(f, ")")
 }
 
 /// This struct conveniently provides support for printing applications
@@ -1236,11 +1216,11 @@ impl<'a, 'b, A, B> AppFmt<'a, 'b, A, B> {
 
 impl<A, B> Display for AppFmt<'_, '_, A, B>
 where
-    A: Display,
-    B: Display,
+    A: Print,
+    B: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        fmt_app(f, self.func, self.args)
+        self.print(f, &PrintConfig::BRIEF)
     }
 }
 
@@ -1249,7 +1229,7 @@ where
     Str: SymbolQuote<String>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 impl<Str, T> Display for PatternArm<Str, T>
@@ -1258,7 +1238,7 @@ where
     T: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1269,7 +1249,7 @@ where
     T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1280,7 +1260,7 @@ where
     T: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1290,7 +1270,7 @@ where
     So: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1300,7 +1280,7 @@ where
     So: Print,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1311,7 +1291,7 @@ where
     T: Print + Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.print(&PrintConfig::UNLIMITED))
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 

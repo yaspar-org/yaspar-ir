@@ -77,6 +77,9 @@ impl PrintConfig {
     /// Print the whole term, however large.
     pub const UNLIMITED: Self = Self { max_length: None };
 
+    /// Print at most 1000 bytes, which is enough of a term to diagnose it by.
+    pub const BRIEF: Self = Self::limited(1000);
+
     /// Print at most `max_length` bytes.
     pub const fn limited(max_length: usize) -> Self {
         Self {
@@ -116,42 +119,41 @@ impl Drop for Tree {
     }
 }
 
-/// Render a document, without recursing natively: it is as deep as its term.
-#[stack_safe]
-fn write_tree<W: Write>(t: &Tree, out: &mut W) -> std::fmt::Result {
-    match t {
-        Tree::Leaf(s) => out.write_str(s),
-        Tree::Node(forest) => {
-            out.write_char('(')?;
-            let mut i = 0usize;
-            while i < forest.len() {
-                if i > 0 {
-                    out.write_char(' ')?;
-                }
-                write_tree(&forest[i], out)?;
-                i += 1;
-            }
-            out.write_char(')')
-        }
-    }
-}
-
-/// Render a forest: its members, separated by a space.
+/// Writing a document out, i.e. the cycle a tree and a forest form.
 ///
-/// Only a [`Tree::Node`] brings parentheses, so a document that is a forest — a function definition,
-/// an annotation — prints as a sequence, which is what the grammar asks for.
-fn render(forest: &[Tree]) -> String {
-    let mut out = String::new();
-    let mut i = 0usize;
-    while i < forest.len() {
-        if i > 0 {
-            out.push(' ');
+/// A document is as deep as the term it came from, so these two are members of one group and their
+/// recursion lives on the heap.
+#[stack_safe]
+mod render {
+    use super::*;
+
+    /// Write a document: a leaf is its text, and a node is its forest in parentheses.
+    pub(super) fn write_tree<W: Write>(t: &Tree, out: &mut W) -> std::fmt::Result {
+        match t {
+            Tree::Leaf(s) => out.write_str(s),
+            Tree::Node(forest) => {
+                out.write_char('(')?;
+                write_forest(forest, out)?;
+                out.write_char(')')
+            }
         }
-        // writing into a String cannot fail
-        let _ = write_tree(&forest[i], &mut out);
-        i += 1;
     }
-    out
+
+    /// Write a forest: its members, separated by a space.
+    ///
+    /// Only a [`Tree::Node`] brings parentheses, so a document that is a forest — a function
+    /// definition, an annotation — prints as a sequence, which is what the grammar asks for.
+    pub(super) fn write_forest<W: Write>(forest: &[Tree], out: &mut W) -> std::fmt::Result {
+        let mut i = 0usize;
+        while i < forest.len() {
+            if i > 0 {
+                out.write_char(' ')?;
+            }
+            write_tree(&forest[i], out)?;
+            i += 1;
+        }
+        Ok(())
+    }
 }
 
 /// Print `self`, by writing it into a document.
@@ -164,13 +166,21 @@ pub trait Print {
     /// Push the tokens of `self` onto `w`, failing once its budget is spent.
     fn write_doc(&self, w: &mut WorkSpace) -> Res;
 
-    /// Render to text, stopping once the budget in `config` is spent.
+    /// Write to `out`, stopping once the budget in `config` is spent.
     ///
-    /// Text that was cut short carries `...` where the budget ran out.
-    fn print(&self, config: &PrintConfig) -> String {
+    /// What is written carries `...` where the budget ran out.
+    fn print<W: Write>(&self, out: &mut W, config: &PrintConfig) -> std::fmt::Result {
         let mut w = WorkSpace::new(config);
         let cut = self.write_doc(&mut w).is_err();
-        render(&w.finish(cut))
+        write_forest(&w.finish(cut), out)
+    }
+
+    /// The same, as text.
+    fn print_str(&self, config: &PrintConfig) -> String {
+        let mut out = String::new();
+        // writing into a String cannot fail
+        let _ = self.print(&mut out, config);
+        out
     }
 }
 
@@ -1054,6 +1064,32 @@ where
     }
 }
 
+/// A value carrying meta-data prints as the value, which is what the diagnostics want.
+impl<A, B> Print for crate::meta::WithMeta<A, B>
+where
+    A: Print,
+{
+    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+        self.data.write_doc(w)
+    }
+}
+
+impl<A, B> Print for alg::AppFmt<'_, '_, A, B>
+where
+    A: Print,
+    B: Print,
+{
+    fn write_doc(&self, w: &mut WorkSpace) -> Res {
+        w.group(|w| {
+            self.func.write_doc(w)?;
+            for a in self.args {
+                a.write_doc(w)?;
+            }
+            Ok(())
+        })
+    }
+}
+
 impl<St, So> Print for alg::Sig<St, So>
 where
     St: SymbolQuote<String>,
@@ -1294,7 +1330,7 @@ mod tests {
         let t = parse("(and (or a b) (or c d) (or e f))");
         // the budget ran out inside the first group, so that is where the marker sits
         assert_eq!(
-            t.repr().print(&PrintConfig::limited(12)),
+            t.repr().print_str(&PrintConfig::limited(12)),
             "(and (or a ...))"
         );
         // the same term, printed whole
@@ -1304,7 +1340,9 @@ mod tests {
     #[test]
     fn an_unspent_budget_prints_everything() {
         assert_eq!(
-            parse("(and x y)").repr().print(&PrintConfig::limited(1024)),
+            parse("(and x y)")
+                .repr()
+                .print_str(&PrintConfig::limited(1024)),
             "(and x y)"
         );
     }
@@ -1313,7 +1351,9 @@ mod tests {
     #[test]
     fn a_budget_of_zero_yields_a_marker() {
         assert_eq!(
-            parse("(and x y)").repr().print(&PrintConfig::limited(0)),
+            parse("(and x y)")
+                .repr()
+                .print_str(&PrintConfig::limited(0)),
             "(...)"
         );
     }
@@ -1325,7 +1365,10 @@ mod tests {
         let int = arena.int_sort();
         let arr = arena.array_sort(int.clone(), int);
         assert_eq!(arr.to_string(), "(Array Int Int)");
-        assert_eq!(arr.repr().print(&PrintConfig::limited(4)), "(Array ...)");
+        assert_eq!(
+            arr.repr().print_str(&PrintConfig::limited(4)),
+            "(Array ...)"
+        );
     }
 }
 
@@ -1431,7 +1474,7 @@ mod stack_safety {
         let printed = on_small_stack(|| {
             let mut arena = Arena::default();
             let t = deep_not(&mut arena, DEEP);
-            let printed = t.repr().print(&PrintConfig::limited(40));
+            let printed = t.repr().print_str(&PrintConfig::limited(40));
             std::mem::forget((t, arena));
             printed
         });
