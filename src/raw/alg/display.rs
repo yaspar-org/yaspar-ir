@@ -11,14 +11,14 @@
 //!
 //! # The document
 //!
-//! A document is a [`Tree`]: a leaf holds a token, and a node holds a forest which prints
+//! A document is a `Tree`: a leaf holds a token, and a node holds a forest which prints
 //! parenthesised, its members separated by a space. So `(and x y)` is a node over three leaves, and
 //! the shape of the document is the shape of the term.
 //!
 //! [`WorkSpace`] builds one. It keeps the *tail* of the document — the forests still open, i.e. its
 //! right spine — in a `Vec`, together with the size of what has been emitted. Printing does two
 //! things to it: push a leaf onto the innermost forest, or, once a parenthesised group is finished,
-//! pop that forest, wrap it in a [`Tree::Node`], and push it onto the forest beneath. When the scan
+//! pop that forest, wrap it in a `Tree::Node`, and push it onto the forest beneath. When the scan
 //! finishes, one forest is left holding one tree, and that tree is the document.
 //!
 //! # The budget
@@ -26,7 +26,7 @@
 //! [`PrintConfig::max_length`] caps [`WorkSpace::size`], which counts parentheses and separators as
 //! well as tokens, so it tracks what the document will render to. It is checked after each token, so
 //! the cap holds to within one token: once it is spent the descent returns [`Elided`], which unwinds
-//! to [`WorkSpace::finish`], where the marker `...` is pushed and every open forest is closed — so a
+//! to `WorkSpace::finish`, where the marker `...` is pushed and every open forest is closed — so a
 //! cut-short document is still a tree, still balances, and says so where it was cut. Nothing past the cut is ever visited, so
 //! printing the first 200 bytes of a huge term costs about 200 bytes of work.
 //!
@@ -215,7 +215,7 @@ where
     }
 }
 
-/// The budget ran out; unwinds the descent to [`WorkSpace::finish`].
+/// The budget ran out; unwinds the descent to `WorkSpace::finish`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Elided;
 
