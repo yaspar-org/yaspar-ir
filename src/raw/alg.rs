@@ -17,22 +17,21 @@
 //! `super::instance`, we show a more memory-efficient version using an interning library.
 
 use crate::statics::*;
-use crate::traits::Contains;
-use dashu::base::Sign;
+use crate::traits::{Contains, Repr};
 use dashu::float::DBig;
 use dashu::integer::UBig;
+pub use display::{PrintConfig, StructuredPrint};
 pub use kind::IdentifierKind;
 use num_order::NumHash;
-use num_traits::Signed;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Mul, Sub};
 pub use yaspar::ast::Keyword;
 use yaspar::tokens::SPECIAL_SYMBOLS;
-use yaspar::{binary_to_string, hex_to_string};
 
+pub mod display;
 mod kind;
 pub(crate) mod rec;
 pub(crate) mod rec_memo;
@@ -1101,110 +1100,42 @@ where
     }
 }
 
-pub(crate) fn fmt_vec(f: &mut impl Write, v: &[impl Display]) -> std::fmt::Result {
-    for i in 0..v.len() {
-        write!(f, "{}", v[i])?;
-        if i != v.len() - 1 {
-            write!(f, " ")?;
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn fmt_vec_paren(f: &mut impl Write, v: &[impl Display]) -> std::fmt::Result {
-    write!(f, "(")?;
-    fmt_vec(f, v)?;
-    write!(f, ")")
-}
-
-impl<Str: Display + StrQuote<String>> Display for Constant<Str> {
+impl<Str: StrQuote<String>> Display for Constant<Str> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Constant::Numeral(n) => write!(f, "{}", n),
-            Constant::Decimal(r) => {
-                let abs = r.abs();
-                let body = if r.floor() == *r {
-                    format!("{}.0", abs)
-                } else {
-                    format!("{}", abs)
-                };
-
-                if r.sign() == Sign::Negative {
-                    write!(f, "(- {})", body)
-                } else {
-                    write!(f, "{}", body)
-                }
-            }
-            Constant::String(s) => write!(f, "{}", s.quote()),
-            Constant::Binary(bs, n) => write!(f, "#b{}", binary_to_string(bs, *n)),
-            Constant::Hexadecimal(bs, n) => write!(f, "#x{}", hex_to_string(bs, *n)),
-            Constant::Bool(b) => {
-                if *b {
-                    "true".fmt(f)
-                } else {
-                    "false".fmt(f)
-                }
-            }
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str: SymbolQuote<String>> Display for Index<Str> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Index::Numeral(n) => write!(f, "{}", n),
-            Index::Symbol(s) => write!(f, "{}", s.sym_quote()),
-            Index::Hexadecimal(bs, n) => write!(f, "#x{}", hex_to_string(bs, *n)),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str: SymbolQuote<String>> Display for Identifier<Str> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.indices.is_empty() {
-            write!(f, "{}", self.symbol.sym_quote())
-        } else {
-            write!(f, "(_ {} ", self.symbol.sym_quote())?;
-            fmt_vec(f, &self.indices)?;
-            write!(f, ")")
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
-impl<Str, T> Display for Attribute<Str, T>
+impl<Str, So, T> Display for Attribute<Str, T>
 where
-    Str: Display + StrQuote<String> + SymbolQuote<String>,
-    T: Display,
+    Str: StrQuote<String> + SymbolQuote<String>,
+    So: Contains<T: Repr<T = Sort<Str, So>>>,
+    T: StructuredPrint + Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Attribute::Keyword(kw) => write!(f, "{}", kw),
-            Attribute::Constant(kw, c) => write!(f, "{} {}", kw, c),
-            Attribute::Symbol(kw, s) => write!(f, "{} {}", kw, s.sym_quote()),
-            Attribute::Named(s) => write!(f, ":named {}", s.sym_quote()),
-            Attribute::Pattern(ts) => {
-                ":pattern ".fmt(f)?;
-                fmt_vec_paren(f, ts)
-            }
-            #[cfg(feature = "no-pattern")]
-            Attribute::NoPattern(t) => write!(f, ":no-pattern {t}"),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So> Display for Sort<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Display,
+    So: Contains<T: Repr<T = Sort<Str, So>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.1.is_empty() {
-            write!(f, "{}", self.0)
-        } else {
-            write!(f, "({} ", self.0)?;
-            fmt_vec(f, &self.1)?;
-            write!(f, ")")
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
@@ -1213,166 +1144,62 @@ where
     Str: SymbolQuote<String>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SigIndex::Numeral => "<NUMERAL>".fmt(f),
-            SigIndex::Symbol(ss) => {
-                // a single admissible symbol is printed bare; a genuine choice is braced
-                if ss.len() == 1 {
-                    ss.iter().next().unwrap().sym_quote().fmt(f)
-                } else {
-                    write!(f, "{{")?;
-                    fmt_vec(f, &ss.iter().map(|s| s.sym_quote()).collect::<Vec<_>>())?;
-                    write!(f, "}}")
-                }
-            }
-            SigIndex::Hexadecimal => "<HEXADECIMAL>".fmt(f),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl Display for BvLenExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BvLenExpr::Fixed(n) => n.fmt(f),
-            BvLenExpr::Var(n) => {
-                "x".fmt(f)?;
-                n.fmt(f)
-            }
-            BvLenExpr::Add { left, right } => fmt_app(f, ADD, &[left, right]),
-            BvLenExpr::Sub { left, right } => fmt_app(f, SUB, &[left, right]),
-            BvLenExpr::Mul { left, right } => fmt_app(f, MUL, &[left, right]),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<So> Display for BvInSort<So>
 where
-    So: Display,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BvInSort::BitVec(n) => {
-                "(_ BitVec x".fmt(f)?;
-                n.fmt(f)?;
-                ")".fmt(f)
-            }
-            BvInSort::Sort(s) => s.fmt(f),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<So> Display for BvOutSort<So>
 where
-    So: Display,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BvOutSort::BitVec(e) => {
-                "(_ BitVec ".fmt(f)?;
-                e.fmt(f)?;
-                ")".fmt(f)
-            }
-            BvOutSort::Sort(s) => s.fmt(f),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So> Display for Sig<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Display,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Sig::ParFunc(idx, pars, inps, o) => {
-                if !idx.is_empty() {
-                    write!(f, "(indices: ")?;
-                    fmt_vec(f, idx)?;
-                    write!(f, " ")?;
-                }
-                if !pars.is_empty() {
-                    write!(f, "(par ")?;
-                    fmt_vec_paren(f, &pars.iter().map(|s| s.sym_quote()).collect::<Vec<_>>())?;
-                    write!(f, " ")?;
-                }
-                if !inps.is_empty() {
-                    write!(f, "(=> ")?;
-                    fmt_vec(f, inps)?;
-                    write!(f, " {})", o)?;
-                } else {
-                    o.fmt(f)?;
-                }
-                if !pars.is_empty() {
-                    write!(f, ")")?;
-                }
-                if !idx.is_empty() {
-                    write!(f, ")")?;
-                }
-                Ok(())
-            }
-            Sig::VarLenFunc(inp, n, out) => {
-                write!(f, "(=> {} ...[>= {} times] {} {})", inp, n, inp, out)
-            }
-            Sig::BvFunc(n, _, _, inps, o) => {
-                if *n != 0 {
-                    write!(f, "(indices:")?;
-                    for _ in 0..*n {
-                        " <NUMERAL>".fmt(f)?;
-                    }
-                    write!(f, " ")?;
-                }
-                if !inps.is_empty() {
-                    write!(f, "(=> ")?;
-                    fmt_vec(f, inps)?;
-                    write!(f, " {})", o)?;
-                } else {
-                    o.fmt(f)?;
-                }
-                if *n != 0 {
-                    write!(f, ")")?;
-                }
-                Ok(())
-            }
-            Sig::BvVarLenFunc(_, inp, n, o) => {
-                write!(f, "(=> {} ...[>= {} times] {} {})", inp, n, inp, o)
-            }
-            Sig::BvConcat => "(=> (_ BitVec l1) ... (_ BitVec ln) (_ BitVec (+ l1 ... ln)))".fmt(f),
-            Sig::Rejected => "REJECTED".fmt(f),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So> Display for QualifiedIdentifier<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Display,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.1 {
-            None => write!(f, "{}", self.0),
-            Some(s) => write!(f, "(as {} {})", self.0, s),
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, T> Display for VarBinding<Str, T>
 where
     Str: SymbolQuote<String>,
-    T: Display,
+    T: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({} {})", self.0.sym_quote(), self.2)
+        self.print(f, &PrintConfig::UNLIMITED)
     }
-}
-
-pub(crate) fn fmt_app(
-    f: &mut impl Write,
-    func: impl Display,
-    args: &[impl Display],
-) -> std::fmt::Result {
-    write!(f, "({} ", func)?;
-    fmt_vec(f, args)?;
-    write!(f, ")")
 }
 
 /// This struct conveniently provides support for printing applications
@@ -1389,248 +1216,82 @@ impl<'a, 'b, A, B> AppFmt<'a, 'b, A, B> {
 
 impl<A, B> Display for AppFmt<'_, '_, A, B>
 where
-    A: Display,
-    B: Display,
+    A: StructuredPrint,
+    B: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        fmt_app(f, self.func, self.args)
+        self.print(f, &PrintConfig::BRIEF)
     }
-}
-
-pub(crate) fn fmt_binder(
-    f: &mut impl Write,
-    binder: &str,
-    vs: &[impl Display],
-    body: &impl Display,
-) -> std::fmt::Result {
-    write!(f, "({} ", binder)?;
-    fmt_vec_paren(f, vs)?;
-    write!(f, " {})", body)
 }
 
 impl<Str> Display for Pattern<Str>
 where
-    Str: Display + SymbolQuote<String>,
+    Str: SymbolQuote<String>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Pattern::Wildcard(None) => "_".fmt(f),
-            Pattern::Wildcard(Some((sym, _))) => sym.sym_quote().fmt(f),
-            Pattern::Ctor(s) => s.sym_quote().fmt(f),
-            Pattern::Applied { ctor, arguments } => {
-                "(".fmt(f)?;
-                ctor.sym_quote().fmt(f)?;
-                for n in arguments {
-                    match n {
-                        None => {
-                            " _".fmt(f)?;
-                        }
-                        Some((sym, _)) => {
-                            " ".fmt(f)?;
-                            sym.sym_quote().fmt(f)?;
-                        }
-                    }
-                }
-                ")".fmt(f)
-            }
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 impl<Str, T> Display for PatternArm<Str, T>
 where
-    Str: Display + SymbolQuote<String>,
-    T: Display,
+    Str: SymbolQuote<String>,
+    T: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(")?;
-        self.pattern.fmt(f)?;
-        write!(f, " {})", self.body)
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So, T> Display for Term<Str, So, T>
 where
-    Str: Display + StrQuote<String> + SymbolQuote<String>,
-    So: Display,
-    T: Display,
+    Str: StrQuote<String> + SymbolQuote<String>,
+    So: Contains<T: Repr<T = Sort<Str, So>>>,
+    T: Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Term::Constant(c, _) => c.fmt(f),
-            Term::Global(id, _) => id.fmt(f),
-            Term::Local(id) => write!(f, "{}", id.symbol.sym_quote()),
-            Term::App(id, args, _) => fmt_app(f, id, args),
-            Term::Let(vs, body) => fmt_binder(f, "let", vs, body),
-            Term::Annotated(t, at) => {
-                write!(f, "(! {} ", t)?;
-                fmt_vec(f, at)?;
-                write!(f, ")")
-            }
-            Term::Eq(a, b) => fmt_app(f, EQ, &[a, b]),
-            Term::Distinct(ts) => fmt_app(f, DISTINCT, ts),
-            Term::Exists(vs, t) => fmt_binder(f, "exists", vs, t),
-            Term::Forall(vs, t) => fmt_binder(f, "forall", vs, t),
-            Term::And(ts) => fmt_app(f, AND, ts),
-            Term::Or(ts) => fmt_app(f, OR, ts),
-            Term::Xor(ts) => fmt_app(f, XOR, ts),
-            Term::Not(t) => fmt_app(f, NOT, &[t]),
-            Term::Implies(ts, r) => {
-                write!(f, "({} ", IMPLIES)?;
-                fmt_vec(f, ts)?;
-                write!(f, " {})", r)
-            }
-            Term::Ite(b, t, e) => fmt_app(f, ITE, &[b, t, e]),
-            Term::Matching(t, cs) => {
-                write!(f, "(match {} ", t)?;
-                fmt_vec_paren(f, cs)?;
-                write!(f, ")")
-            }
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So, T> Display for FunctionDef<Str, So, T>
 where
     Str: SymbolQuote<String>,
-    So: Display,
-    T: Display,
+    So: StructuredPrint,
+    T: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ", self.name.sym_quote())?;
-        fmt_vec_paren(f, &self.vars)?;
-        write!(f, " {} {}", self.out_sort, self.body)
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So> Display for ConstructorDec<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Display,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.args.is_empty() {
-            write!(f, "({})", self.ctor.sym_quote())
-        } else {
-            fmt_app(f, self.ctor.sym_quote(), &self.args)
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So> Display for DatatypeDec<Str, So>
 where
     Str: SymbolQuote<String>,
-    So: Display,
+    So: StructuredPrint,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if !self.params.is_empty() {
-            write!(f, "(par ")?;
-            fmt_vec_paren(
-                f,
-                &self
-                    .params
-                    .iter()
-                    .map(|s| s.sym_quote())
-                    .collect::<Vec<_>>(),
-            )?;
-            write!(f, " ")?;
-        }
-        fmt_vec_paren(f, &self.constructors)?;
-        if !self.params.is_empty() {
-            write!(f, ")")
-        } else {
-            Ok(())
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 
 impl<Str, So, T> Display for Command<Str, So, T>
 where
-    Str: Display + Clone + StrQuote<String> + SymbolQuote<String>,
-    So: Display,
-    T: Display,
+    Str: Clone + StrQuote<String> + SymbolQuote<String>,
+    So: StructuredPrint + Contains<T: Repr<T = Sort<Str, So>>>,
+    T: StructuredPrint + Contains<T: Repr<T = Term<Str, So, T>>>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Command::Assert(t) => write!(f, "(assert {})", t),
-            Command::CheckSat => write!(f, "(check-sat)"),
-            Command::DeclareFun(id, ss, s) => {
-                write!(f, "(declare-fun {} ", id.sym_quote())?;
-                fmt_vec_paren(f, ss)?;
-                write!(f, " {})", s)
-            }
-            Command::DefineFun(fd) => write!(f, "(define-fun {})", fd),
-            Command::Exit => write!(f, "(exit)"),
-            Command::GetAssertions => write!(f, "(get-assertions)"),
-            Command::GetAssignment => write!(f, "(get-assignment)"),
-            Command::GetModel => write!(f, "(get-model)"),
-            Command::GetProof => write!(f, "(get-proof)"),
-            Command::GetUnsatAssumptions => write!(f, "(get-unsat-assumptions)"),
-            Command::GetUnsatCore => write!(f, "(get-unsat-core)"),
-            Command::Pop(i) => write!(f, "(pop {})", i),
-            Command::Push(i) => write!(f, "(push {})", i),
-            Command::Reset => write!(f, "(reset)"),
-            Command::ResetAssertions => write!(f, "(reset-assertions)"),
-            Command::SetInfo(at) => write!(f, "(set-info {})", at),
-            Command::SetLogic(l) => write!(f, "(set-logic {})", l),
-            Command::SetOption(op) => write!(f, "(set-option {})", op),
-            Command::DeclareConst(id, s) => write!(f, "(declare-const {} {})", id, s),
-            Command::Echo(s) => write!(f, "(echo {})", s.quote()),
-            Command::DeclareSort(id, arity) => write!(f, "(declare-sort {} {})", id, arity),
-            Command::CheckSatAssuming(vs) => {
-                write!(f, "(check-sat-assuming ")?;
-                fmt_vec_paren(f, vs)?;
-                write!(f, ")")
-            }
-            Command::DeclareDatatype(id, dec) => {
-                write!(f, "(declare-datatype {} {})", id.sym_quote(), dec)
-            }
-            Command::DeclareDatatypes(defs) => {
-                write!(f, "(declare-datatypes ")?;
-                fmt_vec_paren(
-                    f,
-                    &defs
-                        .iter()
-                        .map(|d| VarBinding(d.name.clone(), 0, d.dec.params.len()))
-                        .collect::<Vec<_>>(),
-                )?;
-                write!(f, " ")?;
-                fmt_vec_paren(f, &defs.iter().map(|d| &d.dec).collect::<Vec<_>>())?;
-                write!(f, ")")
-            }
-            Command::DefineConst(sym, sort, term) => {
-                write!(f, "(define-const {} {} {})", sym.sym_quote(), sort, term)
-            }
-            Command::DefineFunRec(fd) => write!(f, "(define-fun-rec {})", fd),
-            Command::DefineFunsRec(fds) => {
-                write!(f, "(define-funs-rec (")?;
-                for (i, fd) in fds.iter().enumerate() {
-                    write!(f, "({} ", fd.name.sym_quote())?;
-                    fmt_vec_paren(f, &fd.vars)?;
-                    write!(f, " {})", fd.out_sort)?;
-                    if i != fds.len() - 1 {
-                        write!(f, " ")?;
-                    }
-                }
-                fmt_vec_paren(f, &fds.iter().map(|d| &d.body).collect::<Vec<_>>())?;
-                write!(f, ")")
-            }
-            Command::DefineSort(name, params, sort) => {
-                write!(f, "(define-sort {} ", name.sym_quote())?;
-                fmt_vec_paren(f, &params.iter().map(|s| s.sym_quote()).collect::<Vec<_>>())?;
-                write!(f, " {})", sort)
-            }
-            Command::GetValue(ts) => {
-                write!(f, "(get-value ")?;
-                fmt_vec_paren(f, ts)?;
-                write!(f, ")")
-            }
-            Command::GetInfo(kw) => {
-                write!(f, "(get-info {})", kw)
-            }
-            Command::GetOption(kw) => {
-                write!(f, "(get-option {})", kw)
-            }
-        }
+        self.print(f, &PrintConfig::UNLIMITED)
     }
 }
 

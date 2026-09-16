@@ -57,6 +57,7 @@ pub use crate::ast::implicant::ImplicantIterator;
 pub use crate::ast::implicant::{FindImplicant, Model};
 pub use crate::raw::alg;
 pub use crate::raw::alg::LocalId;
+pub use crate::raw::alg::display::{PrintConfig, StructuredPrint};
 pub use crate::raw::alg::rec::{Bottom, IsBottom, TermRecursor};
 pub use crate::raw::alg::rec_memo::Memoize;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck, unif::SortSubst};
