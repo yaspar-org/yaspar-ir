@@ -440,70 +440,108 @@ impl<'tm, Ctx> ConvertToCvc5<Cvc5Env<'tm, Ctx>> for Sort {
     type Output = CSort<'tm>;
 
     fn to_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<CSort<'tm>> {
-        if let Some(cs) = env.sort_cache.get_by_left(self) {
-            return Ok(cs.clone());
-        }
-        let cs = translate_sort_inner(self, env)?;
-        env.sort_cache.insert(self.clone(), cs.clone());
-        Ok(cs)
+        sort_to_cvc5(self, env)
     }
 }
 
-fn translate_sort_inner<'tm, Ctx>(sort: &Sort, env: &mut Cvc5Env<'tm, Ctx>) -> Res<CSort<'tm>> {
-    let s = sort.repr();
-    let name = s.sort_name();
-    if let Some(n) = s.is_bv() {
-        let w: u32 = n
-            .clone()
-            .try_into()
-            .map_err(|_| format!("bv width too large: {n}"))?;
-        return Ok(env.tm.mk_bv_sort(w));
-    }
-    if !s.0.indices.is_empty() {
-        return Err(format!("unknown sort with indices: {s}"));
-    }
-    if let Some(cs) = env.dt_sorts.get(name).cloned() {
-        if s.1.is_empty() {
-            return Ok(cs);
+/// A sort nests in its arguments — an array's index and element, a parametric sort's parameters —
+/// so the two functions that walk it are one `#[stack_safe]` group, as the backward direction is.
+///
+/// A sub-sort is reached through the node it sits in, i.e. through `repr()`, so what travels in a
+/// frame is a reference into the arena rather than anything the driver owns.
+#[stack_safe]
+mod csort_forward {
+    use super::*;
+
+    /// Translate `sort`, answering from the cache when it has been translated before.
+    pub(super) fn sort_to_cvc5<'tm, Ctx>(
+        sort: &Sort,
+        env: &mut Cvc5Env<'tm, Ctx>,
+    ) -> Res<CSort<'tm>> {
+        if let Some(cs) = env.sort_cache.get_by_left(sort) {
+            return Ok(cs.clone());
         }
-        let params: Vec<CSort> = s.1.to_cvc5(env)?;
-        return Ok(cs.instantiate(&params));
-    }
-    if let Some(cs) = env.sort.get(name).cloned() {
-        if s.1.is_empty() {
-            return Ok(cs);
-        }
-        // Parametric sort: instantiate with translated parameters
-        let params: Vec<CSort> = s.1.to_cvc5(env)?;
-        return Ok(cs.instantiate(&params));
-    }
-    if sort.is_bool() {
-        return Ok(env.tm.boolean_sort());
-    }
-    if sort.is_int() {
-        return Ok(env.tm.integer_sort());
-    }
-    if sort.is_real() {
-        return Ok(env.tm.real_sort());
-    }
-    if sort.is_string() {
-        return Ok(env.tm.string_sort());
-    }
-    if sort.is_reglan() {
-        return Ok(env.tm.regexp_sort());
-    }
-    if let Some((idx, elem)) = sort.is_array() {
-        let ci = idx.to_cvc5(env)?;
-        let ce = elem.to_cvc5(env)?;
-        return Ok(env.tm.mk_array_sort(ci, ce));
-    }
-    #[cfg(feature = "finite-set")]
-    if let Some(elem) = sort.is_fset() {
-        let ce = elem.to_cvc5(env)?;
-        return Ok(env.tm.mk_set_sort(ce));
+        let cs = translate_sort_inner(sort, env)?;
+        env.sort_cache.insert(sort.clone(), cs.clone());
+        Ok(cs)
     }
 
-    Err(format!("unsupported sort: {sort}"))
+    pub(super) fn translate_sort_inner<'tm, Ctx>(
+        sort: &Sort,
+        env: &mut Cvc5Env<'tm, Ctx>,
+    ) -> Res<CSort<'tm>> {
+        let s = sort.repr();
+        let name = s.sort_name();
+        if let Some(n) = s.is_bv() {
+            let w: u32 = n
+                .clone()
+                .try_into()
+                .map_err(|_| format!("bv width too large: {n}"))?;
+            return Ok(env.tm.mk_bv_sort(w));
+        }
+        if !s.0.indices.is_empty() {
+            return Err(format!("unknown sort with indices: {s}"));
+        }
+        if let Some(cs) = env.dt_sorts.get(name).cloned() {
+            if s.1.is_empty() {
+                return Ok(cs);
+            }
+            let params: Vec<CSort> = params_to_cvc5(sort, env)?;
+            return Ok(cs.instantiate(&params));
+        }
+        if let Some(cs) = env.sort.get(name).cloned() {
+            if s.1.is_empty() {
+                return Ok(cs);
+            }
+            // Parametric sort: instantiate with translated parameters
+            let params: Vec<CSort> = params_to_cvc5(sort, env)?;
+            return Ok(cs.instantiate(&params));
+        }
+        if sort.is_bool() {
+            return Ok(env.tm.boolean_sort());
+        }
+        if sort.is_int() {
+            return Ok(env.tm.integer_sort());
+        }
+        if sort.is_real() {
+            return Ok(env.tm.real_sort());
+        }
+        if sort.is_string() {
+            return Ok(env.tm.string_sort());
+        }
+        if sort.is_reglan() {
+            return Ok(env.tm.regexp_sort());
+        }
+        if sort.is_array().is_some() {
+            // Through `repr()` rather than the `(Sort, Sort)` `is_array` clones, so that each
+            // argument is a place in the arena and travels as a plain borrow.
+            let ci = sort_to_cvc5(&sort.repr().1[0], env)?;
+            let ce = sort_to_cvc5(&sort.repr().1[1], env)?;
+            return Ok(env.tm.mk_array_sort(ci, ce));
+        }
+        #[cfg(feature = "finite-set")]
+        if sort.is_fset().is_some() {
+            let ce = sort_to_cvc5(&sort.repr().1[0], env)?;
+            return Ok(env.tm.mk_set_sort(ce));
+        }
+
+        Err(format!("unsupported sort: {sort}"))
+    }
+
+    /// Translate every argument of `sort`, in order.
+    pub(super) fn params_to_cvc5<'tm, Ctx>(
+        sort: &Sort,
+        env: &mut Cvc5Env<'tm, Ctx>,
+    ) -> Res<Vec<CSort<'tm>>> {
+        let count: usize = sort.repr().1.len();
+        let mut out: Vec<CSort<'tm>> = Vec::with_capacity(count);
+        let mut i = 0usize;
+        while i < count {
+            out.push(sort_to_cvc5(&sort.repr().1[i], env)?);
+            i += 1;
+        }
+        Ok(out)
+    }
 }
 
 // ── Reverse sort translation (CSort → Sort) ─────────────────

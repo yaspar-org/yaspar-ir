@@ -30,6 +30,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, Mul, Sub};
 pub use yaspar::ast::Keyword;
 use yaspar::tokens::SPECIAL_SYMBOLS;
+use yaspar_macros::stack_safe;
 
 pub mod display;
 mod kind;
@@ -498,23 +499,33 @@ impl BvLenExpr {
 
     /// Given an evaluation environment, we evaluate the expression
     pub fn eval(&self, lengths: &[UBig]) -> Result<UBig, String> {
-        match self {
-            BvLenExpr::Fixed(sz) => Ok(sz.clone()),
-            BvLenExpr::Var(n) => lengths
-                .get(*n)
-                .cloned()
-                .ok_or_else(|| format!("index {n} out of bounds! env: {lengths:?}")),
-            BvLenExpr::Add { left, right } => Ok(left.eval(lengths)? + right.eval(lengths)?),
-            BvLenExpr::Sub { left, right } => {
-                let l = left.eval(lengths)?;
-                let r = right.eval(lengths)?;
-                if l < r {
-                    Err(format!("cannot subtract {r} from {l}!"))
-                } else {
-                    Ok(l - r)
-                }
+        eval_bv_len(self, lengths)
+    }
+}
+
+/// An expression nests in its operands, so the walk carries `#[stack_safe]`.
+#[stack_safe]
+fn eval_bv_len(e: &BvLenExpr, lengths: &[UBig]) -> Result<UBig, String> {
+    match e {
+        BvLenExpr::Fixed(sz) => Ok(sz.clone()),
+        BvLenExpr::Var(n) => lengths
+            .get(*n)
+            .cloned()
+            .ok_or_else(|| format!("index {n} out of bounds! env: {lengths:?}")),
+        BvLenExpr::Add { left, right } => {
+            Ok(eval_bv_len(left, lengths)? + eval_bv_len(right, lengths)?)
+        }
+        BvLenExpr::Sub { left, right } => {
+            let l = eval_bv_len(left, lengths)?;
+            let r = eval_bv_len(right, lengths)?;
+            if l < r {
+                Err(format!("cannot subtract {r} from {l}!"))
+            } else {
+                Ok(l - r)
             }
-            BvLenExpr::Mul { left, right } => Ok(left.eval(lengths)? * right.eval(lengths)?),
+        }
+        BvLenExpr::Mul { left, right } => {
+            Ok(eval_bv_len(left, lengths)? * eval_bv_len(right, lengths)?)
         }
     }
 }
@@ -1292,6 +1303,37 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.print(f, &PrintConfig::UNLIMITED)
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+
+    /// A bit-vector length expression nests through `Box`, so evaluating one must not cost a native
+    /// frame per operand.
+    ///
+    /// The expression is leaked rather than dropped: dropping a `Box` chain recurses too, which is
+    /// not what this test is about.
+    #[test]
+    fn a_deep_bv_length_is_flat() {
+        const DEEP: usize = 100_000;
+
+        let evaluated = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut e = BvLenExpr::fixed(1);
+                for _ in 0..DEEP {
+                    e = e + BvLenExpr::fixed(1);
+                }
+                let out = e.eval(&[]);
+                std::mem::forget(e);
+                out
+            })
+            .expect("spawn")
+            .join()
+            .expect("evaluating a deep length overflowed the stack");
+        assert_eq!(evaluated, Ok(UBig::from(DEEP + 1)));
     }
 }
 

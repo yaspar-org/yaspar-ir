@@ -4,7 +4,7 @@
 #![cfg(feature = "cvc5-dep")]
 
 use cvc5::{Kind, Solver, TermManager};
-use yaspar_ir::ast::{Context, ObjectAllocatorExt, Typecheck};
+use yaspar_ir::ast::{Context, ObjectAllocatorExt, SortAllocator, StrAllocator, Typecheck};
 use yaspar_ir::cvc5::{CTerm, ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 use yaspar_ir::untyped::UntypedAst;
 
@@ -2908,6 +2908,67 @@ fn deep_nested_quantifiers_are_flat() {
         std::mem::forget(body);
         std::mem::forget(bool_sort);
         std::mem::forget(ctx);
+        std::mem::forget(tm);
+        ok
+    }));
+}
+
+// ── Stack safety of the forward translation ──────────────────
+
+/// The forward direction nests the same way the reverse one does: an array's element sort is a sort,
+/// and a parametric sort's arguments are sorts.
+#[test]
+fn deep_forward_sort_translation_is_flat() {
+    assert!(on_small_stack(|| {
+        let mut ctx = Context::new();
+        ctx.ensure_logic();
+        let mut s = ctx.int_sort();
+        for _ in 0..DEEP {
+            let int = ctx.int_sort();
+            s = ctx.array_sort(int, s);
+        }
+        let tm = TermManager::new();
+        let mut env = Cvc5Env::new(&tm, &mut ctx);
+        let ok = s.to_cvc5(&mut env).is_ok();
+        std::mem::forget(env);
+        std::mem::forget(s);
+        std::mem::forget(ctx);
+        std::mem::forget(tm);
+        ok
+    }));
+}
+
+/// A parametric sort's arguments are reached through the same descent, one level per link, and they
+/// go through the loop that translates an argument list rather than through the array branch.
+#[test]
+fn deep_forward_parametric_sort_translation_is_flat() {
+    assert!(on_small_stack(|| {
+        let mut ctx = Context::new();
+        let cmds = UntypedAst
+            .parse_script_str("(set-logic ALL) (declare-sort Box 1)")
+            .expect("parse")
+            .type_check(&mut ctx)
+            .expect("type check");
+        let mut s = ctx.int_sort();
+        for _ in 0..DEEP {
+            let name = ctx.allocate_symbol("Box");
+            s = ctx.sort_n(name, vec![s]);
+        }
+        let tm = TermManager::new();
+        let solver = Solver::new(&tm);
+        let mut env = Cvc5Env::new(&tm, &mut ctx);
+        // `Box` has to reach the solver, or the sort is unknown and the error path prints it —
+        // which is a native recursion of its own, on this branch.
+        let mut es = Cvc5EnvSolver::new(&mut env, &solver);
+        for cmd in &cmds {
+            cmd.to_cvc5(&mut es).expect("declare-sort");
+        }
+        let ok = s.to_cvc5(es.env).is_ok();
+        std::mem::forget(env);
+        std::mem::forget(s);
+        std::mem::forget(cmds);
+        std::mem::forget(ctx);
+        std::mem::forget(solver);
         std::mem::forget(tm);
         ok
     }));
