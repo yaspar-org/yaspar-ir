@@ -139,10 +139,18 @@ where
     type Key = C::Key;
     type Value = C::Value;
 
+    /// Walked with a loop rather than by recursing on `cdr`: the list is as long as the binders
+    /// nest, which machine-generated input does not bound.
     fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
-        match self {
-            MemLinkedList::Nil => None,
-            MemLinkedList::Cons { car, cdr: next } => car.lookup(key).or_else(|| next.lookup(key)),
+        let mut here = self;
+        loop {
+            match here {
+                MemLinkedList::Nil => return None,
+                MemLinkedList::Cons { car, cdr } => match car.lookup(key) {
+                    Some(v) => return Some(v),
+                    None => here = cdr,
+                },
+            }
         }
     }
 }
