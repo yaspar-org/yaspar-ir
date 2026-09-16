@@ -44,8 +44,8 @@ num-traits = "0.2.19"
 num-order = "1.2.0"
 delegate = "0.13"
 bimap = "0.6"
-yaspar-macros = "0.1.1"
-yaspar-macros-defs = "0.1.1"
+yaspar-macros = "0.1.3"
+yaspar-macros-defs = "0.1.3"
 
 [lib]
 name = "yaspar_ir"

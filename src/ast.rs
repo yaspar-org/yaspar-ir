@@ -63,7 +63,9 @@ pub use crate::raw::alg::rec_memo::Memoize;
 pub use crate::raw::tc::{TC, TCEnv, Typecheck, unif::SortSubst};
 pub use crate::untyped as u;
 pub use boilerplates::TypedBuilder;
-pub use gsubst::{GlobalSubst, GlobalSubstituter, GlobalSubstituterInner};
+#[allow(deprecated)]
+pub use gsubst::GlobalSubstituterInner;
+pub use gsubst::{GlobalSubst, GlobalSubstituter};
 pub use mono::{Monomorphization, find_sort_subst_from_datatype_dec};
 pub use rename::AlphaRename;
 pub use subst::{Substitute, Substitution};
