@@ -67,9 +67,12 @@ fn at_least(n: usize) -> String {
 /// How much of a term to print.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrintConfig {
-    /// Stop once the document has reached this many bytes, or print all of it when [`None`].
+    /// Stop once the document would pass this many bytes, or print all of it when [`None`].
     ///
-    /// The cap holds to within one token, since it is checked between tokens.
+    /// A token is charged before it is added, so the cap holds for everything the term itself
+    /// contributes. Two things may still take the output past it: the parentheses of the group the
+    /// descent stopped inside, which are charged but never refused, and the marker that says the rest
+    /// was left out.
     max_length: Option<usize>,
 }
 
@@ -266,20 +269,23 @@ impl PrintSpace {
         self.forests.len()
     }
 
-    /// Push a tree onto the innermost forest, charging for the separator in front of it.
-    fn push(&mut self, t: Tree, len: usize) {
-        let separator = usize::from(!self.last.is_empty());
-        self.last.push(t);
-        self.sz += len + separator;
+    /// What separating the next tree from its predecessor costs: nothing when it starts the group.
+    fn separator(&self) -> usize {
+        usize::from(!self.last.is_empty())
     }
 
-    /// Fail once the budget is spent, which unwinds the descent.
-    fn check(&mut self) -> Res {
-        if self.sz >= self.limit {
-            None
-        } else {
-            Some(())
+    /// Charge `cost` bytes if the budget can take them, and fail otherwise, which unwinds the
+    /// descent.
+    ///
+    /// Asked *before* the token is pushed, so that a document which fits exactly is printed whole
+    /// rather than printed and then marked as cut, and a token that would not fit is left out rather
+    /// than taking the document over the cap.
+    fn take(&mut self, cost: usize) -> Res {
+        if self.sz.saturating_add(cost) > self.limit {
+            return None;
         }
+        self.sz += cost;
+        Some(())
     }
 
     /// Push a leaf, i.e. one token of output.
@@ -288,9 +294,9 @@ impl PrintSpace {
     /// that had to be built, e.g. a quoted symbol.
     pub fn leaf(&mut self, s: impl Into<String>) -> Res {
         let s = s.into();
-        let len = s.len();
-        self.push(Tree::Leaf(s), len);
-        self.check()
+        self.take(s.len() + self.separator())?;
+        self.last.push(Tree::Leaf(s));
+        Some(())
     }
 
     /// print a parenthesised group: open it, let `f` fill it, then close it.
@@ -298,18 +304,22 @@ impl PrintSpace {
     /// A spent budget leaves the group open, which is what `PrintSpace::finish` expects.
     #[inline]
     pub fn group(&mut self, f: impl FnOnce(&mut Self) -> Res) -> Res {
-        self.open()?;
+        self.open();
         f(self)?;
         self.close();
         Some(())
     }
 
     /// Open a group: put the forest in progress aside and start one for the group.
-    pub fn open(&mut self) -> Res {
+    ///
+    /// The parentheses are charged for but the open never fails, so that a group whose budget is
+    /// spent still reads as one — `(...)` rather than a bare marker — and the first token inside it is
+    /// where the descent stops. A group is always followed by a token, so this can take the document
+    /// past the cap by a pair of parentheses and no further.
+    pub fn open(&mut self) {
         // its parentheses, and the separator in front of it if it has a predecessor
-        self.sz += 2 + usize::from(!self.last.is_empty());
+        self.sz += 2 + self.separator();
         self.forests.push(std::mem::take(&mut self.last));
-        self.check()
     }
 
     /// Close the innermost group: wrap its forest and push it onto the one it was opened in.
@@ -330,8 +340,9 @@ impl PrintSpace {
     /// group before the rest are closed, so that the document reads as a prefix of the whole.
     fn finish(mut self, cut: bool) -> Vec<Tree> {
         if cut {
-            // already over budget, so there is nothing left to check
-            let _ = self.leaf(ELLIPSIS);
+            // the one token that may take the document over the cap: it says what the cap cost.
+            self.sz += ELLIPSIS.len() + self.separator();
+            self.last.push(Tree::Leaf(ELLIPSIS.to_string()));
         }
         while !self.forests.is_empty() {
             self.close();
@@ -529,7 +540,7 @@ fn write_bv_len(e: &alg::BvLenExpr, w: &mut PrintSpace) -> Res {
         alg::BvLenExpr::Fixed(n) => w.leaf(n.to_string()),
         alg::BvLenExpr::Var(n) => w.leaf(format!("x{n}")),
         alg::BvLenExpr::Add { left, right } => {
-            w.open()?;
+            w.open();
             w.leaf(ADD)?;
             write_bv_len(left.as_ref(), w)?;
             write_bv_len(right.as_ref(), w)?;
@@ -537,7 +548,7 @@ fn write_bv_len(e: &alg::BvLenExpr, w: &mut PrintSpace) -> Res {
             Some(())
         }
         alg::BvLenExpr::Sub { left, right } => {
-            w.open()?;
+            w.open();
             w.leaf(SUB)?;
             write_bv_len(left.as_ref(), w)?;
             write_bv_len(right.as_ref(), w)?;
@@ -545,7 +556,7 @@ fn write_bv_len(e: &alg::BvLenExpr, w: &mut PrintSpace) -> Res {
             Some(())
         }
         alg::BvLenExpr::Mul { left, right } => {
-            w.open()?;
+            w.open();
             w.leaf(MUL)?;
             write_bv_len(left.as_ref(), w)?;
             write_bv_len(right.as_ref(), w)?;
@@ -707,7 +718,7 @@ where
     if node.1.is_empty() {
         write_identifier(&node.0, w)
     } else {
-        w.open()?;
+        w.open();
         write_identifier(&node.0, w)?;
         let mut i = 0usize;
         while i < node.1.len() {
@@ -740,7 +751,7 @@ mod term {
             alg::Term::Global(id, _) => id.write_doc(w),
             // `(f a1 … an)`
             alg::Term::App(id, args, _) => {
-                w.open()?;
+                w.open();
                 id.write_doc(w)?;
                 let mut i = 0usize;
                 while i < args.len() {
@@ -751,7 +762,7 @@ mod term {
                 Some(())
             }
             alg::Term::Eq(a, b) => {
-                w.open()?;
+                w.open();
                 w.leaf(EQ)?;
                 write_term(a.inner().repr(), w)?;
                 write_term(b.inner().repr(), w)?;
@@ -759,14 +770,14 @@ mod term {
                 Some(())
             }
             alg::Term::Not(t) => {
-                w.open()?;
+                w.open();
                 w.leaf(NOT)?;
                 write_term(t.inner().repr(), w)?;
                 w.close();
                 Some(())
             }
             alg::Term::Ite(b, t, e) => {
-                w.open()?;
+                w.open();
                 w.leaf(ITE)?;
                 write_term(b.inner().repr(), w)?;
                 write_term(t.inner().repr(), w)?;
@@ -775,7 +786,7 @@ mod term {
                 Some(())
             }
             alg::Term::Distinct(ts) => {
-                w.open()?;
+                w.open();
                 w.leaf(DISTINCT)?;
                 let mut i = 0usize;
                 while i < ts.len() {
@@ -786,7 +797,7 @@ mod term {
                 Some(())
             }
             alg::Term::And(ts) => {
-                w.open()?;
+                w.open();
                 w.leaf(AND)?;
                 let mut i = 0usize;
                 while i < ts.len() {
@@ -797,7 +808,7 @@ mod term {
                 Some(())
             }
             alg::Term::Or(ts) => {
-                w.open()?;
+                w.open();
                 w.leaf(OR)?;
                 let mut i = 0usize;
                 while i < ts.len() {
@@ -808,7 +819,7 @@ mod term {
                 Some(())
             }
             alg::Term::Xor(ts) => {
-                w.open()?;
+                w.open();
                 w.leaf(XOR)?;
                 let mut i = 0usize;
                 while i < ts.len() {
@@ -820,7 +831,7 @@ mod term {
             }
             // `(=> p1 … pn q)`, i.e. the premises then the conclusion
             alg::Term::Implies(ts, r) => {
-                w.open()?;
+                w.open();
                 w.leaf(IMPLIES)?;
                 let mut i = 0usize;
                 while i < ts.len() {
@@ -833,12 +844,12 @@ mod term {
             }
             // `(let ((x e) …) body)`
             alg::Term::Let(vs, body) => {
-                w.open()?;
+                w.open();
                 w.leaf(Token::Let.to_string())?;
-                w.open()?;
+                w.open();
                 let mut i = 0usize;
                 while i < vs.len() {
-                    w.open()?;
+                    w.open();
                     w.leaf(vs[i].0.sym_quote())?;
                     write_term(vs[i].2.inner().repr(), w)?;
                     w.close();
@@ -851,12 +862,12 @@ mod term {
             }
             // `(exists ((x S) …) body)`
             alg::Term::Exists(vs, body) => {
-                w.open()?;
+                w.open();
                 w.leaf(Token::Exists.to_string())?;
-                w.open()?;
+                w.open();
                 let mut i = 0usize;
                 while i < vs.len() {
-                    w.open()?;
+                    w.open();
                     w.leaf(vs[i].0.sym_quote())?;
                     write_sort(vs[i].2.inner().repr(), w)?;
                     w.close();
@@ -869,12 +880,12 @@ mod term {
             }
             // `(forall ((x S) …) body)`
             alg::Term::Forall(vs, body) => {
-                w.open()?;
+                w.open();
                 w.leaf(Token::Forall.to_string())?;
-                w.open()?;
+                w.open();
                 let mut i = 0usize;
                 while i < vs.len() {
-                    w.open()?;
+                    w.open();
                     w.leaf(vs[i].0.sym_quote())?;
                     write_sort(vs[i].2.inner().repr(), w)?;
                     w.close();
@@ -887,7 +898,7 @@ mod term {
             }
             // `(! t :key val …)`
             alg::Term::Annotated(t, anns) => {
-                w.open()?;
+                w.open();
                 w.leaf(Token::Exclamation.to_string())?;
                 let count: usize = anns.len();
                 write_term(t.inner().repr(), w)?;
@@ -905,17 +916,17 @@ mod term {
             }
             // `(match t ((p body) …))`
             alg::Term::Matching(scrutinee, arms) => {
-                w.open()?;
+                w.open();
                 w.leaf(Token::Match.to_string())?;
                 let count: usize = arms.len();
                 write_term(scrutinee.inner().repr(), w)?;
-                w.open()?;
+                w.open();
                 let mut i = 0usize;
                 // spelled out for the same reason as the annotations above
                 while i < count {
                     let arms: &[alg::PatternArm<St, T>] = arms;
                     let arm: &alg::PatternArm<St, T> = &arms[i];
-                    w.open()?;
+                    w.open();
                     write_pattern(&arm.pattern, w)?;
                     write_term(arm.body.inner().repr(), w)?;
                     w.close();
@@ -955,7 +966,7 @@ mod term {
             }
             alg::Attribute::Pattern(ts) => {
                 w.leaf(Keyword::Pattern.to_string())?;
-                w.open()?;
+                w.open();
                 let mut i = 0usize;
                 while i < ts.len() {
                     write_term(ts[i].inner().repr(), w)?;
@@ -1281,6 +1292,63 @@ mod tests {
         }
     }
 
+    /// Parse a command, i.e. one script entry of the untyped instantiation.
+    fn parse_command(s: &str) -> crate::untyped::Command {
+        UntypedAst.parse_command_str(s).expect("parse")
+    }
+
+    /// Every command form, printed back as it came in.
+    ///
+    /// One case per variant `write_command` matches on, so a form printed with the wrong keyword or
+    /// the wrong shape fails here rather than in whatever tool reads the script.
+    #[test]
+    fn round_trips_every_command() {
+        for s in [
+            "(assert (> x 0))",
+            "(check-sat)",
+            "(check-sat-assuming (p (not q)))",
+            "(declare-const x Int)",
+            "(declare-datatype Colour ((red) (green)))",
+            "(declare-datatypes ((Lst 1)) ((par (T) ((nil) (cons (hd T) (tl (Lst T)))))))",
+            "(declare-fun f (Int Bool) Int)",
+            "(declare-sort S 2)",
+            "(define-const c Int 3)",
+            "(define-fun g ((x Int)) Int (+ x 1))",
+            "(define-fun-rec h ((x Int)) Int (h x))",
+            "(define-funs-rec ((p ((x Int)) Bool) (q ((x Int)) Bool)) ((q x) (p x)))",
+            "(define-sort Pair (T) (Array T T))",
+            "(echo \"hello\")",
+            "(exit)",
+            "(get-assertions)",
+            "(get-assignment)",
+            "(get-info :name)",
+            "(get-model)",
+            "(get-option :produce-models)",
+            "(get-proof)",
+            "(get-unsat-assumptions)",
+            "(get-unsat-core)",
+            "(get-value (x (+ x 1)))",
+            "(pop 1)",
+            "(push 2)",
+            "(reset)",
+            "(reset-assertions)",
+            "(set-info :status unsat)",
+            "(set-logic QF_UF)",
+            "(set-option :produce-models true)",
+        ] {
+            assert_eq!(parse_command(s).to_string(), s, "printing {s}");
+        }
+    }
+
+    /// A command is cut like a term is: the budget stops it wherever it runs out.
+    #[test]
+    fn a_command_is_cut_short_too() {
+        let c = parse_command("(assert (> x 0))");
+        assert_eq!(c.print_str(&PrintConfig::UNLIMITED), "(assert (> x 0))");
+        assert_eq!(c.print_str(&PrintConfig::limited(16)), "(assert (> x 0))");
+        assert_eq!(c.print_str(&PrintConfig::limited(15)), "(assert (> x ...))");
+    }
+
     /// The document is a tree whose shape is the term's, which the text alone would not show.
     #[test]
     fn document_is_a_tree() {
@@ -1323,6 +1391,18 @@ mod tests {
         );
     }
 
+    /// A document that fits exactly is printed whole, and one byte less is what cuts it.
+    ///
+    /// The check happens before a token is added, so the last byte of the budget is usable: a term
+    /// of exactly the budget's length is not printed and then marked as elided.
+    #[test]
+    fn a_budget_that_fits_exactly_prints_everything() {
+        let t = parse("(and x y)");
+        assert_eq!(t.to_string().len(), 9);
+        assert_eq!(t.repr().print_str(&PrintConfig::limited(9)), "(and x y)");
+        assert_eq!(t.repr().print_str(&PrintConfig::limited(8)), "(and x ...)");
+    }
+
     /// A budget of zero still yields a tree, and says that it is not the whole term.
     #[test]
     fn a_budget_of_zero_yields_a_marker() {
@@ -1341,8 +1421,11 @@ mod tests {
         let int = arena.int_sort();
         let arr = arena.array_sort(int.clone(), int);
         assert_eq!(arr.to_string(), "(Array Int Int)");
+        // four bytes buy the parentheses and nothing else: `Array` does not fit
+        assert_eq!(arr.repr().print_str(&PrintConfig::limited(4)), "(...)");
+        // enough for the head and its parentheses, not for the first argument
         assert_eq!(
-            arr.repr().print_str(&PrintConfig::limited(4)),
+            arr.repr().print_str(&PrintConfig::limited(7)),
             "(Array ...)"
         );
     }
@@ -1454,10 +1537,11 @@ mod stack_safety {
             std::mem::forget((t, arena));
             printed
         });
-        // seven levels fit in the budget; the other 99 993 are never visited
+        // six levels fit in the budget, and the seventh gets as far as its parentheses; the other
+        // 99 993 are never visited
         assert_eq!(
             printed,
-            format!("{}{ELLIPSIS}{}", "(not ".repeat(7), ")".repeat(7))
+            format!("{}({ELLIPSIS}{}", "(not ".repeat(6), ")".repeat(7))
         );
     }
 
