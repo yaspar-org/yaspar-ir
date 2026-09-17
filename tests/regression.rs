@@ -49,8 +49,8 @@ struct RootEntry {
 
 /// A single test case in a logic's `result.json`.
 ///
-/// Unknown fields are ignored, so a case may also carry a `"comment"` explaining why a step is
-/// disabled for it — see the two `gsubst` exclusions in `QF_UFLRA/result.json`.
+/// Unknown fields are ignored, so a case may also carry a `"comment"` saying what is worth knowing
+/// about it — why a step is disabled, or what makes the case interesting.
 #[derive(Deserialize, Clone)]
 struct TestCase {
     path: String,
@@ -145,14 +145,6 @@ fn run_test(path: &Path, steps: &[String]) -> Result<(), String> {
             // Enabled only for the cases that actually carry definitions, since on a file with
             // none this is a full traversal for no coverage. See the `steps` in each logic's
             // `result.json`.
-            //
-            // KNOWN GAP — `gsubst` overflows the stack on two QF_UFLRA cases, so they run
-            // `typecheck` + `letelim` only:
-            //
-            // * `cpachecker-induction-svcomp14/cpachecker-induction.cs_fib_true-unreach-call.i.smt2`
-            //   (1,805,110 definitions, 90 MB)
-            // * `cpachecker-induction-svcomp14/cpachecker-induction.Problem08_60_false-unreach-call.c.smt2`
-            //   (1,696,948 definitions, 82 MB)
             "gsubst" => {
                 let t = typed.ok_or("gsubst requires a preceding typecheck step")?;
                 // One call per assertion, which is the shape a caller would naturally write.
