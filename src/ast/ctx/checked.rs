@@ -65,10 +65,13 @@ use crate::ast::{
     IdentifierKind, Local, RecFunc, SymbolQuote, alg,
 };
 use crate::meta::WithMeta;
-use crate::raw::instance::{Command, Constant, Identifier, QualifiedIdentifier, Sort, Str, Term};
+use crate::raw::instance::{
+    Command, Constant, Identifier, QualifiedIdentifier, Sig, Sort, Str, Term,
+};
 use crate::raw::tc::{
-    TC, TCEnv, Typecheck, sort_mismatch, tc_sort, typed_app, typed_constant, typed_distinct,
-    typed_eq, typed_not, typed_qualified_identifier,
+    TC, TCEnv, Typecheck, sort_mismatch, tc_sort, typed_app, typed_app_sig, typed_constant,
+    typed_distinct, typed_eq, typed_not, typed_qualified_identifier,
+    typed_qualified_identifier_sig,
 };
 use crate::traits::{AllocatableString, Repr};
 use dashu::integer::{IBig, Sign, UBig};
@@ -96,6 +99,9 @@ use yaspar_macros::stack_safe;
 /// - **Function application** — [`typed_app`](Self::typed_app),
 ///   [`typed_simp_app`](Self::typed_simp_app),
 ///   [`typed_app_with_kind`](Self::typed_app_with_kind)
+/// - **Signatures** — [`typed_identifier_sig`](Self::typed_identifier_sig),
+///   [`typed_symbol_sig`](Self::typed_symbol_sig), [`typed_app_sig`](Self::typed_app_sig),
+///   [`typed_simp_app_sig`](Self::typed_simp_app_sig), returning the resolved [`Sig`] with the term
 /// - **Literals** — [`numeral`](Self::numeral), [`integer`](Self::integer),
 ///   [`typed_constant`](Self::typed_constant)
 /// - **Logical connectives** — [`typed_eq`](Self::typed_eq),
@@ -172,6 +178,17 @@ pub trait CheckedApi: HasArena {
         typed_qualified_identifier(&mut self.get_tcenv(), identifier, sort, "")
     }
 
+    /// Same as [`Self::typed_identifier`], but also return the *declared* [`Sig`] that
+    /// `identifier` resolved against.
+    ///
+    /// A local variable or a bit-vector literal has no symbol-table entry, so its signature is
+    /// synthesized as a nullary signature of its sort.
+    fn typed_identifier_sig(&mut self, identifier: QualifiedIdentifier) -> TC<(Term, Sig)> {
+        let sort = identifier.1.clone();
+        let mut env = self.get_tcenv();
+        typed_qualified_identifier_sig(&mut env, identifier, sort, "")
+    }
+
     /// Return a typed representation of the symbol `name`, if `name` is a valid symbol.
     fn typed_symbol<S>(&mut self, name: S) -> TC<Term>
     where
@@ -179,6 +196,15 @@ pub trait CheckedApi: HasArena {
     {
         let symb = name.allocate(self.arena());
         self.typed_identifier(QualifiedIdentifier::simple(symb))
+    }
+
+    /// Similar to [Self::typed_identifier_sig] but allow a string as the symbol
+    fn typed_symbol_sig<S>(&mut self, name: S) -> TC<(Term, Sig)>
+    where
+        S: AllocatableString<Arena>,
+    {
+        let symb = name.allocate(self.arena());
+        self.typed_identifier_sig(QualifiedIdentifier::simple(symb))
     }
 
     /// Look up a local variable by name and return its [`Local`] representation.
@@ -226,6 +252,17 @@ pub trait CheckedApi: HasArena {
         )
     }
 
+    /// Same as [`Self::typed_app`], but also return the *declared* [`Sig`] the application was
+    /// checked against, which for an overloaded symbol is the candidate that accepted `args`.
+    fn typed_app_sig<T>(&mut self, f: QualifiedIdentifier, args: T) -> TC<(Term, &Sig)>
+    where
+        T: IntoIterator<Item = Term>,
+    {
+        let args = args.into_iter().map(WithMeta::empty_meta).collect();
+        let mut env = self.get_tcenv();
+        typed_app_sig(&mut env, f, args, None, "", "")
+    }
+
     /// Similar to [Self::typed_app] but allow a string as the function name
     fn typed_simp_app<S, T>(&mut self, f: S, args: T) -> TC<Term>
     where
@@ -234,6 +271,16 @@ pub trait CheckedApi: HasArena {
     {
         let f_symbol = f.allocate(self.arena());
         self.typed_app(QualifiedIdentifier::simple(f_symbol), args)
+    }
+
+    /// Similar to [Self::typed_app_sig] but allow a string as the function name
+    fn typed_simp_app_sig<S, T>(&mut self, f: S, args: T) -> TC<(Term, &Sig)>
+    where
+        S: AllocatableString<Arena>,
+        T: IntoIterator<Item = Term>,
+    {
+        let f_symbol = f.allocate(self.arena());
+        self.typed_app_sig(QualifiedIdentifier::simple(f_symbol), args)
     }
 
     /// Convert an [IdentifierKind] to an [Identifier]

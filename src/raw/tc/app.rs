@@ -153,12 +153,31 @@ pub(crate) fn typed_qualified_identifier<L>(
 where
     L: Mapping<Key = Str, Value = (LocalId, Sort)>,
 {
+    typed_qualified_identifier_sig(env, qid, sort, meta_string).map(|(t, _)| t)
+}
+
+/// Same as [`typed_qualified_identifier`], but also return the declared signature the identifier
+/// resolved against.
+///
+/// A local variable or a bitvector literal has no symbol-table entry, so its signature is
+/// synthesized as a nullary signature of its sort.
+pub(crate) fn typed_qualified_identifier_sig<L>(
+    env: &mut TCEnvGen<L>,
+    qid: QualifiedIdentifier,
+    sort: Option<Sort>,
+    meta_string: &str,
+) -> TC<(Term, Sig)>
+where
+    L: Mapping<Key = Str, Value = (LocalId, Sort)>,
+{
     if env.meta.theories.contains(&Theory::Bitvectors) {
         // special handling for (_ bvX n)
         // c.f. https://smt-lib.org/logics-all.shtml#QF_BV
         let cap = BV_RE.captures(qid.id_str());
         if let Some(cap) = cap {
-            return handle_special_identifiers_of_bv(&qid, cap, env, sort, meta_string);
+            let t = handle_special_identifiers_of_bv(&qid, cap, env, sort, meta_string)?;
+            let s = t.get_sort(env);
+            return Ok((t, Sig::sort(s)));
         }
     }
     let symbol = qid.id_str();
@@ -208,7 +227,8 @@ where
                             // in this case, the variable does not have a known ground sort, so
                             // we ask this variable has a declared ground sort.
                             if pars.is_empty() {
-                                Ok(env.arena.global(qid, Some(out.clone())))
+                                let t = env.arena.global(qid, Some(out.clone()));
+                                Ok((t, sig.clone()))
                             } else {
                                 Err(format!(
                                     "TC: {qid}{meta_string} has a polymorphic signature {sig}, which requires an explicit sort ascription!"
@@ -227,13 +247,14 @@ where
                             super::check_subst_instantiation(&subst, &qid)?;
 
                             // now we have passed all tests
-                            if subst.is_empty() {
-                                Ok(env.arena.global(qid, Some(s)))
+                            let t = if subst.is_empty() {
+                                env.arena.global(qid, Some(s))
                             } else {
                                 // if this variable requires non-trivial sort unification, then
                                 // we should tag the ground sort.
-                                Ok(env.arena.global(qid.with_sort(s.clone()), Some(s)))
-                            }
+                                env.arena.global(qid.with_sort(s.clone()), Some(s))
+                            };
+                            Ok((t, sig.clone()))
                         }
                     }
                 }
@@ -260,11 +281,12 @@ where
                     "TC: {qid}{meta_string} is expected to have sort {s}!"
                 ))
             } else {
-                Ok(env.arena.local(alg::Local {
+                let t = env.arena.local(alg::Local {
                     id: l,
                     symbol: symbol.clone(),
                     sort: s.clone(),
-                }))
+                });
+                Ok((t, Sig::sort(s)))
             }
         }
     }
@@ -776,6 +798,22 @@ pub(crate) fn typed_app<L>(
 where
     L: Mapping<Key = Str>,
 {
+    typed_app_sig(env, f, args, outs, id_meta, app_meta).map(|(t, _)| t)
+}
+
+/// Same as [`typed_app`], but also return the declared signature the application was checked
+/// against, which for an overloaded symbol is the candidate that accepted the arguments.
+pub(crate) fn typed_app_sig<'a, L>(
+    env: &mut TCEnvGen<'a, L>,
+    f: QualifiedIdentifier,
+    args: Vec<WithMeta<Term, String>>,
+    outs: Option<Sort>,
+    id_meta: &str,
+    app_meta: &str,
+) -> TC<(Term, &'a Sig)>
+where
+    L: Mapping<Key = Str>,
+{
     let symbol = &f.0.symbol;
 
     // 1. Make sure that the application is not nullary
@@ -794,15 +832,17 @@ where
 
     // 3. we check each signature using this closure.
     if sigs.len() == 1 {
+        let sig = &sigs[0].0;
         type_check_with_func_sig(
             &print_struct,
             env,
             WithMeta::new(&f, id_meta),
             &args,
             &outs,
-            &sigs[0].0,
+            sig,
             app_meta,
         )
+        .map(|t| (t, sig))
     } else {
         // 4. if the function is overloaded, we try all signatures.
         let mut tc_res = Err(format!(
@@ -824,7 +864,8 @@ where
                 &outs,
                 sig,
                 app_meta,
-            );
+            )
+            .map(|t| (t, sig));
             if tc_res.is_ok() {
                 break;
             }
