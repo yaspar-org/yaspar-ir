@@ -3,17 +3,19 @@
     "path": "cpachecker-induction-svcomp14/cpachecker-induction.Problem08_60_false-unreach-call.c.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ],
-    "comment": "gsubst disabled: overflows the stack (uncatchable SIGABRT, so it would kill the whole run) while expanding this file's ~1.7M global definitions. typecheck and letelim pass. See the gsubst step in tests/regression.rs."
+    "comment": "the deepest definition chain in the suite: ~1.7M global definitions, which is why gsubst runs here. It used to overflow the stack; see the gsubst step in tests/regression.rs."
   },
   {
     "path": "cpachecker-induction-svcomp14/cpachecker-induction.cs_fib_true-unreach-call.i.smt2",
     "steps": [
       "typecheck",
-      "letelim"
+      "letelim",
+      "gsubst"
     ],
-    "comment": "gsubst disabled: overflows the stack (uncatchable SIGABRT, so it would kill the whole run) while expanding this file's ~1.8M global definitions. typecheck and letelim pass. See the gsubst step in tests/regression.rs."
+    "comment": "the deepest definition chain in the suite: ~1.8M global definitions, which is why gsubst runs here. It used to overflow the stack; see the gsubst step in tests/regression.rs."
   },
   {
     "path": "FFT/smtlib.620524.smt2",
