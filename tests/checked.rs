@@ -777,3 +777,133 @@ fn test_typed_match_negatives() {
     let bar = context.typed_symbol("bar").unwrap();
     assert!(context.build_matching(bar).is_err());
 }
+
+/// The `_sig` variants return the same term as their plain counterparts, plus the signature the
+/// identifier or application resolved against.
+#[test]
+fn test_typed_sig_apis() {
+    use yaspar_ir::ast::Constant;
+
+    let mut context = Context::new();
+    UntypedAst
+        .parse_script_str(
+            r#"
+        (set-logic ALL)
+        (declare-const foo (Array Int Real))
+        (declare-fun bar (Int Bool) Real)
+    "#,
+        )
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+
+    // a global constant: the signature comes from the symbol table
+    let (foo, foo_sig) = context.typed_symbol_sig("foo").unwrap();
+    assert_eq!(foo_sig.to_string(), "(Array Int Real)");
+    // the term is the one the plain variant returns
+    assert_eq!(foo, context.typed_symbol("foo").unwrap());
+
+    // a declared function: the signature is the declared arrow
+    let one = context.integer(IBig::from(1)).unwrap();
+    let tru = context.get_true();
+    let (bar_app, bar_sig) = context
+        .typed_simp_app_sig("bar", [one.clone(), tru.clone()])
+        .unwrap();
+    assert_eq!(bar_sig.to_string(), "(=> Int Bool Real)");
+    assert_eq!(
+        bar_app,
+        context.typed_simp_app("bar", [one.clone(), tru]).unwrap()
+    );
+
+    // a polymorphic builtin: the returned signature is the declared, still polymorphic one, while
+    // the term carries the instantiated sort
+    let (select_foo, select_sig) = context
+        .typed_simp_app_sig("select", [foo, one.clone()])
+        .unwrap();
+    assert_eq!(select_sig.to_string(), "(par (X Y) (=> (Array X Y) X Y))");
+    let real_sort = context.real_sort();
+    assert_eq!(select_foo.get_sort(&mut context), real_sort);
+
+    // an overloaded builtin: the returned signature is the candidate that matched the arguments
+    let (_, minus_int) = context
+        .typed_simp_app_sig("-", [one.clone(), one.clone()])
+        .unwrap();
+    assert_eq!(minus_int.to_string(), "(=> Int ...[>= 1 times] Int Int)");
+    let half = context
+        .typed_constant(Constant::Decimal("0.5".parse().unwrap()))
+        .unwrap();
+    let (_, minus_real) = context
+        .typed_simp_app_sig("-", [half.clone(), half])
+        .unwrap();
+    assert_eq!(
+        minus_real.to_string(),
+        "(=> Real ...[>= 1 times] Real Real)"
+    );
+
+    // errors are reported just like in the plain variants
+    assert!(context.typed_symbol_sig("baz").is_err());
+    assert!(context.typed_simp_app_sig("bar", [one.clone()]).is_err());
+
+    // a local variable has no symbol-table entry, so its signature is synthesized as a nullary
+    // signature of its sort
+    let int = context.wf_sort("Int").unwrap();
+    let mut q = context.build_quantifier_with_domain([("x", int)]).unwrap();
+    let (x, x_sig) = q.typed_symbol_sig("x").unwrap();
+    assert_eq!(x_sig.to_string(), "Int");
+    let body = q.typed_simp_app(">", [x, one]).unwrap();
+    q.typed_forall(body).unwrap();
+}
+
+/// Bit-vector identifiers and functions: literals have a synthesized signature, indexed functions
+/// report the signature they were checked against.
+#[test]
+fn test_typed_sig_apis_bv() {
+    use yaspar_ir::ast::{Identifier, Index, Sig};
+
+    let mut context = Context::new();
+    UntypedAst
+        .parse_script_str("(set-logic QF_BV) (declare-const b (_ BitVec 8))")
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+
+    // `(_ bv5 8)` is a literal, so its signature is synthesized from its sort
+    let bv5 = context.allocate_symbol("bv5");
+    let lit = QualifiedIdentifier(
+        Identifier {
+            symbol: bv5,
+            indices: vec![Index::Numeral(UBig::from(8u8))],
+        },
+        None,
+    );
+    let (lit_term, lit_sig) = context.typed_identifier_sig(lit).unwrap();
+    assert_eq!(lit_term.to_string(), "#b00000101");
+    assert_eq!(lit_sig.to_string(), "(_ BitVec 8)");
+
+    // `(_ extract 3 1)` is an indexed bit-vector function
+    let extract = context.allocate_symbol("extract");
+    let b = context.typed_symbol("b").unwrap();
+    let (extracted, extract_sig) = context
+        .typed_app_sig(
+            QualifiedIdentifier(
+                Identifier {
+                    symbol: extract,
+                    indices: vec![
+                        Index::Numeral(UBig::from(3u8)),
+                        Index::Numeral(UBig::from(1u8)),
+                    ],
+                },
+                None,
+            ),
+            [b],
+        )
+        .unwrap();
+    assert_eq!(extracted.to_string(), "((_ extract 3 1) b)");
+    // the declared signature keeps its length parameters symbolic, hence indexed by two numerals
+    assert!(matches!(extract_sig, Sig::BvFunc(2, _, true, _, _)));
+
+    // the returned reference borrows the context, so the context is usable again only after the
+    // signature is dropped; the term itself carries the computed sort
+    let bv3 = context.wf_bv_sort(UBig::from(3u8)).unwrap();
+    assert_eq!(extracted.get_sort(&mut context), bv3);
+}

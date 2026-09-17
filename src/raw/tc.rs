@@ -43,7 +43,9 @@ use crate::meta::WithMeta;
 use crate::statics::{BITVEC, BOOL, INT, REAL, STRING};
 use crate::traits::{AllocatableString, Contains};
 use crate::traits::{MetaData, Repr};
-pub(crate) use app::{typed_app, typed_qualified_identifier};
+pub(crate) use app::{
+    typed_app, typed_app_sig, typed_qualified_identifier, typed_qualified_identifier_sig,
+};
 use dashu::integer::UBig;
 use num_traits::cast::ToPrimitive;
 use std::collections::{HashMap, HashSet};
