@@ -30,6 +30,7 @@ mod local;
 mod matching;
 mod quantifier;
 mod recs;
+mod stack;
 pub mod utils;
 
 #[cfg(feature = "implicant-generation")]
@@ -45,7 +46,6 @@ pub use checked::{CheckedApi, ScopedSortApi};
 use lazy_static::lazy_static;
 #[cfg(feature = "cache")]
 use std::cell::RefCell;
-use std::collections::hash_map::Keys;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 
@@ -68,6 +68,7 @@ pub use recs::*;
 use sat_interface::Formula;
 #[cfg(feature = "implicant-generation")]
 use sat_interface::SatSolver;
+pub(crate) use stack::{ContextFrame, ContextStack};
 
 // See: https://smt-lib.org/logics.shtml and https://zenodo.org/records/15493090
 lazy_static! {
@@ -249,25 +250,17 @@ pub(crate) struct ContextMeta {
     pub(crate) theories: &'static HashSet<Theory>,
 }
 
-/// The mutable declaration state: sorts and symbols.
-///
-/// This is separated from [`ContextMeta`] so that the arena can be mutably borrowed
-/// while the frame is shared-borrowed (e.g. during type-checking).
-pub(crate) struct ContextFrame {
-    /// Custom sorts; mapping sort names to arities or definitions.
-    pub(crate) sorts: HashMap<Str, SortDef>,
-    /// Mapping custom functions to their signatures and potentially their definitions.
-    pub(crate) symbol_table: HashMap<Str, Vec<(Sig, FunctionMeta)>>,
-}
-
 /// Global context for the current session
 pub struct Context {
     /// The memory arena for hash-consed allocation.
     pub(crate) arena: Arena,
     /// Logic metadata (logic name and enabled theories).
     pub(crate) meta: ContextMeta,
-    /// Declaration frame (sorts and symbol table).
-    pub(crate) frame: ContextFrame,
+    /// The mutable declaration state: sorts and symbols, one frame per assertion level.
+    ///
+    /// This is separated from [`ContextMeta`] so that the arena can be mutably borrowed
+    /// while the stack is shared-borrowed (e.g. during type-checking).
+    pub(crate) stack: ContextStack,
     /// Caches for various algorithms
     #[cfg(feature = "cache")]
     pub caches: Caches,
@@ -302,7 +295,7 @@ impl Context {
         self.check_sym_chars(symbol)?;
         self.check_special_symbols(symbol)?;
         self.check_bv(symbol)?;
-        if self.frame.sorts.contains_key(symbol) {
+        if self.stack.contains_sort(symbol) {
             Err(format!("sort {} is already defined!", symbol.sym_quote()))
         } else {
             Ok(())
@@ -316,9 +309,7 @@ impl Context {
     {
         let sort = sort.allocate(self.arena());
         self.can_add_sort(&sort)?;
-        self.frame
-            .sorts
-            .insert(sort, SortDef::OpaqueDeclared(arity));
+        self.stack.insert_sort(sort, SortDef::OpaqueDeclared(arity));
         Ok(())
     }
 
@@ -328,7 +319,7 @@ impl Context {
         S: AllocatableString<Arena>,
     {
         let sort = sort.allocate(self.arena());
-        self.frame.sorts.remove(&sort);
+        self.stack.remove_sort(&sort);
     }
 
     /// Extend the given context with a custom sort with its definition
@@ -347,9 +338,8 @@ impl Context {
             .into_iter()
             .map(|p| p.allocate(self.arena()))
             .collect();
-        self.frame
-            .sorts
-            .insert(sort, SortDef::Transparent { params, sort: s });
+        self.stack
+            .insert_sort(sort, SortDef::Transparent { params, sort: s });
         Ok(())
     }
 
@@ -359,7 +349,7 @@ impl Context {
     {
         let sort = sort.allocate(self.arena());
         self.can_add_sort(&sort)?;
-        self.frame.sorts.insert(sort, SortDef::Datatype(dt));
+        self.stack.insert_sort(sort, SortDef::Datatype(dt));
         Ok(())
     }
 
@@ -407,13 +397,13 @@ impl Context {
 
     /// Check whether a symbol is contained in the symbol table
     pub fn contain_symbol(&self, sym: &Str) -> bool {
-        self.frame.symbol_table.contains_key(sym)
+        self.stack.contains_symbol(sym)
     }
 
     /// Check whether a given symbol can be added to the symbol table
     pub fn can_add_symbol(&self, symbol: &Str) -> Result<()> {
         self.check_sym_validity(symbol)?;
-        if self.frame.symbol_table.contains_key(symbol) {
+        if self.stack.contains_symbol(symbol) {
             Err(format!("symbol {} is already defined!", symbol.sym_quote()))
         } else {
             Ok(())
@@ -422,7 +412,7 @@ impl Context {
 
     /// Record that the symbol table has changed, invalidating every cache derived from it.
     ///
-    /// EVERY write to `frame.symbol_table` must go through a method that calls this, or a derived
+    /// EVERY write to a frame's `symbol_table` must go through a method that calls this, or a derived
     /// cache can go stale. Without the `cache` feature there is nothing to invalidate, so this
     /// compiles away.
     #[inline]
@@ -437,14 +427,14 @@ impl Context {
     /// to have been maintained.
     pub(crate) fn insert_symbol(&mut self, symbol: Str, sig: Sig, meta: FunctionMeta) {
         self.touch_symbol_table();
-        self.frame.symbol_table.insert(symbol, vec![(sig, meta)]);
+        self.stack.insert_symbol(symbol, vec![(sig, meta)]);
     }
 
     /// Insert the symbol to the table with its definition without any checks. Use it only when
     /// invariance is known to have been maintained.
     pub(crate) fn insert_symbol_with_def(&mut self, rec_deps: HashSet<Str>, def: FunctionDef) {
         self.touch_symbol_table();
-        self.frame.symbol_table.insert(
+        self.stack.insert_symbol(
             def.name.clone(),
             vec![(
                 Sig::func(
@@ -478,11 +468,7 @@ impl Context {
     /// to have been maintained.
     pub(crate) fn push_symbol(&mut self, symbol: Str, sig: Sig, meta: FunctionMeta) {
         self.touch_symbol_table();
-        self.frame
-            .symbol_table
-            .entry(symbol)
-            .or_default()
-            .push((sig, meta));
+        self.stack.push_symbol(symbol, (sig, meta));
     }
 
     /// Extend a symbol to the symbol table
@@ -506,25 +492,61 @@ impl Context {
     {
         let symbol = symbol.allocate(self.arena());
         self.touch_symbol_table();
-        self.frame.symbol_table.remove(&symbol);
+        self.stack.remove_symbol(&symbol);
     }
 
     /// Return the number of symbols; overloaded symbols are considered multiple times
     pub fn symbol_count(&self) -> usize {
-        self.frame
-            .symbol_table
-            .values()
-            .fold(0, |acc, sigs| acc + sigs.len())
+        self.stack
+            .symbols()
+            .fold(0, |acc, (_, sigs)| acc + sigs.len())
     }
 
     /// Return the number of symbols in the symbol table without considering overloading
     pub fn symbol_count_no_dup(&self) -> usize {
-        self.frame.symbol_table.len()
+        self.stack.symbols().count()
     }
 
     /// Return the number of defined sorts
     pub fn sort_count(&self) -> usize {
-        self.frame.sorts.len()
+        self.stack.sorts().count()
+    }
+
+    /// Return the number of assertion levels pushed on top of the first one
+    pub fn assertion_level(&self) -> usize {
+        self.stack.level()
+    }
+
+    /// Push `n` new assertion levels; sorts and symbols declared afterwards are discarded by the
+    /// matching [Self::pop_levels].
+    pub fn push_levels(&mut self, n: usize) {
+        self.stack.push(n);
+    }
+
+    /// Pop the top `n` assertion levels, discarding all sorts and symbols declared in them;
+    /// error if fewer than `n` levels have been pushed.
+    pub fn pop_levels(&mut self, n: usize) -> Result<()> {
+        let level = self.assertion_level();
+        if n > level {
+            return Err(format!(
+                "cannot pop {n} assertion levels; only {level} have been pushed!"
+            ));
+        }
+        if n == 0 {
+            return Ok(());
+        }
+        #[cfg(feature = "cache")]
+        for f in self.stack.pop(n) {
+            // popped definitions must not be expanded anymore; the cache of the remaining ones
+            // stays valid as they cannot refer to popped symbols
+            for name in f.symbol_table.keys() {
+                self.caches.global_def_cache.remove(name);
+            }
+        }
+        #[cfg(not(feature = "cache"))]
+        self.stack.pop(n);
+        self.touch_symbol_table();
+        Ok(())
     }
 
     /// Given a SAT solver, produce an iterator that iterates through the implicants of given assertions.
@@ -569,30 +591,29 @@ impl Context {
             .collect()
     }
 
-    pub fn expose_symbol_table(&self) -> &HashMap<Str, Vec<(Sig, FunctionMeta)>> {
-        &self.frame.symbol_table
+    /// Return an iterable for all visible symbols and their signatures across assertion levels
+    pub fn expose_symbol_table(&self) -> impl Iterator<Item = (&Str, &Vec<(Sig, FunctionMeta)>)> {
+        self.stack.symbols()
     }
 
-    pub fn expose_sorts(&self) -> &HashMap<Str, SortDef> {
-        &self.frame.sorts
+    /// Return an iterable for all visible sorts and their definitions across assertion levels
+    pub fn expose_sorts(&self) -> impl Iterator<Item = (&Str, &SortDef)> {
+        self.stack.sorts()
     }
 
     /// Return an iterable for all symbols
-    pub fn all_symbols(&self) -> Keys<'_, Str, Vec<(Sig, FunctionMeta)>> {
-        self.frame.symbol_table.keys()
+    pub fn all_symbols(&self) -> impl Iterator<Item = &Str> {
+        self.stack.symbols().map(|(n, _)| n)
     }
 
     /// Return an iterable for all sorts
-    pub fn all_sorts(&self) -> Keys<'_, Str, SortDef> {
-        self.frame.sorts.keys()
+    pub fn all_sorts(&self) -> impl Iterator<Item = &Str> {
+        self.stack.sorts().map(|(n, _)| n)
     }
 
     /// Get the binding associated with the given symbol in the symbol table
     pub fn get_symbol_binding(&self, symbol: &Str) -> Option<&[(Sig, FunctionMeta)]> {
-        self.frame
-            .symbol_table
-            .get(symbol)
-            .map(|sigs| sigs.as_slice())
+        self.stack.get_symbol(symbol).map(|sigs| sigs.as_slice())
     }
 
     /// Get the signature and definition associated with the given name
@@ -616,7 +637,7 @@ impl Context {
 
     /// Return the definition of the sort bound to a given name
     pub fn get_sort_def(&self, name: &Str) -> Option<&SortDef> {
-        self.frame.sorts.get(name)
+        self.stack.get_sort(name)
     }
 
     /// Get all the symbols with a definition body
@@ -649,9 +670,8 @@ impl Context {
     ///
     /// This is the uncached worker behind [`Self::defined_symbols`]; prefer that.
     fn compute_defined_symbols(&self) -> HashSet<Str> {
-        self.frame
-            .symbol_table
-            .iter()
+        self.stack
+            .symbols()
             .filter_map(|(name, sigs)| {
                 // scan all signatures for one that has a defined body
                 sigs.iter()
@@ -676,9 +696,8 @@ impl Context {
 
     /// Returns the set of all builtin symbols in the current context
     pub fn builtin_symbols(&self) -> HashSet<Str> {
-        self.frame
-            .symbol_table
-            .iter()
+        self.stack
+            .symbols()
             .filter_map(|(name, sigs)| {
                 if sigs.iter().any(|(_, meta)| meta.is_builtin()) {
                     Some(name.clone())
@@ -694,9 +713,8 @@ impl Context {
     /// This function returns all from [Self::defined_symbols], and also symbols with a defined body
     /// due to user commands, e.g. `is-X` testers due to `declare-datatype`.
     pub fn user_defined_symbols(&self) -> HashSet<Str> {
-        self.frame
-            .symbol_table
-            .iter()
+        self.stack
+            .symbols()
             .filter_map(|(name, sigs)| {
                 if sigs.iter().any(|(_, meta)| meta.is_from_user()) {
                     Some(name.clone())
@@ -709,9 +727,8 @@ impl Context {
 
     /// Returns the set of all builtin sorts
     pub fn builtin_sorts(&self) -> HashSet<Str> {
-        self.frame
-            .sorts
-            .iter()
+        self.stack
+            .sorts()
             .filter_map(|(name, def)| {
                 if def.is_builtin() {
                     Some(name.clone())
@@ -724,9 +741,8 @@ impl Context {
 
     /// Returns the set of all user-defined sorts
     pub fn user_defined_sorts(&self) -> HashSet<Str> {
-        self.frame
-            .sorts
-            .iter()
+        self.stack
+            .sorts()
             .filter_map(|(name, def)| {
                 if def.is_from_user() {
                     Some(name.clone())
@@ -746,9 +762,8 @@ impl Context {
         symbol: &str,
     ) -> Option<(QualifiedIdentifier, &Vec<(Sig, FunctionMeta)>)> {
         let symbol = self.allocate_symbol(symbol);
-        self.frame
-            .symbol_table
-            .get(&symbol)
+        self.stack
+            .get_symbol(&symbol)
             .map(|sigs| (QualifiedIdentifier::simple(symbol.clone()), sigs))
     }
 }

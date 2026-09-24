@@ -12,7 +12,7 @@ use crate::ast::cnf::CNFCache;
 #[cfg(feature = "cache")]
 use crate::ast::ctx::Caches;
 use crate::ast::ctx::{Arena, BvInSort, BvOutSort, EMP_SET, Sig, SigIndex, SortDef, Str, Theory};
-use crate::ast::ctx::{Context, ContextFrame, ContextMeta, LOGICS};
+use crate::ast::ctx::{Context, ContextFrame, ContextMeta, ContextStack, LOGICS};
 use crate::statics::*;
 use crate::traits::Repr;
 use dashu::integer::UBig;
@@ -39,33 +39,60 @@ impl Context {
         HashMap::from([(bool, SortDef::Opaque(0))])
     }
 
+    fn default_meta() -> ContextMeta {
+        ContextMeta {
+            logic: None,
+            theories: &EMP_SET,
+        }
+    }
+
+    fn default_stack(arena: &mut Arena) -> ContextStack {
+        ContextStack::new(ContextFrame {
+            sorts: Self::default_sorts(arena),
+            symbol_table: Default::default(),
+        })
+    }
+
+    #[cfg(feature = "cache")]
+    fn default_caches() -> Caches {
+        Caches {
+            global_def_cache: Default::default(),
+            defined_symbols: Default::default(),
+            #[cfg(feature = "cnf")]
+            cnf_cache: CNFCache::new(),
+        }
+    }
+
     /// Create a new context to manipulate SMT
     pub fn new() -> Self {
         let mut arena = Arena::new();
-        let sorts = Self::default_sorts(&mut arena);
+        let stack = Self::default_stack(&mut arena);
         Self {
             arena,
-            meta: ContextMeta {
-                logic: None,
-                theories: &EMP_SET,
-            },
-            frame: ContextFrame {
-                sorts,
-                symbol_table: Default::default(),
-            },
+            meta: Self::default_meta(),
+            stack,
             #[cfg(feature = "cache")]
-            caches: Caches {
-                global_def_cache: Default::default(),
-                defined_symbols: Default::default(),
-                #[cfg(feature = "cnf")]
-                cnf_cache: CNFCache::new(),
-            },
+            caches: Self::default_caches(),
+        }
+    }
+
+    /// Reset the context to its initial state: the logic becomes unset and all declarations and
+    /// assertion levels are dropped.
+    ///
+    /// The arena is kept, so previously allocated objects remain valid.
+    pub fn reset_context(&mut self) {
+        self.meta = Self::default_meta();
+        self.stack = Self::default_stack(&mut self.arena);
+        #[cfg(feature = "cache")]
+        {
+            self.caches = Self::default_caches();
         }
     }
 
     fn extend_theory_ints(&mut self) {
         let int = self.int_sort();
-        self.frame
+        self.stack
+            .base_mut()
             .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
 
@@ -97,12 +124,16 @@ impl Context {
             builtin(gt, bin_pred_sig.clone()),
         ]);
         self.touch_symbol_table();
-        self.frame.symbol_table.extend(default_symbol_table);
+        self.stack
+            .base_mut()
+            .symbol_table
+            .extend(default_symbol_table);
     }
 
     fn extend_theory_reals(&mut self) {
         let real = self.real_sort();
-        self.frame
+        self.stack
+            .base_mut()
             .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
         let minus = self.allocate_symbol(SUB);
@@ -127,16 +158,21 @@ impl Context {
             builtin(gt, bin_pred_sig.clone()),
         ]);
         self.touch_symbol_table();
-        self.frame.symbol_table.extend(default_symbol_table);
+        self.stack
+            .base_mut()
+            .symbol_table
+            .extend(default_symbol_table);
     }
 
     fn extend_theory_real_ints(&mut self) {
         let int = self.int_sort();
         let real = self.real_sort();
-        self.frame
+        self.stack
+            .base_mut()
             .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.frame
+        self.stack
+            .base_mut()
             .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
 
@@ -187,7 +223,10 @@ impl Context {
             builtin(is_int, Sig::func(vec![real.clone()], self.bool_sort())),
         ]);
         self.touch_symbol_table();
-        self.frame.symbol_table.extend(default_symbol_table);
+        self.stack
+            .base_mut()
+            .symbol_table
+            .extend(default_symbol_table);
     }
 
     fn extend_theory_strings(&mut self) {
@@ -196,13 +235,16 @@ impl Context {
         let int = self.int_sort();
         let bool = self.bool_sort();
 
-        self.frame
+        self.stack
+            .base_mut()
             .sorts
             .insert(string.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.frame
+        self.stack
+            .base_mut()
             .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.frame
+        self.stack
+            .base_mut()
             .sorts
             .insert(reglan.repr().0.symbol.clone(), SortDef::Opaque(0));
 
@@ -342,12 +384,18 @@ impl Context {
             builtin(str_from_int, Sig::func(vec![int.clone()], string.clone())),
         ]);
         self.touch_symbol_table();
-        self.frame.symbol_table.extend(default_symbol_table);
+        self.stack
+            .base_mut()
+            .symbol_table
+            .extend(default_symbol_table);
     }
 
     fn extend_theory_array_ex(&mut self) {
         let array = self.allocate_symbol(ARRAY);
-        self.frame.sorts.insert(array, SortDef::Opaque(2));
+        self.stack
+            .base_mut()
+            .sorts
+            .insert(array, SortDef::Opaque(2));
 
         let x = self.allocate_symbol("X");
         let y = self.allocate_symbol("Y");
@@ -385,7 +433,10 @@ impl Context {
             ),
         ]);
         self.touch_symbol_table();
-        self.frame.symbol_table.extend(default_symbol_table);
+        self.stack
+            .base_mut()
+            .symbol_table
+            .extend(default_symbol_table);
     }
 
     /// c.f. <https://smt-lib.org/logics-all.shtml#QF_BV> and <https://smt-lib.org/theories-FixedSizeBitVectors.shtml>
@@ -575,7 +626,10 @@ impl Context {
             builtin(bvsge, bin_pred_sig.clone()),
         ]);
         self.touch_symbol_table();
-        self.frame.symbol_table.extend(default_symbol_table);
+        self.stack
+            .base_mut()
+            .symbol_table
+            .extend(default_symbol_table);
 
         if self.get_theories().iter().any(|t| t.has_int()) {
             let more_symbols = HashMap::from([
@@ -589,7 +643,7 @@ impl Context {
             ]);
 
             self.touch_symbol_table();
-            self.frame.symbol_table.extend(more_symbols);
+            self.stack.base_mut().symbol_table.extend(more_symbols);
         }
     }
 
@@ -598,7 +652,10 @@ impl Context {
         let int = self.int_sort();
         let bool = self.bool_sort();
         let set_sym = self.allocate_symbol(SET);
-        self.frame.sorts.insert(set_sym, SortDef::Opaque(1));
+        self.stack
+            .base_mut()
+            .sorts
+            .insert(set_sym, SortDef::Opaque(1));
 
         let x = self.allocate_symbol("X");
         let vars = vec![x.clone()];
@@ -658,7 +715,10 @@ impl Context {
             builtin(card, card_sig),
         ]);
         self.touch_symbol_table();
-        self.frame.symbol_table.extend(default_symbol_table);
+        self.stack
+            .base_mut()
+            .symbol_table
+            .extend(default_symbol_table);
     }
 
     pub fn check_logic(&self) -> Result<(), String> {

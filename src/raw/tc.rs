@@ -35,7 +35,7 @@ use super::instance::{
 use crate::allocator::*;
 use crate::ast::utils::is_term_bool_alt;
 use crate::ast::{
-    Context, ContextFrame, ContextMeta, FetchSort, HasArenaAlt, Monomorphization, SymbolQuote,
+    Context, ContextMeta, ContextStack, FetchSort, HasArenaAlt, Monomorphization, SymbolQuote,
     TermRecursor, Theory,
 };
 use crate::containers::{LocEnv, Mapping, sanitize_bindings};
@@ -70,13 +70,13 @@ pub trait Typecheck<Env> {
 /// The generic type-checking environment.
 ///
 /// Holds borrowed references to the [`Arena`], [`ContextMeta`] (logic and theories),
-/// and [`ContextFrame`] (sorts and symbol table), plus a generic `Local` scope.
+/// and [`ContextStack`] (sorts and symbol table), plus a generic `Local` scope.
 /// The `Local` parameter is [`TCLocal`] during normal type-checking, but can be
 /// any type implementing [`Mapping`] for reuse in helper functions.
 pub struct TCEnvGen<'a, Local> {
     pub(crate) arena: &'a mut Arena,
     pub(crate) meta: &'a ContextMeta,
-    pub(crate) frame: &'a ContextFrame,
+    pub(crate) stack: &'a ContextStack,
     pub(crate) local: Local,
 }
 
@@ -86,7 +86,7 @@ impl<'a, Local> TCEnvGen<'a, Local> {
         Self {
             arena: &mut context.arena,
             meta: &context.meta,
-            frame: &context.frame,
+            stack: &context.stack,
             local,
         }
     }
@@ -94,7 +94,7 @@ impl<'a, Local> TCEnvGen<'a, Local> {
     /// Look up a sort definition by name, allocating the symbol in the arena.
     fn get_sort_def(&mut self, s: &str) -> TC<&'a SortDef> {
         let symbol = self.arena.allocate_symbol(s);
-        match self.frame.sorts.get(&symbol) {
+        match self.stack.get_sort(&symbol) {
             None => Err(format!("TC: unknown sort: {}!", s)),
             Some(d) => Ok(d),
         }
@@ -145,7 +145,7 @@ where
         TCEnvGen {
             arena: self.arena,
             meta: self.meta,
-            frame: self.frame,
+            stack: self.stack,
             local: L::default(),
         }
     }
@@ -154,7 +154,7 @@ where
         TCEnvGen {
             arena: self.arena,
             meta: self.meta,
-            frame: self.frame,
+            stack: self.stack,
             local: L::default(),
         }
     }
@@ -172,7 +172,7 @@ impl<'a, 'b, S> TCEnv<'a, 'b, S> {
         TCEnv {
             arena: self.arena,
             meta: self.meta,
-            frame: self.frame,
+            stack: self.stack,
             local: TCLocal {
                 loc: local,
                 loc_inc: vec![],
@@ -364,7 +364,7 @@ where
         } else {
             Ok(env.arena.sort0(id.symbol))
         }
-    } else if let Some(d) = env.frame.sorts.get(&id.symbol) {
+    } else if let Some(d) = env.stack.get_sort(&id.symbol) {
         // a global sort
         if !id.indices.is_empty() {
             return Err(format!("TC: sort {id}{meta} should not contain indices!"));
