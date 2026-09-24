@@ -373,7 +373,7 @@ impl CheckedApi for ArmContext<'_, '_, '_> {
         TCEnvGen {
             arena: &mut self.parent.context.arena,
             meta: &self.parent.context.meta,
-            frame: &self.parent.context.frame,
+            stack: &self.parent.context.stack,
             local: TCLocal {
                 loc: LocEnv::Cons {
                     car: &self.env,

@@ -132,7 +132,7 @@ impl CheckedApi for FunctionContext<'_> {
         TCEnvGen {
             arena: &mut self.context.arena,
             meta: &self.context.meta,
-            frame: &self.context.frame,
+            stack: &self.context.stack,
             local: TCLocal {
                 loc: LocEnv::Cons {
                     car: &self.inputs,
