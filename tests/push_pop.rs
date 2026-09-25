@@ -229,3 +229,67 @@ fn test_pop_overloads() {
     tc(&mut ctx, "(assert (= (g 2) 1))").unwrap();
     assert!(tc(&mut ctx, "(assert (= (g true) 1))").is_err());
 }
+
+#[test]
+fn test_reset_assertions() {
+    let mut ctx = Context::new();
+    tc(
+        &mut ctx,
+        r#"
+        (set-logic QF_UFLIA)
+        (declare-sort S 0)
+        (declare-const x Int)
+        (push 2)
+        (declare-const y Int)
+        (reset-assertions)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(ctx.assertion_level(), 0);
+    // the logic and its builtins stay
+    assert_eq!(ctx.get_logic(), "QF_UFLIA");
+    // all declarations are gone, including those of the first level
+    assert!(tc(&mut ctx, "(assert (> x 0))").is_err());
+    assert!(tc(&mut ctx, "(assert (> y 0))").is_err());
+    assert!(tc(&mut ctx, "(declare-const z S)").is_err());
+    assert!(tc(&mut ctx, "(pop 1)").is_err());
+    tc(
+        &mut ctx,
+        r#"
+        (declare-const x Bool)
+        (declare-sort S 1)
+        (assert (and x (> (+ 1 2) 0)))
+    "#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_reset_assertions_definitions() {
+    let mut ctx = Context::new();
+    let cmds = tc(
+        &mut ctx,
+        r#"
+        (set-logic ALL)
+        (declare-const x Int)
+        (define-fun f () Int (+ x 1))
+        (assert (> f 0))
+    "#,
+    )
+    .unwrap();
+    // populate the definition cache with the first `f`
+    let t = last_assert(&cmds).gsubst_all(&mut ctx);
+    assert_eq!(t.to_string(), "(> (+ x 1) 0)");
+    let cmds = tc(
+        &mut ctx,
+        r#"
+        (reset-assertions)
+        (declare-const x Int)
+        (define-fun f () Int (+ x 2))
+        (assert (> f 0))
+    "#,
+    )
+    .unwrap();
+    let t = last_assert(&cmds).gsubst_all(&mut ctx);
+    assert_eq!(t.to_string(), "(> (+ x 2) 0)");
+}

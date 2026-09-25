@@ -6,7 +6,8 @@
 //! Following SMT-LIB, every `push` opens a new assertion level and every `pop` discards the
 //! most recent levels together with all sorts and symbols declared in them. Each
 //! [`ContextFrame`] only holds the declarations made at its own level, so popping simply drops
-//! frames; lookups walk the stack from the top down.
+//! frames; lookups walk the stack from the top down. `reset-assertions` pops all levels and
+//! empties the first one.
 
 use crate::ast::ctx::FunctionMeta;
 use crate::raw::instance::{Sig, SortDef, Str};
@@ -21,10 +22,11 @@ pub(crate) struct ContextFrame {
     pub(crate) symbol_table: HashMap<Str, Vec<(Sig, FunctionMeta)>>,
 }
 
-/// The stack of assertion levels; never empty.
+/// The stack of assertion levels.
 ///
-/// The bottom frame is the first assertion level; it additionally holds the builtin sorts and
-/// symbols of the current logic.
+/// The bottom frame holds the builtin sorts and symbols of the current logic; it is not an
+/// assertion level, so neither `pop` nor `reset-assertions` can remove it. The frame above it is
+/// the first assertion level, so there are always at least two frames.
 ///
 /// Invariant: the topmost frame containing a symbol holds *all* of its visible overloads, so a
 /// lookup can stop at the first hit. Overloading a symbol from a lower level therefore copies its
@@ -34,13 +36,15 @@ pub(crate) struct ContextStack {
 }
 
 impl ContextStack {
-    pub(crate) fn new(base: ContextFrame) -> Self {
-        Self { frames: vec![base] }
+    pub(crate) fn new(builtins: ContextFrame) -> Self {
+        Self {
+            frames: vec![builtins, ContextFrame::default()],
+        }
     }
 
     /// The number of assertion levels pushed on top of the first one
     pub(crate) fn level(&self) -> usize {
-        self.frames.len() - 1
+        self.frames.len() - 2
     }
 
     /// Open `n` new assertion levels
@@ -50,17 +54,25 @@ impl ContextStack {
     }
 
     /// Drop the top `n` assertion levels and return them; `n` must not exceed [`Self::level`].
-    pub(crate) fn pop(&mut self, n: usize) -> std::vec::Drain<'_, ContextFrame> {
+    pub(crate) fn pop(&mut self, n: usize) -> Vec<ContextFrame> {
         let keep = self.frames.len() - n;
-        self.frames.drain(keep..)
+        self.frames.split_off(keep)
+    }
+
+    /// Drop all assertion levels, including the first one, and return them; the first level is
+    /// replaced by an empty one.
+    pub(crate) fn reset_assertions(&mut self) -> Vec<ContextFrame> {
+        let levels = self.frames.split_off(1);
+        self.frames.push(ContextFrame::default());
+        levels
     }
 
     fn top_mut(&mut self) -> &mut ContextFrame {
         self.frames.last_mut().unwrap()
     }
 
-    /// The first assertion level, where theories place their builtins
-    pub(crate) fn base_mut(&mut self) -> &mut ContextFrame {
+    /// The frame below the assertion levels, where theories place their builtins
+    pub(crate) fn builtins_mut(&mut self) -> &mut ContextFrame {
         &mut self.frames[0]
     }
 

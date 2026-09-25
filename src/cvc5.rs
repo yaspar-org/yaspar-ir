@@ -71,8 +71,8 @@
 //!
 //! `push` and `pop` are forwarded to the solver, and [`Cvc5Env`] tracks the same levels: the
 //! sorts, globals and `:named` labels declared in a level, as well as the cache entries added in
-//! it, are discarded when the level is popped. Since cvc5 has no full reset, `reset` is
-//! rejected; see [`Cvc5Env::reset_env`].
+//! it, are discarded when the level is popped; `reset-assertions` discards all of them. Since
+//! cvc5 has no full reset, `reset` is rejected; see [`Cvc5Env::reset_env`].
 //!
 //! # Annotations
 //!
@@ -388,21 +388,28 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
         Ok(())
     }
 
+    /// Pop all assertion levels and empty the first one, mirroring `reset-assertions` on the
+    /// solver: all sorts, globals and `:named` labels are discarded.
+    pub fn reset_assertion_stack(&mut self) {
+        // the caches do not track the first level, so everything is evicted
+        self.sort_cache = ScopedBiCache::new();
+        self.term_cache = ScopedBiCache::new();
+        self.named_assertions = ScopedMap::new();
+        self.sort = ScopedMap::new();
+        self.globals = ScopedMap::new();
+        self.sort_subst_map = ScopedMap::new();
+    }
+
     /// Drop all translation state, as if the environment were newly created.
     ///
     /// cvc5 cannot reset a [`Solver`] in place, so the `reset` command is rejected by
     /// [`Command::to_cvc5`](ConvertToCvc5::to_cvc5); to follow a `reset`, call this method and
     /// continue with a fresh [`Solver`].
     pub fn reset_env(&mut self) {
-        self.sort_cache = ScopedBiCache::new();
-        self.term_cache = ScopedBiCache::new();
-        self.named_assertions = ScopedMap::new();
-        self.sort = ScopedMap::new();
-        self.globals = ScopedMap::new();
+        self.reset_assertion_stack();
         self.dt_sorts.clear();
         self.locals.clear();
         self.scope_stack.clear();
-        self.sort_subst_map = ScopedMap::new();
         self.locals_from.clear();
         self.scope_stack_from.clear();
         self.uninterpreted_values.clear();
@@ -2673,8 +2680,7 @@ where
                     .into(),
             ),
             AC::ResetAssertions => {
-                // cvc5 also pops all assertion levels here, so the environment follows
-                env.pop_levels(env.assertion_level())?;
+                env.reset_assertion_stack();
                 solver.reset_assertions();
                 Ok(CommandResult::None)
             }

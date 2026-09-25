@@ -133,12 +133,42 @@ fn test_pop_named_assertions() {
 }
 
 #[test]
+fn test_reset_assertions_redeclarations() {
+    // everything declared before `reset-assertions` is gone, even at the first level, so `x` and
+    // `D` are new declarations that must not be confused with the old ones
+    let (sats, values) = run(r#"
+        (set-logic ALL)
+        (declare-const x Int)
+        (declare-datatype D ((A) (B)))
+        (declare-const d D)
+        (assert (and (= x 1) (= d A)))
+        (check-sat)
+        (get-value (x d))
+        (push 1)
+        (assert false)
+        (reset-assertions)
+        (declare-const x Int)
+        (declare-datatype D ((C) (E)))
+        (declare-const d D)
+        (assert (and (= x 2) (= d E)))
+        (check-sat)
+        (get-value (x d))
+    "#);
+    assert_eq!(sats, vec![true, true]);
+    let values = values
+        .iter()
+        .map(|ts| ts.iter().map(|t| t.to_string()).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec![vec!["1", "A"], vec!["2", "E"]]);
+}
+
+#[test]
 fn test_reset_assertions_pops_levels() {
     let mut ctx = Context::new();
-    let cmds = tc(
-        &mut ctx,
-        "(set-logic ALL) (push 2) (reset-assertions) (pop 1)",
-    );
+    let mut cmds = tc(&mut ctx, "(set-logic ALL) (push 2) (reset-assertions)");
+    // the type checker rightly rejects `(pop 1)` after `reset-assertions`; build it elsewhere
+    // to check that the environment rejects it as well
+    cmds.push(tc(&mut Context::new(), "(push 1) (pop 1)").pop().unwrap());
     let tm = TermManager::new();
     let solver = Solver::new(&tm);
     let mut env = Cvc5Env::new(&tm, &mut ctx);
