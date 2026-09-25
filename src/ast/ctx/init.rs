@@ -4,7 +4,7 @@
 //! This module is responsible for initializing the [Context] with theories. Modify this module
 //! for other extensions.
 
-use crate::allocator::{ObjectAllocatorExt, StrAllocator};
+use crate::allocator::{CommandAllocator, ObjectAllocatorExt, StrAllocator};
 use crate::ast::FunctionMeta;
 use crate::ast::alg::BvLenExpr;
 #[cfg(feature = "cnf")]
@@ -12,7 +12,7 @@ use crate::ast::cnf::CNFCache;
 #[cfg(feature = "cache")]
 use crate::ast::ctx::Caches;
 use crate::ast::ctx::{Arena, BvInSort, BvOutSort, EMP_SET, Sig, SigIndex, SortDef, Str, Theory};
-use crate::ast::ctx::{Context, ContextFrame, ContextMeta, ContextStack, LOGICS};
+use crate::ast::ctx::{Command, Context, ContextFrame, ContextMeta, ContextStack, LOGICS};
 use crate::statics::*;
 use crate::traits::Repr;
 use dashu::integer::UBig;
@@ -76,23 +76,24 @@ impl Context {
         }
     }
 
-    /// Reset the context to its initial state: the logic becomes unset and all declarations and
-    /// assertion levels are dropped.
+    /// Reset the context to its initial state and return the [`reset`](Command) command: the
+    /// logic becomes unset and all declarations and assertion levels are dropped.
     ///
     /// The arena is kept, so previously allocated objects remain valid.
-    pub fn reset_context(&mut self) {
+    pub fn reset_context(&mut self) -> Command {
         self.meta = Self::default_meta();
         self.stack = Self::default_stack(&mut self.arena);
         #[cfg(feature = "cache")]
         {
             self.caches = Self::default_caches();
         }
+        self.arena.reset()
     }
 
     fn extend_theory_ints(&mut self) {
         let int = self.int_sort();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
 
@@ -125,7 +126,7 @@ impl Context {
         ]);
         self.touch_symbol_table();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .symbol_table
             .extend(default_symbol_table);
     }
@@ -133,7 +134,7 @@ impl Context {
     fn extend_theory_reals(&mut self) {
         let real = self.real_sort();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
         let minus = self.allocate_symbol(SUB);
@@ -159,7 +160,7 @@ impl Context {
         ]);
         self.touch_symbol_table();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .symbol_table
             .extend(default_symbol_table);
     }
@@ -168,11 +169,11 @@ impl Context {
         let int = self.int_sort();
         let real = self.real_sort();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
 
@@ -224,7 +225,7 @@ impl Context {
         ]);
         self.touch_symbol_table();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .symbol_table
             .extend(default_symbol_table);
     }
@@ -236,15 +237,15 @@ impl Context {
         let bool = self.bool_sort();
 
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(string.repr().0.symbol.clone(), SortDef::Opaque(0));
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(reglan.repr().0.symbol.clone(), SortDef::Opaque(0));
 
@@ -385,7 +386,7 @@ impl Context {
         ]);
         self.touch_symbol_table();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .symbol_table
             .extend(default_symbol_table);
     }
@@ -393,7 +394,7 @@ impl Context {
     fn extend_theory_array_ex(&mut self) {
         let array = self.allocate_symbol(ARRAY);
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(array, SortDef::Opaque(2));
 
@@ -434,7 +435,7 @@ impl Context {
         ]);
         self.touch_symbol_table();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .symbol_table
             .extend(default_symbol_table);
     }
@@ -627,7 +628,7 @@ impl Context {
         ]);
         self.touch_symbol_table();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .symbol_table
             .extend(default_symbol_table);
 
@@ -643,7 +644,7 @@ impl Context {
             ]);
 
             self.touch_symbol_table();
-            self.stack.base_mut().symbol_table.extend(more_symbols);
+            self.stack.builtins_mut().symbol_table.extend(more_symbols);
         }
     }
 
@@ -653,7 +654,7 @@ impl Context {
         let bool = self.bool_sort();
         let set_sym = self.allocate_symbol(SET);
         self.stack
-            .base_mut()
+            .builtins_mut()
             .sorts
             .insert(set_sym, SortDef::Opaque(1));
 
@@ -716,7 +717,7 @@ impl Context {
         ]);
         self.touch_symbol_table();
         self.stack
-            .base_mut()
+            .builtins_mut()
             .symbol_table
             .extend(default_symbol_table);
     }

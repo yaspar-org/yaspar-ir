@@ -532,21 +532,36 @@ impl Context {
                 "cannot pop {n} assertion levels; only {level} have been pushed!"
             ));
         }
-        if n == 0 {
-            return Ok(());
+        if n > 0 {
+            let levels = self.stack.pop(n);
+            self.forget_levels(levels);
         }
+        Ok(())
+    }
+
+    /// Pop all assertion levels and empty the first one, i.e. drop all user declarations and
+    /// definitions, while the logic and its builtins stay; return the
+    /// [`reset-assertions`](Command) command.
+    ///
+    /// This is the effect of `reset-assertions`; `:global-declarations` is not supported, so
+    /// declarations are never kept.
+    pub fn reset_assertion_stack(&mut self) -> Command {
+        let levels = self.stack.reset_assertions();
+        self.forget_levels(levels);
+        self.arena.reset_assertions()
+    }
+
+    /// Invalidate what is derived from the sorts and symbols of dropped assertion levels.
+    fn forget_levels(&mut self, #[allow(unused)] levels: Vec<ContextFrame>) {
         #[cfg(feature = "cache")]
-        for f in self.stack.pop(n) {
-            // popped definitions must not be expanded anymore; the cache of the remaining ones
-            // stays valid as they cannot refer to popped symbols
+        for f in &levels {
+            // dropped definitions must not be expanded anymore; the cache of the remaining ones
+            // stays valid as they cannot refer to dropped symbols
             for name in f.symbol_table.keys() {
                 self.caches.global_def_cache.remove(name);
             }
         }
-        #[cfg(not(feature = "cache"))]
-        self.stack.pop(n);
         self.touch_symbol_table();
-        Ok(())
     }
 
     /// Given a SAT solver, produce an iterator that iterates through the implicants of given assertions.
