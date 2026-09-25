@@ -291,10 +291,10 @@ fn type_check_command(command: &u::Command, env: &mut Context) -> TC<Command> {
             let nts = ts.type_check(env)?;
             env.typed_get_value(nts)
         }
-        ACommand::Pop(n) => Ok(env.arena.pop(n.clone())),
-        ACommand::Push(n) => Ok(env.arena.push(n.clone())),
-        ACommand::Reset => Ok(env.arena.reset()),
-        ACommand::ResetAssertions => Ok(env.arena.reset_assertions()),
+        ACommand::Pop(n) => env.typed_pop(n.clone()),
+        ACommand::Push(n) => env.typed_push(n.clone()),
+        ACommand::Reset => Ok(env.reset_context()),
+        ACommand::ResetAssertions => Ok(env.reset_assertion_stack()),
     }
 }
 

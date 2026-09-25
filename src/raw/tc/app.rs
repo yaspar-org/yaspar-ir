@@ -184,7 +184,7 @@ where
     match env.local.lookup(symbol) {
         None => {
             // in this case, we hit a global variable
-            let sig = match env.frame.symbol_table.get(symbol) {
+            let sig = match env.stack.get_symbol(symbol) {
                 None => {
                     return super::identifier_not_found(symbol, meta_string);
                 }
@@ -823,7 +823,7 @@ where
         ));
     }
     // 2. we fetch the list of signatures of f (a list because of overloading).
-    let sigs = match env.frame.symbol_table.get(symbol) {
+    let sigs = match env.stack.get_symbol(symbol) {
         None => super::identifier_not_found(symbol, id_meta),
         Some(sigs) => Ok(sigs),
     }?;
