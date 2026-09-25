@@ -621,12 +621,6 @@ impl Context {
         Ok(self.pop(n))
     }
 
-    /// Checked API for building a [`reset`](Command) command; resets the context.
-    pub fn typed_reset(&mut self) -> Command {
-        self.reset_context();
-        self.reset()
-    }
-
     /// Checked API for building a [`set-option`](Command) command
     pub fn typed_set_option<S, T>(&mut self, opt: &alg::Attribute<S, T>) -> TC<Command>
     where

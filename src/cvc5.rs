@@ -62,10 +62,17 @@
 //!
 //! # Caching
 //!
-//! [`Cvc5Env`] keeps a single [`BiHashMap`] for sorts and a single one for terms, shared by
-//! both directions: a forward translation that produces a `(yaspar, cvc5)` pair populates
+//! [`Cvc5Env`] keeps a single bidirectional cache for sorts and a single one for terms, shared
+//! by both directions: a forward translation that produces a `(yaspar, cvc5)` pair populates
 //! the cache, and a subsequent reverse translation of the same cvc5 object hits it without
 //! recomputing.
+//!
+//! # Assertion levels
+//!
+//! `push` and `pop` are forwarded to the solver, and [`Cvc5Env`] tracks the same levels: the
+//! sorts, globals and `:named` labels declared in a level, as well as the cache entries added in
+//! it, are discarded when the level is popped. Since cvc5 has no full reset, `reset` is
+//! rejected; see [`Cvc5Env::reset_env`].
 //!
 //! # Annotations
 //!
@@ -81,7 +88,6 @@
 
 use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::*;
-use crate::containers::{InsertableMapping, Mapping};
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::raw::alg::rec::TermRecursionScheme;
@@ -89,15 +95,17 @@ use crate::raw::alg::rec_memo::{MemoizedRecursion, MemoizedScheme, Memoizing};
 use crate::statics::*;
 use crate::traits::{AllocatableString, Contains, HasMutRef, Repr};
 use crate::untyped::UntypedAst;
-use bimap::BiHashMap;
 pub use cvc5::{Kind, ProofComponent, Solver, TermManager};
 use dashu::float::DBig;
 use dashu::integer::{IBig, Sign, UBig};
 use num_traits::Signed;
+use scoped::{ScopedBiCache, ScopedMap};
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 use yaspar::{binary_to_string, hex_to_string};
 use yaspar_macros::stack_safe;
+
+mod scoped;
 
 /// A cvc5 sort, tied to the lifetime of the [`TermManager`] that created it.
 pub type CSort<'tm> = cvc5::Sort<'tm>;
@@ -117,7 +125,8 @@ type Res<T> = std::result::Result<T, String>;
 #[derive(Debug)]
 pub enum CommandResult<'p> {
     /// No meaningful return value (declarations, definitions, `assert`, `set-logic`,
-    /// `set-info`, `set-option`, `define-sort`, `reset-assertions`, `echo`, `exit`).
+    /// `set-info`, `set-option`, `define-sort`, `push`, `pop`, `reset-assertions`, `echo`,
+    /// `exit`).
     None,
     /// Result of `check-sat` or `check-sat-assuming`.
     CheckSat(CResult<'p>),
@@ -232,7 +241,7 @@ type SortSubst<'tm> = Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>;
 /// `Ctx: HasMutRef<Context>`, e.g. `&mut Context` or `Rc<RefCell<Context>>`), and all
 /// translation state for both directions:
 ///
-/// - **Shared**: bidirectional [`BiHashMap`] caches for sorts and terms, plus a `CTerm →
+/// - **Shared**: bidirectional caches for sorts and terms, plus a `CTerm →
 ///   :named` table for recovering SMT-LIB labels in command results.
 /// - **Forward (yaspar-ir → cvc5)**: global and local symbol tables, datatype
 ///   bookkeeping, scope stacks, and parametric-match substitutions.
@@ -259,21 +268,21 @@ pub struct Cvc5Env<'tm, Ctx> {
     ctx: Ctx,
     /// Bidirectional cache between yaspar-ir [`Sort`] and translated [`CSort`].
     /// Used for both forward and reverse sort translation.
-    sort_cache: BiHashMap<Sort, CSort<'tm>>,
+    sort_cache: ScopedBiCache<Sort, CSort<'tm>>,
     /// Bidirectional cache between yaspar-ir [`Term`] and translated [`WithPattern`].
     /// Used for forward memoization and reverse term lookup.
-    term_cache: BiHashMap<Term, WithPattern<'tm>>,
+    term_cache: ScopedBiCache<Term, WithPattern<'tm>>,
     /// Reverse map from a translated assertion's [`CTerm`] back to the SMT-LIB `:named`
     /// label(s) declared on its enclosing `(assert (! ... :named X))` form. Populated
     /// during forward translation of `assert` commands and consulted during reverse
     /// translation of cvc5-returned terms (e.g. `get-unsat-core`).
-    named_assertions: HashMap<CTerm<'tm>, Str>,
+    named_assertions: ScopedMap<CTerm<'tm>, Str>,
 
     // ── Forward direction (yaspar-ir → cvc5) ─────────────────────────────
     /// Named sorts registered by `declare-sort` or datatype declarations.
-    sort: HashMap<Str, CSort<'tm>>,
+    sort: ScopedMap<Str, CSort<'tm>>,
     /// Global symbols (constants, functions, constructors, selectors, testers).
-    globals: HashMap<Str, CTerm<'tm>>,
+    globals: ScopedMap<Str, CTerm<'tm>>,
     /// Datatype sorts mapping from names to their corresponding potentially polymorphic representations.
     dt_sorts: HashMap<Str, CSort<'tm>>,
     /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
@@ -281,7 +290,7 @@ pub struct Cvc5Env<'tm, Ctx> {
     /// Stack of bound-variable lists for scope management in quantifiers and match arms (forward direction).
     scope_stack: Vec<Vec<CTerm<'tm>>>,
     /// Cached sort-parameter substitutions for parametric datatype match translation.
-    sort_subst_map: HashMap<Term, SortSubst<'tm>>,
+    sort_subst_map: ScopedMap<Term, SortSubst<'tm>>,
 
     // ── Reverse direction (cvc5 → yaspar-ir) ─────────────────────────────
     /// Backward-direction bound variable map: cvc5 term id → VarBinding.
@@ -301,15 +310,15 @@ where
         Self {
             tm,
             ctx,
-            sort_cache: BiHashMap::new(),
-            term_cache: BiHashMap::new(),
-            named_assertions: HashMap::new(),
-            sort: HashMap::new(),
-            globals: HashMap::new(),
+            sort_cache: ScopedBiCache::new(),
+            term_cache: ScopedBiCache::new(),
+            named_assertions: ScopedMap::new(),
+            sort: ScopedMap::new(),
+            globals: ScopedMap::new(),
             dt_sorts: HashMap::new(),
             locals: HashMap::new(),
             scope_stack: vec![],
-            sort_subst_map: Default::default(),
+            sort_subst_map: ScopedMap::new(),
             locals_from: HashMap::new(),
             scope_stack_from: Vec::new(),
             uninterpreted_values: HashSet::new(),
@@ -346,6 +355,59 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
         &self.uninterpreted_values
     }
 
+    /// The number of assertion levels pushed on top of the first one
+    pub fn assertion_level(&self) -> usize {
+        self.globals.level()
+    }
+
+    /// Push `n` new assertion levels, mirroring `push` on the solver.
+    pub fn push_levels(&mut self, n: usize) {
+        self.sort_cache.push(n);
+        self.term_cache.push(n);
+        self.named_assertions.push(n);
+        self.sort.push(n);
+        self.globals.push(n);
+        self.sort_subst_map.push(n);
+    }
+
+    /// Pop the top `n` assertion levels, mirroring `pop` on the solver: everything declared or
+    /// cached in them is discarded; error if fewer than `n` levels have been pushed.
+    pub fn pop_levels(&mut self, n: usize) -> Res<()> {
+        let level = self.assertion_level();
+        if n > level {
+            return Err(format!(
+                "cannot pop {n} assertion levels; only {level} have been pushed!"
+            ));
+        }
+        self.sort_cache.pop(n);
+        self.term_cache.pop(n);
+        self.named_assertions.pop(n);
+        self.sort.pop(n);
+        self.globals.pop(n);
+        self.sort_subst_map.pop(n);
+        Ok(())
+    }
+
+    /// Drop all translation state, as if the environment were newly created.
+    ///
+    /// cvc5 cannot reset a [`Solver`] in place, so the `reset` command is rejected by
+    /// [`Command::to_cvc5`](ConvertToCvc5::to_cvc5); to follow a `reset`, call this method and
+    /// continue with a fresh [`Solver`].
+    pub fn reset_env(&mut self) {
+        self.sort_cache = ScopedBiCache::new();
+        self.term_cache = ScopedBiCache::new();
+        self.named_assertions = ScopedMap::new();
+        self.sort = ScopedMap::new();
+        self.globals = ScopedMap::new();
+        self.dt_sorts.clear();
+        self.locals.clear();
+        self.scope_stack.clear();
+        self.sort_subst_map = ScopedMap::new();
+        self.locals_from.clear();
+        self.scope_stack_from.clear();
+        self.uninterpreted_values.clear();
+    }
+
     /// Push a new scope with the given cvc5 variable IDs (backward direction).
     fn push_scope_from(&mut self, ids: Vec<u64>) {
         self.scope_stack_from.push(ids);
@@ -364,35 +426,9 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
     }
 }
 
-// `BiHashMap` is treated as a left-keyed mapping for memoization purposes:
-// `lookup` finds the right value by left key, and `insert` populates the bijection
-// in both directions.
-impl<L, R> Mapping for BiHashMap<L, R>
-where
-    L: Eq + std::hash::Hash,
-    R: Eq + std::hash::Hash + Clone,
-{
-    type Key = L;
-    type Value = R;
-
-    fn lookup(&self, key: &Self::Key) -> Option<Self::Value> {
-        self.get_by_left(key).cloned()
-    }
-}
-
-impl<L, R> InsertableMapping for BiHashMap<L, R>
-where
-    L: Eq + std::hash::Hash,
-    R: Eq + std::hash::Hash + Clone,
-{
-    fn insert(&mut self, key: Self::Key, value: Self::Value) {
-        BiHashMap::insert(self, key, value);
-    }
-}
-
 impl<'tm, Ctx> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, Ctx> {
     type Cache<'a>
-        = &'a mut BiHashMap<Term, WithPattern<'tm>>
+        = &'a mut ScopedBiCache<Term, WithPattern<'tm>>
     where
         Self: 'a;
 
@@ -1856,7 +1892,7 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
     ) -> Res<Self::Pattern> {
         let scr_sort = scrutinee_rec.term.sort();
         let dt = scr_sort.datatype();
-        if !self.sort_subst_map.contains_key(scrutinee) {
+        if self.sort_subst_map.get(scrutinee).is_none() {
             // For parametric datatypes, selector codomain sorts are uninstantiated (e.g. X).
             // We need to substitute the sort parameters with the actual instantiated parameters.
             let subst: SortSubst<'tm> = if dt.is_parametric() {
@@ -2619,14 +2655,26 @@ where
                 let s = solver.get_option(kw.symbol_of());
                 Ok(CommandResult::Info(s))
             }
-            AC::Push(_) => {
-                // push and pop are not supported because Context does not support push and pop,
-                // so the symbol management is incorrect.
-                Err("push is not supported".into())
+            AC::Push(n) => {
+                let lvl = u32::try_from(n).map_err(|_| format!("cannot push {n} levels!"))?;
+                env.push_levels(lvl as usize);
+                solver.push(lvl);
+                Ok(CommandResult::None)
             }
-            AC::Pop(_) => Err("pop is not supported".into()),
-            AC::Reset => Err("reset is not supported".into()),
+            AC::Pop(n) => {
+                let lvl = u32::try_from(n).map_err(|_| format!("cannot pop {n} levels!"))?;
+                env.pop_levels(lvl as usize)?;
+                solver.pop(lvl);
+                Ok(CommandResult::None)
+            }
+            AC::Reset => Err(
+                "reset is not supported: cvc5 cannot reset a solver in place; call \
+                 `Cvc5Env::reset_env` and continue with a fresh solver instead"
+                    .into(),
+            ),
             AC::ResetAssertions => {
+                // cvc5 also pops all assertion levels here, so the environment follows
+                env.pop_levels(env.assertion_level())?;
                 solver.reset_assertions();
                 Ok(CommandResult::None)
             }
