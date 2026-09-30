@@ -605,6 +605,22 @@ impl Context {
         Ok(self.assert(t))
     }
 
+    /// Checked API for building a [`push`](Command) command; pushes `n` assertion levels.
+    pub fn typed_push(&mut self, n: UBig) -> TC<Command> {
+        let lvl = usize::try_from(&n).map_err(|_| format!("TC: cannot push {n} levels!"))?;
+        self.push_levels(lvl);
+        Ok(self.push(n))
+    }
+
+    /// Checked API for building a [`pop`](Command) command; pops `n` assertion levels.
+    ///
+    /// Sorts and symbols declared within the popped levels go out of scope.
+    pub fn typed_pop(&mut self, n: UBig) -> TC<Command> {
+        let lvl = usize::try_from(&n).map_err(|_| format!("TC: cannot pop {n} levels!"))?;
+        self.pop_levels(lvl).map_err(|e| format!("TC: {e}"))?;
+        Ok(self.pop(n))
+    }
+
     /// Checked API for building a [`set-option`](Command) command
     pub fn typed_set_option<S, T>(&mut self, opt: &alg::Attribute<S, T>) -> TC<Command>
     where
