@@ -10,7 +10,7 @@ keywords = ["SMT", "solver", "logic"]
 categories = ["science"]
 homepage = "https://github.com/yaspar-org/yaspar-ir"
 repository = "https://github.com/yaspar-org/yaspar-ir"
-exclude = ["tests/resources", "tests/regression.rs", ".github"]
+exclude = ["tests/resources", "tests/regression.rs", ".github", "regression"]
 
 [features]
 default = ["none"]
