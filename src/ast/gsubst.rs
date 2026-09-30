@@ -303,9 +303,9 @@ mod descent {
             ATerm::Constant(..) | ATerm::Local(_) => t.clone(),
             ATerm::Global(qid, sort) => {
                 let sym = qid.id_str().clone();
-                let sort: Sort = sort.clone().expect("type invariant violation!");
+                let global_sort: Sort = sort.clone().expect("type invariant violation!");
                 if env.expandable(&sym) && expand_def(sym.clone(), env) {
-                    expand_global(&sym, sort, env)
+                    expand_global(&sym, global_sort, env)
                 } else {
                     t.clone()
                 }
@@ -322,19 +322,19 @@ mod descent {
                 }
             }
             ATerm::Eq(a, b) => {
-                let a = gsubst_term(a, env);
-                let b = gsubst_term(b, env);
-                env.arena.eq(a, b)
+                let na = gsubst_term(a, env);
+                let nb = gsubst_term(b, env);
+                env.arena.eq(na, nb)
             }
             ATerm::Not(x) => {
-                let x = gsubst_term(x, env);
-                env.arena.not(x)
+                let nx = gsubst_term(x, env);
+                env.arena.not(nx)
             }
             ATerm::Ite(c, x, y) => {
-                let c = gsubst_term(c, env);
-                let x = gsubst_term(x, env);
-                let y = gsubst_term(y, env);
-                env.arena.ite(c, x, y)
+                let nc = gsubst_term(c, env);
+                let nx = gsubst_term(x, env);
+                let ny = gsubst_term(y, env);
+                env.arena.ite(nc, nx, ny)
             }
             ATerm::Distinct(ts) => {
                 let recs = gsubst_all_of(ts, env);
@@ -354,8 +354,8 @@ mod descent {
             }
             ATerm::Implies(ps, c) => {
                 let recs = gsubst_all_of(ps, env);
-                let c = gsubst_term(c, env);
-                env.arena.implies(recs, c)
+                let nc = gsubst_term(c, env);
+                env.arena.implies(recs, nc)
             }
             ATerm::Let(vs, body) => {
                 let count: usize = vs.len();
@@ -368,22 +368,22 @@ mod descent {
                     bindings.push(VarBinding(name, id, bound));
                     i += 1;
                 }
-                let body = gsubst_term(body, env);
-                env.arena.let_term(bindings, body)
+                let nbody = gsubst_term(body, env);
+                env.arena.let_term(bindings, nbody)
             }
             ATerm::Exists(vs, body) => {
-                let vs: Vec<VarBinding<Str, Sort>> = vs.clone();
-                let body = gsubst_term(body, env);
-                env.arena.exists(vs, body)
+                let nvs: Vec<VarBinding<Str, Sort>> = vs.clone();
+                let nbody = gsubst_term(body, env);
+                env.arena.exists(nvs, nbody)
             }
             ATerm::Forall(vs, body) => {
-                let vs: Vec<VarBinding<Str, Sort>> = vs.clone();
-                let body = gsubst_term(body, env);
-                env.arena.forall(vs, body)
+                let nvs: Vec<VarBinding<Str, Sort>> = vs.clone();
+                let nbody = gsubst_term(body, env);
+                env.arena.forall(nvs, nbody)
             }
             ATerm::Matching(scrutinee, arms) => {
                 let count: usize = arms.len();
-                let scrutinee = gsubst_term(scrutinee, env);
+                let nscrutinee = gsubst_term(scrutinee, env);
                 let mut cases: Vec<PatternArm> = Vec::with_capacity(count);
                 let mut i = 0usize;
                 while i < count {
@@ -393,11 +393,11 @@ mod descent {
                     cases.push(PatternArm { pattern, body });
                     i += 1;
                 }
-                env.arena.matching(scrutinee, cases)
+                env.arena.matching(nscrutinee, cases)
             }
             ATerm::Annotated(inner, anns) => {
                 let count: usize = anns.len();
-                let inner = gsubst_term(inner, env);
+                let ninner = gsubst_term(inner, env);
                 let mut attrs: Vec<Attribute> = Vec::with_capacity(count);
                 let mut i = 0usize;
                 while i < count {
@@ -417,7 +417,7 @@ mod descent {
                     }
                     i += 1;
                 }
-                env.arena.annotated(inner, attrs)
+                env.arena.annotated(ninner, attrs)
             }
         };
         env.memoize(t.clone(), out.clone());

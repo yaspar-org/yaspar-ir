@@ -339,15 +339,15 @@ mod sections {
                             .collect::<Vec<_>>(),
                     );
                     binders.insert(case.body.clone(), sub.clone());
-                    let mut r = find_sections_of(&case.body, tail, binders, true);
-                    if let Some((c, _)) = r.last()
+                    let mut arm_r = find_sections_of(&case.body, tail, binders, true);
+                    if let Some((c, _)) = arm_r.last()
                         && c.borrow().level == sub.borrow().level
                     {
                         // get rid of the tail if bound variables are used.
                         // in this case, we don't want glbs to return the Section under binder
-                        r.pop();
+                        arm_r.pop();
                     }
-                    vc.push(r);
+                    vc.push(arm_r);
                     i += 1;
                 }
                 // unwrap here because we know it is non-empty

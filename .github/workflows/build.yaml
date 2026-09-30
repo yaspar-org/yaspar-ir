@@ -117,6 +117,47 @@ jobs:
         env:
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
+  stack-safe:
+    name: stack_safe coverage and equivalence
+    # macOS runners are the fastest available here (as for the regression job)
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      # The harness compares each rewritten function with the `<name>_orig` copy #[stack_safe]
+      # keeps of it, which the yaspar-macros release yaspar-ir depends on does not emit yet.
+      # Drop this (and MACROS_REPO below) once it does.
+      - name: Checkout yaspar-macros
+        uses: actions/checkout@v4
+        with:
+          repository: yaspar-org/yaspar-macros
+          ref: feature/perf2
+          path: yaspar-macros
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Setup cvc5
+        id: cvc5
+        uses: ./.github/actions/setup-cvc5
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: regression/stack-safe/runs/harness
+      # Coverage (LLVM: every `_orig` copy runs), then equivalence (the rewritten function and its
+      # `_orig` copy return equal values on every case, at full sizes). Writes a summary table to
+      # the job summary.
+      - name: Check
+        run: regression/stack-safe/run.sh check
+        env:
+          CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
+          MACROS_REPO: ${{ github.workspace }}/yaspar-macros
+
   lints:
     name: Lints
     runs-on: ubuntu-latest
