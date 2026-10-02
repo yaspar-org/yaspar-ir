@@ -9,13 +9,9 @@
 # files; any commit-ish (e.g. HEAD) exports exactly that commit instead.
 : "${IR_CUR_REV:=WORKTREE}"
 
-# The yaspar-macros under test. The harness needs the `<name>_orig` copies #[stack_safe] keeps of
-# the functions it rewrites (yaspar-macros 3249514 and later). Empty: the version yaspar-ir's
-# Cargo.toml resolves; a path: a checkout to export at $MACROS_REV. Defaults to a sibling checkout
-# when there is one.
-if [[ -z ${MACROS_REPO+set} && -d "$IR_REPO/../yaspar-macros/.git" ]]; then
-    MACROS_REPO="$(cd "$IR_REPO/../yaspar-macros" && pwd)"
-fi
+# The yaspar-macros under test. Empty (the default): the version yaspar-ir's Cargo.toml resolves
+# (0.1.4 or later, which emits the `<name>_orig` copies the harness needs); a path: a checkout to
+# export at $MACROS_REV instead, e.g. to try unreleased macro changes.
 : "${MACROS_REPO:=}"
 : "${MACROS_REV:=HEAD}"
 

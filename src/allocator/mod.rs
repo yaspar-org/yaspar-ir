@@ -111,7 +111,11 @@ pub trait SortAllocator<Str, So> {
 pub trait TermAllocator<Str, So, T> {
     fn allocate_term(&mut self, t: Term<Str, So, T>) -> T;
 
-    gen_ctor!(allocate_term, let_term, Term::Let(vs: Vec<VarBinding<Str, T>>, t: T) -> T);
+    gen_ctor!(
+        allocate_term,
+        let_term,
+        Term::Let(vs: Vec<VarBinding<Str, T>>, t: T) -> T
+    );
 
     gen_ctors!(allocate_term -> T
     | Term::Constant(c : Constant<Str>, s: Option<So>)

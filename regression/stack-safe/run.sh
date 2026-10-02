@@ -99,8 +99,8 @@ check)
     # SSBENCH_* knob can still be overridden, e.g. SSBENCH_SKIP='/100000$' for a quicker look. The summary table goes to stdout, to
     # $RESULTS/check.md, and to the GitHub job summary when run in Actions.
     status=0
-    "$0" coverage 2>&1 | tee "$RESULTS/coverage.out" || status=1
-    "$0" verify || status=1
+    "$HERE/run.sh" coverage 2>&1 | tee "$RESULTS/coverage.out" || status=1
+    "$HERE/run.sh" verify || status=1
     python3 scripts/summary.py "$RESULTS" > "$RESULTS/check.md"
     cat "$RESULTS/check.md"
     if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then cat "$RESULTS/check.md" >> "$GITHUB_STEP_SUMMARY"; fi
@@ -191,7 +191,7 @@ status)
     tail -n 5 "$RESULTS/progress.log" | sed 's/^/    /'
     ;;
 *)
-    sed -n '2,28p' "$0"
+    sed -n '2,28p' "$HERE/run.sh"
     exit 2
     ;;
 esac

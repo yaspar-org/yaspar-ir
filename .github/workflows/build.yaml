@@ -128,15 +128,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      # The harness compares each rewritten function with the `<name>_orig` copy #[stack_safe]
-      # keeps of it, which the yaspar-macros release yaspar-ir depends on does not emit yet.
-      # Drop this (and MACROS_REPO below) once it does.
-      - name: Checkout yaspar-macros
-        uses: actions/checkout@v4
-        with:
-          repository: yaspar-org/yaspar-macros
-          ref: feature/perf2
-          path: yaspar-macros
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -156,7 +147,6 @@ jobs:
         run: regression/stack-safe/run.sh check
         env:
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
-          MACROS_REPO: ${{ github.workspace }}/yaspar-macros
 
   lints:
     name: Lints
