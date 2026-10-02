@@ -173,13 +173,22 @@ mod aeq {
                 if vs1.len() != vs2.len() {
                     return false;
                 }
-                let mut id_map = vec![];
-                for (v1, v2) in vs1.iter().zip(vs2.iter()) {
-                    if !aeq_impl(ctx, &v1.2, &v2.2, permissive) {
+                // An index loop rather than a `for` over a zip: the recursive call below parks what
+                // is live across it, and a zip iterator plus a half-built vector would widen every
+                // parked frame of this group, not just this arm's.
+                let (bs1, bs2): (&[VarBinding<Str, Term>], &[VarBinding<Str, Term>]) = (vs1, vs2);
+                let mut i = 0usize;
+                while i < bs1.len() {
+                    if !aeq_impl(ctx, &bs1[i].2, &bs2[i].2, permissive) {
                         return false;
                     }
-                    id_map.push((v1.1, v2.1));
+                    i += 1;
                 }
+                let id_map = bs1
+                    .iter()
+                    .zip(bs2.iter())
+                    .map(|(v1, v2)| (v1.1, v2.1))
+                    .collect();
                 aeq_in_scope(ctx, id_map, b1, b2, permissive)
             }
 
@@ -267,7 +276,18 @@ mod aeq {
         }
         let mut i = 0;
         while i < ts1.len() {
-            if !aeq_impl(ctx, &ts1[i], &ts2[i], permissive) {
+            // Constants and globals compare in place, exactly as `aeq_impl` would compare them: a
+            // leaf costs no call, and hence no parked frame.
+            let leaf = matches!(
+                (ts1[i].repr(), ts2[i].repr()),
+                (ATerm::Constant(_, _), ATerm::Constant(_, _))
+                    | (ATerm::Global(_, _), ATerm::Global(_, _))
+            );
+            if leaf {
+                if ts1[i] != ts2[i] {
+                    return false;
+                }
+            } else if !aeq_impl(ctx, &ts1[i], &ts2[i], permissive) {
                 return false;
             }
             i += 1;
