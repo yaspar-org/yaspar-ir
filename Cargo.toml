@@ -10,7 +10,7 @@ keywords = ["SMT", "solver", "logic"]
 categories = ["science"]
 homepage = "https://github.com/yaspar-org/yaspar-ir"
 repository = "https://github.com/yaspar-org/yaspar-ir"
-exclude = ["tests/resources", "tests/regression.rs", ".github"]
+exclude = ["tests/resources", "tests/regression.rs", ".github", "regression"]
 
 [features]
 default = ["none"]
@@ -44,8 +44,8 @@ num-traits = "0.2.19"
 num-order = "1.2.0"
 delegate = "0.13"
 bimap = "0.6"
-yaspar-macros = "0.1.3"
-yaspar-macros-defs = "0.1.3"
+yaspar-macros = "0.1.4"
+yaspar-macros-defs = "0.1.4"
 
 [lib]
 name = "yaspar_ir"
