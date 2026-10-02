@@ -8,8 +8,8 @@ recurses on the native stack and calls the other `_orig` copies of its scope. Th
 rewritten function (`stacksafe`) and its `_orig` copy (`native`) in one process, on one input, in
 one context, and compares their results as values. It also times both sides.
 
-This needs a yaspar-macros that emits the copies (`3249514` or later). By default the harness
-uses a sibling checkout `../yaspar-macros` when there is one; see `MACROS_REPO` below.
+This needs a yaspar-macros that emits the copies (0.1.4 or later). By default the harness uses
+the version `Cargo.toml` resolves; see `MACROS_REPO` below to try a local checkout instead.
 
 ## Commands
 
@@ -35,7 +35,7 @@ Options, all set through the environment:
 
 | variable | effect |
 |---|---|
-| `MACROS_REPO=path` (`MACROS_REV=rev`, default `HEAD`) | the yaspar-macros checkout to build against (default `../yaspar-macros` if it exists; empty means the version `Cargo.toml` resolves) |
+| `MACROS_REPO=path` (`MACROS_REV=rev`, default `HEAD`) | the yaspar-macros checkout to build against (default empty: the version `Cargo.toml` resolves) |
 | `SSBENCH_FILTER=regex`, `SSBENCH_SKIP=regex` | select or skip cases by id `target/shape/size` |
 | `SSBENCH_DEPTHS`, `_HEIGHTS`, `_WIDTHS`, `_LEVELS` | sizes (comma-separated) |
 | `CVC5=0` | leave out the cvc5 cases (they are included whenever `$CVC5_DIR` exists) |
