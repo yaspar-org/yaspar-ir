@@ -127,26 +127,28 @@ pub(crate) mod __ssbench {
     }
 }
 """,
-    "src/ast/letintro.rs": shim(["find_sections_of", "let_intro_of"], """
+    "src/ast/letintro.rs": shim(["find_sections_of", "let_intro_scope"], """
     use super::Prepared;
-    /// The first half of `topo_let_intro`.
+    /// The first half of `topo_let_intro`, on a let-free term.
     pub(crate) fn find_sections(t: &Term) -> Prepared {
         let cell = Rc::new(RefCell::new(Section::new()));
+        cell.borrow_mut().root.used_names = used_symbols(t);
         let mut map = HashMap::new();
-        let _ = find_sections_of(t, &cell, &mut map, false);
+        let mut memo = Memo::new();
+        let _ = find_sections_of(t, &cell, &mut map, &mut memo, false);
         Prepared { cell, map }
     }
     /// The second half, on what `find_sections` produced for the same term.
     pub(crate) fn let_intro<E: HasArenaAlt>(t: &Term, p: &mut Prepared, env: &mut E) -> (Term, HashMap<Term, Local>) {
         let mut vars = HashMap::new();
-        let r = let_intro_of(t, p.cell.clone(), &mut p.map, &mut vars, env);
+        let r = let_intro_scope(t, p.cell.clone(), &mut p.map, &mut vars, env);
         (r, vars)
     }
-    /// Both halves, as `TopoLetIntro::topo_let_intro` runs them.
+    /// Both halves, as `TopoLetIntro::topo_let_intro` runs them on a let-free term.
     pub(crate) fn topo_let_intro<E: HasArenaAlt>(t: &Term, env: &mut E) -> Term {
         let mut p = find_sections(t);
         let mut vars = HashMap::new();
-        let_intro_of(t, p.cell.clone(), &mut p.map, &mut vars, env)
+        let_intro_scope(t, p.cell.clone(), &mut p.map, &mut vars, env)
     }
 """, extra="""
     /// What `find_sections` leaves for `let_intro`, from either side.
@@ -156,7 +158,7 @@ pub(crate) mod __ssbench {
     }
 
     /// Whether two runs of `find_sections` recorded the same sections: the same sub-terms with the
-    /// same reference counts and levels, the same binders, and the same bound variables.
+    /// same reference counts, levels and visit order, the same binders, and the same bound variables.
     pub(crate) fn same_sections(a: &SectionCell, b: &SectionCell) -> bool {
         let (a, b) = (a.borrow(), b.borrow());
         a.level == b.level
@@ -165,7 +167,9 @@ pub(crate) mod __ssbench {
             && a.let_hierarchy.iter().all(|(t, r)| {
                 b.let_hierarchy
                     .get(t)
-                    .is_some_and(|s| s.referenced == r.referenced && s.level == r.level)
+                    .is_some_and(|s| {
+                        s.referenced == r.referenced && s.level == r.level && s.order == r.order
+                    })
             })
     }
     pub(crate) fn same_prepared(a: &Prepared, b: &Prepared) -> bool {
