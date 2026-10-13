@@ -175,7 +175,7 @@ def main() -> None:
 
     origs = {k: n for k, n in counts.items() if k[1].endswith("_orig")}
     if no_cvc5:
-        origs = {k: n for k, n in origs.items() if k[0] != "src/cvc5.rs"}
+        origs = {k: n for k, n in origs.items() if k[0] != "src/cvc5_1_4/mod.rs"}
     missing = sorted(k for k, n in origs.items() if n == 0)
 
     print(f"{'function (native side)':60} {'calls':>10}")

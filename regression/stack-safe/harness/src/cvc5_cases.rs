@@ -1,16 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `#[stack_safe]`-covered functions of `src/cvc5.rs`: the forward sort translation, the
-//! backward sort and term translations, and `is_const`.
+//! The `#[stack_safe]`-covered functions of `src/cvc5_1_4/mod.rs` (cvc5 1.4.x): the forward sort
+//! translation, the backward sort and term translations, and `is_const`.
 //!
 //! cvc5 inputs are produced the way a user produces them: a yaspar-ir term or sort, translated
 //! forward once while the case is built. Each timed call then gets a *fresh* `Cvc5Env`, built
 //! untimed, because an environment caches every translation in both directions and a warm one
 //! would answer from the cache without recursing at all.
-//!
-//! A case's `TermManager` is leaked, which gives its terms a `'static` lifetime they can be stored
-//! under; it is one per case and parameter.
 
 use crate::cases::{pair, pair_timed, same_term};
 use crate::inputs::*;
@@ -20,12 +17,12 @@ use std::time::Instant;
 use yaspar_ir::ast::*;
 use yaspar_ir::cvc5::{CSort, CTerm, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
 
-type Env<'c> = Cvc5Env<'static, &'c mut Context>;
+type Env<'c> = Cvc5Env<'c, &'c mut Context>;
 
 /// A case's world: the term manager, the context the input lives in, and the declarations a
 /// forward translation needs replayed into its environment.
 struct World {
-    tm: &'static TermManager,
+    tm: TermManager,
     ctx: Context,
     cmds: Vec<Command>,
 }
@@ -33,15 +30,15 @@ struct World {
 impl World {
     fn new(script_src: &str) -> World {
         let (ctx, cmds) = script(script_src);
-        World { tm: Box::leak(Box::new(TermManager::new())), ctx, cmds }
+        World { tm: TermManager::new(), ctx, cmds }
     }
 
     /// Run `f` on a fresh environment into which the script's declarations have been replayed.
     fn with_declared<R>(&mut self, f: impl FnOnce(&mut Env<'_>) -> R) -> R {
-        let solver = Solver::new(self.tm);
-        let mut env = Cvc5Env::new(self.tm, &mut self.ctx);
+        let mut solver = Solver::new(&self.tm);
+        let mut env = Cvc5Env::new(&mut self.tm, &mut self.ctx);
         {
-            let mut es = Cvc5EnvSolver::new(&mut env, &solver);
+            let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
             for c in &self.cmds {
                 c.to_cvc5(&mut es).expect("declaration");
             }
@@ -53,11 +50,11 @@ impl World {
     }
 
     /// Translate `t` forward, for a case that measures the way back.
-    fn forward_term(&mut self, t: &Term) -> CTerm<'static> {
+    fn forward_term(&mut self, t: &Term) -> CTerm {
         self.with_declared(|env| t.to_cvc5(env).expect("forward translation"))
     }
 
-    fn forward_sort(&mut self, s: &Sort) -> CSort<'static> {
+    fn forward_sort(&mut self, s: &Sort) -> CSort {
         self.with_declared(|env| s.to_cvc5(env).expect("forward translation"))
     }
 }
@@ -69,12 +66,12 @@ struct Fwd {
 
 struct BackT {
     w: World,
-    ct: CTerm<'static>,
+    ct: CTerm,
 }
 
 struct BackS {
     w: World,
-    cs: CSort<'static>,
+    cs: CSort,
 }
 
 fn decls(prefix: &str, sort: &str, n: usize) -> String {
@@ -111,14 +108,13 @@ pub fn register(r: &mut Registry) {
         pair_timed!(r, "cvc5.sort_to_cvc5", shape, ps, build,
             |f, side| {
                 let sort = f.sort.clone();
-                let tm = f.w.tm;
                 let (dt, out) = f.w.with_declared(|env| {
                     let t0 = Instant::now();
                     let out = side::sort_to_cvc5(&sort, env);
                     (t0.elapsed(), out)
                 });
                 let back = out.and_then(|cs| {
-                    let mut fresh = Cvc5Env::new(tm, &mut f.w.ctx);
+                    let mut fresh = Cvc5Env::new(&mut f.w.tm, &mut f.w.ctx);
                     side::conv_csort(&cs, &mut fresh)
                 });
                 (dt, back)
@@ -152,7 +148,7 @@ pub fn register(r: &mut Registry) {
     for (shape, ps, build) in back_sort_shapes {
         pair_timed!(r, "cvc5.conv_csort", shape, ps, build,
             |b, side| {
-                let mut env = Cvc5Env::new(b.w.tm, &mut b.w.ctx);
+                let mut env = Cvc5Env::new(&mut b.w.tm, &mut b.w.ctx);
                 let t0 = Instant::now();
                 let out = side::conv_csort(&b.cs, &mut env);
                 (t0.elapsed(), out)
@@ -223,7 +219,7 @@ pub fn register(r: &mut Registry) {
         // a translated quantifier binds fresh variables, hence alpha-equivalence
         pair_timed!(r, "cvc5.conv_cterm", shape, ps, build,
             |b, side| {
-                let mut env = Cvc5Env::new(b.w.tm, &mut b.w.ctx);
+                let mut env = Cvc5Env::new(&mut b.w.tm, &mut b.w.ctx);
                 let t0 = Instant::now();
                 let out = side::conv_cterm(&b.ct, &mut env);
                 (t0.elapsed(), out)

@@ -237,14 +237,14 @@ pub(crate) mod __ssbench {
         out
     }
 """),
-    "src/cvc5.rs": shim(["sort_to_cvc5", "conv_csort", "conv_cterm", "is_const_of"], """
-    pub(crate) fn to_cvc5<'tm, Ctx>(s: &Sort, env: &mut Cvc5Env<'tm, Ctx>) -> Res<CSort<'tm>> {
+    "src/cvc5_1_4/mod.rs": shim(["sort_to_cvc5", "conv_csort", "conv_cterm", "is_const_of"], """
+    pub(crate) fn to_cvc5<'tm, Ctx>(s: &Sort, env: &mut Cvc5Env<'tm, Ctx>) -> Res<CSort> {
         sort_to_cvc5(s, env)
     }
-    pub(crate) fn from_csort<'tm, Ctx: HasMutRef<Context>>(cs: &CSort<'tm>, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort> {
+    pub(crate) fn from_csort<'tm, Ctx: HasMutRef<Context>>(cs: &CSort, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort> {
         conv_csort(cs, env)
     }
-    pub(crate) fn from_cterm<'tm, Ctx: HasMutRef<Context>>(ct: &CTerm<'tm>, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Term> {
+    pub(crate) fn from_cterm<'tm, Ctx: HasMutRef<Context>>(ct: &CTerm, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Term> {
         conv_cterm(ct, env)
     }
     pub(crate) fn is_const(t: &CTerm) -> bool {
@@ -337,7 +337,7 @@ macro_rules! side {
             pub fn apply_subst(ctx: &mut Context, subst: &SortSubst, s: &Sort) -> Sort {
                 crate::raw::tc::unif::__ssbench::$side::apply(&mut ctx.arena, subst, s)
             }
-            #[cfg(feature = "cvc5-dep")]
+            #[cfg(feature = "cvc5-dep-1.4.x")]
             pub fn is_const(t: &crate::cvc5::CTerm) -> bool {
                 crate::cvc5::__ssbench::$side::is_const(t)
             }
@@ -380,16 +380,16 @@ side!(stacksafe, {
     pub fn show_bv_len(e: &crate::ast::alg::BvLenExpr) -> String {
         e.to_string()
     }
-    #[cfg(feature = "cvc5-dep")]
-    pub fn sort_to_cvc5<'tm, Ctx>(s: &Sort, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<crate::cvc5::CSort<'tm>, String> {
+    #[cfg(feature = "cvc5-dep-1.4.x")]
+    pub fn sort_to_cvc5<'tm, Ctx>(s: &Sort, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<crate::cvc5::CSort, String> {
         crate::cvc5::ConvertToCvc5::to_cvc5(s, env)
     }
-    #[cfg(feature = "cvc5-dep")]
-    pub fn conv_csort<'tm, Ctx: crate::traits::HasMutRef<Context>>(cs: &crate::cvc5::CSort<'tm>, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Sort, String> {
+    #[cfg(feature = "cvc5-dep-1.4.x")]
+    pub fn conv_csort<'tm, Ctx: crate::traits::HasMutRef<Context>>(cs: &crate::cvc5::CSort, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Sort, String> {
         crate::cvc5::ConvertFromCvc5::conv_from_cvc5(cs, env)
     }
-    #[cfg(feature = "cvc5-dep")]
-    pub fn conv_cterm<'tm, Ctx: crate::traits::HasMutRef<Context>>(ct: &crate::cvc5::CTerm<'tm>, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Term, String> {
+    #[cfg(feature = "cvc5-dep-1.4.x")]
+    pub fn conv_cterm<'tm, Ctx: crate::traits::HasMutRef<Context>>(ct: &crate::cvc5::CTerm, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Term, String> {
         crate::cvc5::ConvertFromCvc5::conv_from_cvc5(ct, env)
     }
 });
@@ -424,16 +424,16 @@ side!(native, {
     pub fn show_bv_len(e: &crate::ast::alg::BvLenExpr) -> String {
         crate::raw::alg::display::__ssbench::native::show_bv_len(e)
     }
-    #[cfg(feature = "cvc5-dep")]
-    pub fn sort_to_cvc5<'tm, Ctx>(s: &Sort, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<crate::cvc5::CSort<'tm>, String> {
+    #[cfg(feature = "cvc5-dep-1.4.x")]
+    pub fn sort_to_cvc5<'tm, Ctx>(s: &Sort, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<crate::cvc5::CSort, String> {
         crate::cvc5::__ssbench::native::to_cvc5(s, env)
     }
-    #[cfg(feature = "cvc5-dep")]
-    pub fn conv_csort<'tm, Ctx: crate::traits::HasMutRef<Context>>(cs: &crate::cvc5::CSort<'tm>, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Sort, String> {
+    #[cfg(feature = "cvc5-dep-1.4.x")]
+    pub fn conv_csort<'tm, Ctx: crate::traits::HasMutRef<Context>>(cs: &crate::cvc5::CSort, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Sort, String> {
         crate::cvc5::__ssbench::native::from_csort(cs, env)
     }
-    #[cfg(feature = "cvc5-dep")]
-    pub fn conv_cterm<'tm, Ctx: crate::traits::HasMutRef<Context>>(ct: &crate::cvc5::CTerm<'tm>, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Term, String> {
+    #[cfg(feature = "cvc5-dep-1.4.x")]
+    pub fn conv_cterm<'tm, Ctx: crate::traits::HasMutRef<Context>>(ct: &crate::cvc5::CTerm, env: &mut crate::cvc5::Cvc5Env<'tm, Ctx>) -> Result<Term, String> {
         crate::cvc5::__ssbench::native::from_cterm(ct, env)
     }
 });
