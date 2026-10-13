@@ -3,7 +3,7 @@
 
 //! `push`, `pop`, `reset-assertions` and `reset` through the cvc5 backend.
 
-#![cfg(feature = "cvc5-dep")]
+#![cfg(feature = "cvc5-dep-1.3.x")]
 
 use cvc5::{Solver, TermManager};
 use yaspar_ir::ast::{Command, Context, Term, Typecheck};
