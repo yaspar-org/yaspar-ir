@@ -174,12 +174,12 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        run: cargo clippy --all-features --tests -- -D warnings
+        run: cargo clippy --features all,cvc5,cvc5-parser --tests -- -D warnings
         env:
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
       - name: Run rustdoc lints
-        run: cargo doc --workspace --all-features --no-deps --document-private-items
+        run: cargo doc --workspace --features all,cvc5,cvc5-parser --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: ""
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
@@ -202,7 +202,7 @@ jobs:
         uses: ./.github/actions/setup-cvc5
 
       - name: Build documentation
-        run: cargo doc --all-features --no-deps
+        run: cargo doc --features all,cvc5,cvc5-parser --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}

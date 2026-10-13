@@ -81,7 +81,7 @@ yaspar-ir = { path = "../../variants/yaspar-ir", default-features = false, featu
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 regex = "1"
 dashu = "0.4.2"
-cvc5 = { version = "0.5.1", optional = true }
+cvc5 = { version = "0.6.1", optional = true }
 EOF
 if [[ -n $MACROS_REPO ]]; then
     cat >> "$d/Cargo.toml" <<EOF

@@ -775,9 +775,8 @@ solver-level API would otherwise drop. A `Terms` result can therefore mix labels
 backward-translated formulas, depending on which assertions were named.
 
 ```rust
-use cvc5::{Solver, TermManager};
 use yaspar_ir::ast::{Context, Typecheck};
-use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver};
+use yaspar_ir::cvc5::{ConvertFromCvc5, ConvertToCvc5, Cvc5Env, Cvc5EnvSolver, Solver, TermManager};
 use yaspar_ir::untyped::UntypedAst;
 
 fn main() {
@@ -793,9 +792,13 @@ fn main() {
         .type_check(&mut ctx)
         .unwrap();
 
-    let tm = TermManager::new();
+    // parsed before the environment borrows the context
+    let term = UntypedAst.parse_term_str("(+ x 1)").unwrap().type_check(&mut ctx).unwrap();
+
+    let mut tm = TermManager::new();
     let mut solver = Solver::new(&tm);
-    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    // the environment holds the term manager mutably; reach it through `env.term_manager()`
+    let mut env = Cvc5Env::new(&mut tm, &mut ctx);
 
     // translate commands to cvc5 (which internally translate sorts and terms)
     let mut es = Cvc5EnvSolver::new(&mut env, &mut solver);
@@ -804,7 +807,6 @@ fn main() {
     }
 
     // translate a term to cvc5 and back, reusing the same environment
-    let term = UntypedAst.parse_term_str("(+ x 1)").unwrap().type_check(&mut ctx).unwrap();
     let cvc5_term = term.to_cvc5(&mut *es.env).unwrap();
     let back = cvc5_term.conv_from_cvc5(&mut *es.env).unwrap();
     assert_eq!(term.to_string(), back.to_string());
@@ -820,14 +822,17 @@ The crate gates optional functionality behind the following Cargo features:
 | `cnf` | NNF/CNF conversion (`ast::CNFConversion`). Implies `cache`. |
 | `implicant-generation` | Implicant computation (`ast::FindImplicant`). Implies `cnf`. |
 | `cache` | Caching infrastructure used by CNF and other algorithms. |
-| `cvc5` | Translation to/from cvc5 (the `cvc5` module), linking cvc5 **statically**. |
-| `cvc5-dynamic` | Same as `cvc5`, but links cvc5 **dynamically**. Use this when linking against a system-provided cvc5 shared library. |
-| `cvc5-parser` | Additionally enables the cvc5 `parser`. Takes effect only alongside `cvc5` or `cvc5-dynamic`. |
+| `cvc5` | Translation to/from cvc5 1.4.x (the `cvc5` module, through cvc5-rs 0.6), linking cvc5 **statically**. Alias of `cvc5-1.4.x`. |
+| `cvc5-dynamic` | Same as `cvc5`, but links cvc5 **dynamically**. Use this when linking against a system-provided cvc5 shared library. Alias of `cvc5-dynamic-1.4.x`. |
+| `cvc5-parser` | Additionally enables the cvc5 `parser`. Takes effect only alongside `cvc5` or `cvc5-dynamic`. Alias of `cvc5-parser-1.4.x`. |
+| `cvc5-1.3.x`, `cvc5-dynamic-1.3.x`, `cvc5-parser-1.3.x` | The same for cvc5 1.3.x, through cvc5-rs 0.5, with the `cvc5` module's API as it was before cvc5 1.4.x support. |
 | `finite-set` | Theory of finite sets (`Set` sort and `set.*` operators) and the logics that include it. |
 | `all` | Convenience feature enabling `cnf`, `implicant-generation`, and `finite-set`. |
 
-`cvc5` and `cvc5-dynamic` are mutually exclusive ways of linking the same cvc5 support — enable exactly one. For
-example, to build with dynamically linked cvc5 plus its parser:
+`cvc5` and `cvc5-dynamic` are mutually exclusive ways of linking the same cvc5 support — enable exactly one. The
+cvc5 1.3.x and 1.4.x features are mutually exclusive too, since both link a cvc5 library; enabling both is a compile
+error. If `CVC5_DIR` is set, it must point at a build of the matching cvc5 release. For example, to build with
+dynamically linked cvc5 plus its parser:
 
 ```sh
 cargo build --features cvc5-dynamic,cvc5-parser
