@@ -53,24 +53,19 @@ fn eq<T: PartialEq>(a: &T, b: &T) -> bool {
 }
 
 /// The same term, or alpha-equivalent to it: for results that bind variables the call allocated
-/// fresh (let-introduction, a translated quantifier), whose ids differ from one call to the next.
+/// fresh (a translated quantifier), whose ids differ from one call to the next.
 pub fn same_term(a: &Term, b: &Term) -> bool {
     a == b || a.aeq(b)
 }
 
 pub fn register(r: &mut Registry) {
-    let (d, h, w, l) = (
-        r.depths.clone(),
-        r.heights.clone(),
-        r.widths.clone(),
-        r.levels.clone(),
-    );
+    let (d, h, w) = (r.depths.clone(), r.heights.clone(), r.widths.clone());
     cnf(r, &d, &h, &w);
     implicant(r, &d, &h, &w);
     alpha_eq(r, &d, &h, &w);
     datatypes(r, &d, &h, &w);
     named(r, &d);
-    letintro(r, &d, &h, &w, &l);
+    letintro(r, &d, &h, &w);
     gsubst(r, &d, &h, &w);
     maybe_sort(r, &d);
     tc_sort(r, &d, &h, &w);
@@ -230,23 +225,48 @@ fn named(r: &mut Registry, d: &[usize]) {
         |(c, t), side| side::scan_named(c, t), eq);
 }
 
-// ── letintro.rs: two groups, three and four members ─────────────────────────────
+// ── letintro.rs ──────────────────────────────────────────────────────────────────
 
-fn letintro(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize], l: &[usize]) {
-    let shapes: [(&'static str, &[usize], fn(usize) -> Tm); 5] = [
+fn letintro(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize]) {
+    let shapes: [(&'static str, &[usize], fn(usize) -> Tm); 6] = [
         ("alt_chain", d, |n| {
             let mut c = ctx();
             let t = alt_chain(&mut c, n, false);
             (c, t)
         }),
-        ("shared_levels", l, |n| {
-            let mut c = ctx();
-            let t = shared_levels(&mut c, n);
-            (c, t)
-        }),
         ("forall_chain", d, |n| {
             let (mut c, _) = script("(set-logic ALL)");
             let t = term(&mut c, &forall_chain_src(n));
+            (c, t)
+        }),
+        // quantifiers with patterns, whose variables are renamed in the patterns too
+        ("pattern_chain", d, |n| {
+            let (mut c, _) = script("(set-logic ALL)(declare-fun f (Int) Int)(declare-fun p (Int) Bool)");
+            let mut src = String::new();
+            for i in 0..n.max(1) {
+                src.push_str(&format!("(forall ((x{i} Int)) (! "));
+            }
+            src.push_str("(p x0)");
+            for i in (0..n.max(1)).rev() {
+                src.push_str(&format!(" :pattern ((f x{i}))))"));
+            }
+            let t = term(&mut c, &src);
+            (c, t)
+        }),
+        // each quantifier's body uses the previous variable, and the innermost body shares a term
+        // of its own variable: the binders it depends on form a chain as deep as the term
+        ("dependent_binders", d, |n| {
+            let (mut c, _) = script("(set-logic ALL)(declare-fun f (Int) Int)(declare-fun p (Int) Bool)");
+            let n = n.max(1);
+            let mut src = String::new();
+            for i in 0..n {
+                let prev = i.saturating_sub(1);
+                src.push_str(&format!("(forall ((x{i} Int)) (and (p (f x{prev})) "));
+            }
+            let last = n - 1;
+            src.push_str(&format!("(and (p (f x{last})) (p (f x{last})))"));
+            src.push_str(&"))".repeat(n));
+            let t = term(&mut c, &src);
             (c, t)
         }),
         ("balanced", h, |n| {
@@ -261,23 +281,15 @@ fn letintro(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize], l: &[usize]
         }),
     ];
     for (shape, ps, build) in shapes {
-        // every section, sub-term reference count and level it recorded
-        pair!(r, "letintro.find_sections", shape, ps, build,
-            |(_, t), side| side::find_sections(t), |a, b| a.same(b));
-        // `let_intro` consumes what `find_sections` built for the same term, so that is rebuilt,
-        // untimed, before every call (by the same side)
-        pair_timed!(r, "letintro.let_intro", shape, ps, build,
-            |(c, t), side| {
-                let mut prep = side::find_sections(t);
-                let t0 = Instant::now();
-                let out = side::let_intro(c, t, &mut prep);
-                let dt = t0.elapsed();
-                (dt, out.0)
-            },
-            same_term);
-        // both groups back to back, as `TopoLetIntro::topo_let_intro` runs them
-        pair!(r, "letintro.topo_let_intro", shape, ps, build,
-            |(c, t), side| side::topo_let_intro(c, t), same_term);
+        // the same nodes in the same order, with the same children
+        pair!(r, "letintro.visit", shape, ps, build,
+            |(_, t), side| side::letintro_dag(t), |a, b| a == b);
+        // every local renamed to its own name: the term itself
+        pair!(r, "letintro.rename_locals", shape, ps, build,
+            |(c, t), side| side::letintro_rename(c, t), |a, b| a == b);
+        // each side names from the arena's supply, so the results are alpha-equivalent
+        pair!(r, "letintro.let_intro", shape, ps, build,
+            |(c, t), side| side::letintro(c, t), same_term);
     }
 }
 

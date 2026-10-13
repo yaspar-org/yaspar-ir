@@ -20,7 +20,6 @@
 #   SSBENCH_DEPTHS    chain depths          (default 10,100,1000,10000,100000)
 #   SSBENCH_HEIGHTS   balanced-tree heights (default 4,8,12,16)
 #   SSBENCH_WIDTHS    fan-outs              (default 10,100,1000,10000)
-#   SSBENCH_LEVELS    shared_levels sizes   (default 10,100,1000)
 #   SSBENCH_STACK_MB  stack of the benchmark thread (default 8192)
 #   CVC5=0            leave out the cvc5 cases (default: included when $CVC5_DIR exists)
 #   RESULTS           output directory (default results)
@@ -113,7 +112,6 @@ coverage)
     echo "== coverage run (native side of every case)"
     SSBENCH_FILTER= SSBENCH_SKIP= SSBENCH_MODE=run SSBENCH_SIDE=native SSBENCH_DEPTHS="${SSBENCH_DEPTHS:-10,200}" \
         SSBENCH_HEIGHTS="${SSBENCH_HEIGHTS:-4}" SSBENCH_WIDTHS="${SSBENCH_WIDTHS:-10}" \
-        SSBENCH_LEVELS="${SSBENCH_LEVELS:-10}" \
         cargo llvm-cov run --release --manifest-path runs/harness/Cargo.toml --bin ssbench \
         "${FEATURES[@]}" --dep-coverage yaspar-ir --json --output-path "$RESULTS/coverage.json" \
         > "$RESULTS/coverage.log" 2>&1 \

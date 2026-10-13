@@ -71,21 +71,6 @@ struct RenameEnv<'a, E> {
     cache: HashMap<Term, Term>,
 }
 
-fn find_prefix(sym: &str) -> &str {
-    let mut cutoff = sym.len();
-    for (i, c) in sym.char_indices().rev() {
-        if c.is_ascii_digit() {
-            cutoff = i;
-        } else if c == '-' {
-            cutoff = i;
-            break;
-        } else {
-            break;
-        }
-    }
-    &sym[..cutoff]
-}
-
 impl<'a, E> RenameEnv<'a, E>
 where
     E: HasArena,
@@ -102,8 +87,7 @@ where
     ///
     /// A fresh name is always minted, so no binder keeps the name it came in with.
     fn fresh_name(&mut self, name: &Str) -> Str {
-        let prefix = find_prefix(name);
-        self.env.fresh_var(prefix)
+        self.env.fresh_rename(name)
     }
 
     /// Look up the name chosen for the variable `id`, innermost scope first.

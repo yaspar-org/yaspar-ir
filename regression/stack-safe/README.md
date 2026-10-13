@@ -66,7 +66,7 @@ Each entry point is written once and compiled twice:
 
 Where yaspar-ir has a public entry point, `stacksafe` calls that public API instead:
 
-- `aeq`, `gsubst_with_names`, `maybe_sort`, `topo_let_intro`, `type_check`, `eval`;
+- `aeq`, `gsubst_with_names`, `maybe_sort`, `type_check`, `eval`;
 - printing (`to_string()`);
 - the cvc5 conversions.
 
@@ -84,9 +84,8 @@ every result is compared with the first stacksafe result:
 
 - `==` for most results: both sides allocate into one hash-consed context, so equal terms are the
   same term;
-- `==` or else alpha-equivalence for results that bind fresh variables (let-introduction, a
-  translated quantifier);
-- section by section for `find_sections`;
+- `==` or else alpha-equivalence for results that bind fresh variables (a translated
+  quantifier);
 - translated back and compared in yaspar-ir for the forward sort translation, because each side
   declares its sorts into a solver of its own.
 
@@ -129,8 +128,7 @@ The shapes (`harness/src/inputs.rs`):
   - binders (`forall`, `let`, `match`);
   - indexed operators, and sorts;
 - **balanced** trees, height 4 … 16;
-- **wide** nodes, 10 … 10 000 children;
-- **shared_levels**, 10 … 1000: nested shared sub-terms, one let-introduction level each.
+- **wide** nodes, 10 … 10 000 children.
 
 Everything runs on a thread with an 8 GiB stack (`SSBENCH_STACK_MB`), so native recursion can be
 timed at depth instead of overflowing.

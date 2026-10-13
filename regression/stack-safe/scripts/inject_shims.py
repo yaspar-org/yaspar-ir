@@ -25,11 +25,39 @@ import sys
 MARK = "// ---- injected by regression/stack-safe/scripts/inject_shims.py ----"
 
 
-def shim(names: list[str], body: str, extra: str = "") -> str:
-    """`body` twice: with `names` as the rewritten functions, and as their `_orig` copies."""
+def shim(names: list[str], body: str, extra: str = "", methods: list[str] = ()) -> str:
+    """`body` twice: with `names` as the rewritten functions, and as their `_orig` copies.
+
+    A `use` cannot alias a method, so for each of `methods` the native copy of `body` calls
+    `.m_orig(` where the rewritten one calls `.m(`; the two copies are then written out in full
+    rather than through a macro."""
     aliases = "\n".join(
         f"                #[allow(unused_imports)] use super::super::{n}_orig as {n};" for n in names
     )
+    if methods:
+        native = body
+        for m in methods:
+            native = native.replace(f".{m}(", f".{m}_orig(")
+        return f"""
+#[doc(hidden)]
+#[allow(dead_code, private_interfaces, clippy::all)]
+pub(crate) mod __ssbench {{
+    #[allow(unused_imports)]
+    use super::*;
+    pub(crate) mod stacksafe {{
+        #[allow(unused_imports)]
+        use super::super::*;
+{body}
+    }}
+    pub(crate) mod native {{
+        #[allow(unused_imports)]
+        use super::super::*;
+{aliases}
+{native}
+    }}
+{extra}
+}}
+"""
     return f"""
 #[doc(hidden)]
 #[allow(dead_code, private_interfaces, clippy::all)]
@@ -127,53 +155,68 @@ pub(crate) mod __ssbench {
     }
 }
 """,
-    "src/ast/letintro.rs": shim(["find_sections_of", "let_intro_of"], """
-    use super::Prepared;
-    /// The first half of `topo_let_intro`.
-    pub(crate) fn find_sections(t: &Term) -> Prepared {
-        let cell = Rc::new(RefCell::new(Section::new()));
-        let mut map = HashMap::new();
-        let _ = find_sections_of(t, &cell, &mut map, false);
-        Prepared { cell, map }
+    "src/ast/letintro.rs": shim(["rename_locals", "binders_used", "printed", "layer", "wrap"], """
+    /// The DAG of `t`, in post-order: each node and its children.
+    pub(crate) fn dag_of(t: &Term) -> Vec<(Term, Vec<Term>)> {
+        let mut dag = Dag::default();
+        dag.visit(t, 0);
+        dag.order
+            .iter()
+            .map(|n| ((*n).clone(), dag.kids[n].iter().map(|c| (*c).clone()).collect()))
+            .collect()
     }
-    /// The second half, on what `find_sections` produced for the same term.
-    pub(crate) fn let_intro<E: HasArenaAlt>(t: &Term, p: &mut Prepared, env: &mut E) -> (Term, HashMap<Term, Local>) {
-        let mut vars = HashMap::new();
-        let r = let_intro_of(t, p.cell.clone(), &mut p.map, &mut vars, env);
-        (r, vars)
+    /// `rename_locals` over all of `t`, each bound variable renamed to its own name.
+    pub(crate) fn rename_all(t: &Term, arena: &mut Arena) -> Term {
+        let mut dag = Dag::default();
+        dag.visit(t, 0);
+        let mut names = HashMap::new();
+        for &n in &dag.order {
+            for (arm, _) in bound_ids(n) {
+                for (name, id) in bound_vars(n, arm) {
+                    names.insert(id, name);
+                }
+            }
+        }
+        rename_locals(t, &names, arena)
     }
-    /// Both halves, as `TopoLetIntro::topo_let_intro` runs them.
-    pub(crate) fn topo_let_intro<E: HasArenaAlt>(t: &Term, env: &mut E) -> Term {
-        let mut p = find_sections(t);
-        let mut vars = HashMap::new();
-        let_intro_of(t, p.cell.clone(), &mut p.map, &mut vars, env)
+    /// `let_intro`, its steps written out so that each recursion runs on this side.
+    pub(crate) fn let_intro(root: &Term, arena: &mut Arena) -> Term {
+        let mut dag = Dag::default();
+        dag.visit(root, 0);
+        let mut binder_of = HashMap::new();
+        for &t in &dag.order {
+            for (arm, ids) in bound_ids(t) {
+                for id in ids {
+                    binder_of.insert(id, Binder { node: t, arm });
+                }
+            }
+        }
+        let mut used = HashMap::new();
+        binders_used(root, &dag, &binder_of, &mut used);
+        let sc = Scopes { dag: &dag, used };
+        let mut parents: HashMap<&Term, Vec<&Term>> = HashMap::new();
+        for (&p, cs) in &dag.kids {
+            for &c in cs {
+                parents.entry(c).or_default().push(p);
+            }
+        }
+        let sh = Sharing { root, parents };
+        let mut pted = HashMap::new();
+        let mut bound = HashSet::new();
+        for &t in &dag.order {
+            let p = printed(t, &sh, &mut pted);
+            if is_bound(t, p, root) {
+                bound.insert(t);
+            }
+        }
+        let mut layers = HashMap::new();
+        layer(root, &dag, &bound, &mut layers);
+        let bindings = bindings_of(&dag, &sc, &bound, &layers);
+        let names = binder_names(&dag, arena);
+        let cx = Builder { dag: &dag, bindings: &bindings, names: &names };
+        wrap(None, root, &cx, &mut Built::default(), arena)
     }
-""", extra="""
-    /// What `find_sections` leaves for `let_intro`, from either side.
-    pub struct Prepared {
-        pub(crate) cell: SectionCell,
-        pub(crate) map: HashMap<Term, SectionCell>,
-    }
-
-    /// Whether two runs of `find_sections` recorded the same sections: the same sub-terms with the
-    /// same reference counts and levels, the same binders, and the same bound variables.
-    pub(crate) fn same_sections(a: &SectionCell, b: &SectionCell) -> bool {
-        let (a, b) = (a.borrow(), b.borrow());
-        a.level == b.level
-            && a.bound_variables == b.bound_variables
-            && a.let_hierarchy.len() == b.let_hierarchy.len()
-            && a.let_hierarchy.iter().all(|(t, r)| {
-                b.let_hierarchy
-                    .get(t)
-                    .is_some_and(|s| s.referenced == r.referenced && s.level == r.level)
-            })
-    }
-    pub(crate) fn same_prepared(a: &Prepared, b: &Prepared) -> bool {
-        same_sections(&a.cell, &b.cell)
-            && a.map.len() == b.map.len()
-            && a.map.iter().all(|(t, c)| b.map.get(t).is_some_and(|d| same_sections(c, d)))
-    }
-"""),
+""", methods=["visit"]),
     "src/ast/gsubst.rs": shim(["gsubst_term"], """
     /// `gsubst_with_names` on one term: a fresh cache of expanded definitions on every call.
     pub(crate) fn gsubst(ctx: &mut Context, names: &HashSet<Str>, t: &Term) -> Term {
@@ -282,16 +325,6 @@ use std::collections::{HashMap, HashSet};
 /// answer, kept only so that dropping it happens outside the timed region.
 pub struct Opaque<T>(#[allow(dead_code)] T);
 
-/// What `find_sections` recorded, for `let_intro` and for comparing two runs.
-pub struct LetIntroPrepared(crate::ast::letintro::__ssbench::Prepared);
-
-impl LetIntroPrepared {
-    /// Whether two runs recorded the same sections.
-    pub fn same(&self, other: &Self) -> bool {
-        crate::ast::letintro::__ssbench::same_prepared(&self.0, &other.0)
-    }
-}
-
 pub fn empty_subst(vars: &[Str]) -> SortSubst {
     crate::raw::tc::unif::empty_subst(vars)
 }
@@ -324,12 +357,14 @@ macro_rules! side {
             pub fn scan_named(ctx: &mut Context, t: &Term) -> (bool, HashMap<Str, Term>) {
                 crate::ast::__ssbench_checked::$side::scan(ctx, t)
             }
-            pub fn find_sections(t: &Term) -> LetIntroPrepared {
-                LetIntroPrepared(crate::ast::letintro::__ssbench::$side::find_sections(t))
+            pub fn letintro_dag(t: &Term) -> Vec<(Term, Vec<Term>)> {
+                crate::ast::letintro::__ssbench::$side::dag_of(t)
             }
-            pub fn let_intro(ctx: &mut Context, t: &Term, p: &mut LetIntroPrepared) -> (Term, Opaque<HashMap<Term, crate::ast::Local>>) {
-                let (r, vars) = crate::ast::letintro::__ssbench::$side::let_intro(t, &mut p.0, &mut ctx.arena);
-                (r, Opaque(vars))
+            pub fn letintro_rename(ctx: &mut Context, t: &Term) -> Term {
+                crate::ast::letintro::__ssbench::$side::rename_all(t, &mut ctx.arena)
+            }
+            pub fn letintro(ctx: &mut Context, t: &Term) -> Term {
+                crate::ast::letintro::__ssbench::$side::let_intro(t, &mut ctx.arena)
             }
             pub fn sort_unification(subst: &mut SortSubst, expected: &Sort, ground: &Sort) -> Result<bool, String> {
                 crate::raw::tc::unif::__ssbench::$side::unify(subst, expected, ground)
@@ -349,14 +384,10 @@ macro_rules! side {
 
 // the rewritten functions, through yaspar-ir's own public entry points where there are any
 side!(stacksafe, {
-    use crate::ast::letintro::TopoLetIntro;
     use crate::ast::{AlphaEquiv, FetchSort, GlobalSubst, Typecheck};
 
     pub fn aeq(a: &Term, b: &Term, permissive: bool) -> bool {
         if permissive { a.aeq_permissive(b) } else { a.aeq(b) }
-    }
-    pub fn topo_let_intro(ctx: &mut Context, t: &Term) -> Term {
-        t.topo_let_intro(&mut ctx.arena)
     }
     pub fn gsubst(ctx: &mut Context, names: &HashSet<Str>, t: &Term) -> Term {
         t.gsubst_with_names(names, ctx)
@@ -398,9 +429,6 @@ side!(stacksafe, {
 side!(native, {
     pub fn aeq(a: &Term, b: &Term, permissive: bool) -> bool {
         crate::ast::alpha_eq::__ssbench::native::aeq(a, b, permissive)
-    }
-    pub fn topo_let_intro(ctx: &mut Context, t: &Term) -> Term {
-        crate::ast::letintro::__ssbench::native::topo_let_intro(t, &mut ctx.arena)
     }
     pub fn gsubst(ctx: &mut Context, names: &HashSet<Str>, t: &Term) -> Term {
         crate::ast::gsubst::__ssbench::native::gsubst(ctx, names, t)
