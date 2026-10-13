@@ -233,6 +233,21 @@ pub trait FlatConnectivesExt: TermAllocator<Str, Sort, Term> {
 
 impl<X> FlatConnectivesExt for X where X: TermAllocator<Str, Sort, Term> {}
 
+fn find_prefix(sym: &str) -> &str {
+    let mut cutoff = sym.len();
+    for (i, c) in sym.char_indices().rev() {
+        if c.is_ascii_digit() {
+            cutoff = i;
+        } else if c == '-' {
+            cutoff = i;
+            break;
+        } else {
+            break;
+        }
+    }
+    &sym[..cutoff]
+}
+
 /// A trait for fresh variable generator
 pub trait FreshVar {
     type Str;
@@ -243,6 +258,11 @@ pub trait FreshVar {
     /// Generate a fresh variable with "x" as the prefix
     fn fresh_x(&mut self) -> Self::Str {
         self.fresh_var("x")
+    }
+
+    fn fresh_rename(&mut self, old_name: &str) -> Self::Str {
+        let prefix = find_prefix(old_name);
+        self.fresh_var(prefix)
     }
 }
 

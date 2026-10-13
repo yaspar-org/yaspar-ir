@@ -35,7 +35,6 @@ pub struct Registry {
     pub depths: Vec<usize>,
     pub heights: Vec<usize>,
     pub widths: Vec<usize>,
-    pub levels: Vec<usize>,
     cases: usize,
     failures: usize,
 }
@@ -102,8 +101,6 @@ impl Registry {
             heights: list_env("SSBENCH_HEIGHTS", &[4, 8, 12, 16]),
             // One node with this many children: recursion from inside a loop, depth 2.
             widths: list_env("SSBENCH_WIDTHS", &[10, 100, 1_000, 10_000]),
-            // For shapes whose work is quadratic in their nesting (see `inputs::shared_levels`).
-            levels: list_env("SSBENCH_LEVELS", &[10, 100, 1_000]),
             cases: 0,
             failures: 0,
         }

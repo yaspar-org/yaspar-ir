@@ -192,21 +192,6 @@ pub fn named_chain(ctx: &mut Context, depth: usize) -> Term {
     t
 }
 
-/// `(and (= u1 u1) (= u2 u2) … )` where `u{i} = (h u{i-1})`: every `u{i}` is shared, and each
-/// depends on the previous one, so a let-introduction binds `depth` dependency levels, one
-/// inside the next. Walking it costs O(depth^2), hence the separate (smaller) parameter list.
-pub fn shared_levels(ctx: &mut Context, depth: usize) -> Term {
-    let int = ctx.int_sort();
-    let h = ctx.allocate_symbol("h");
-    let mut u = ivar(ctx, "x");
-    let mut eqs = Vec::with_capacity(depth);
-    for _ in 0..depth {
-        u = ctx.app(QualifiedIdentifier::simple(h.clone()), vec![u], Some(int.clone()));
-        eqs.push(ctx.eq(u.clone(), u.clone()));
-    }
-    ctx.and(eqs)
-}
-
 // ── Binders (parsed, so that local variables are real) ──────────────────────────
 
 /// `(forall ((x0 Int)) (forall ((x1 Int)) (… (= x0 x{d-1}))))`.
