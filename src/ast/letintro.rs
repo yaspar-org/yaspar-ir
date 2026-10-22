@@ -44,13 +44,16 @@
 //!
 //! The top-level API is exposed by the trait [TopoLetIntro].
 
-use crate::allocator::{LocalVarAllocator, TermAllocator};
+use crate::allocator::{LocalVarAllocator, StrAllocator, TermAllocator};
 use crate::ast::alg::VarBinding;
-use crate::ast::{ATerm, FetchSort, FreshVar, HasArenaAlt, Local, PatternArm, Sort, Str, Term};
+use crate::ast::{
+    ATerm, Arena, Attribute, FetchSort, HasArena, HasArenaAlt, LetElim, Local, Pattern, PatternArm,
+    Sort, Str, Term,
+};
 use crate::traits::Repr;
 use std::cell::RefCell;
 use std::cmp::max;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use yaspar_macros::stack_safe;
 
@@ -61,6 +64,8 @@ struct SecRecord {
     /// The level of let-bindings to appear for a given term;
     /// this level is the smallest possible level
     level: usize,
+    /// When the term was first referenced in its section, which orders bindings of one level
+    order: usize,
 }
 
 /// The algorithm is organized to return a tree, where a branch is created for each binder. A [Section] stores
@@ -77,8 +82,23 @@ struct Section {
     let_hierarchy: HashMap<Term, SecRecord>,
     /// The level in a tree
     level: usize,
+    /// Distinguishes this section from all others in one walk; the root is 0
+    id: usize,
     /// Parent node
     parent: Option<SectionCell>,
+    /// State of the whole walk, kept by the root only
+    root: RootState,
+}
+
+/// What the root [Section] keeps for the whole walk
+#[derive(Debug, Clone, Default)]
+struct RootState {
+    /// The id of the next [Section] to create
+    next_section: usize,
+    /// Symbols occurring in the term, which a let-bound variable must not shadow
+    used_names: HashSet<String>,
+    /// The suffix of the next let-bound variable to try
+    next_name: usize,
 }
 
 type SectionCell = Rc<RefCell<Section>>;
@@ -89,34 +109,56 @@ impl Section {
             bound_variables: vec![],
             let_hierarchy: Default::default(),
             level: 0,
+            id: 0,
             parent: None,
+            root: RootState {
+                next_section: 1,
+                ..Default::default()
+            },
         }
     }
 
     fn new_with_bound_variables(bound_variables: &[Str], parent: SectionCell) -> Self {
         let l = parent.borrow().level;
+        let id = {
+            let root = find_root(&parent);
+            let mut root = root.borrow_mut();
+            let id = root.root.next_section;
+            root.root.next_section += 1;
+            id
+        };
         Self {
             bound_variables: bound_variables.to_vec(),
             let_hierarchy: Default::default(),
             level: l + 1,
+            id,
             parent: Some(parent),
+            root: Default::default(),
         }
     }
 
     fn get_let_bindings(&self) -> Vec<Vec<Term>> {
-        let mut r = vec![];
-        for (t, lvl) in self
+        let mut r: Vec<Vec<(usize, Term)>> = vec![];
+        for (t, lvl, order) in self
             .let_hierarchy
             .iter()
             .filter(|(_, v)| v.referenced > 1)
-            .map(|(k, v)| (k.clone(), v.level))
+            .map(|(k, v)| (k.clone(), v.level, v.order))
         {
             while r.len() <= lvl {
                 r.push(vec![]);
             }
-            r[lvl].push(t);
+            r[lvl].push((order, t));
         }
-        r
+        // a level whose terms are all referenced once has nothing to bind
+        r.retain(|ts| !ts.is_empty());
+        // the map's iteration order is arbitrary; bind in the order the walk met the terms
+        r.into_iter()
+            .map(|mut ts| {
+                ts.sort_by_key(|(order, _)| *order);
+                ts.into_iter().map(|(_, t)| t).collect()
+            })
+            .collect()
     }
 }
 
@@ -155,6 +197,78 @@ fn find_root(cell: &SectionCell) -> SectionCell {
             Some(p) => it = p,
             None => return it,
         }
+    }
+}
+
+/// A name for a let-bound variable that no symbol of the term uses, nor an earlier let-bound
+/// variable. Numbered per walk from `x-0`, so the same term always prints the same.
+fn fresh_let_name(cell: &SectionCell, arena: &mut Arena) -> Str {
+    let root = find_root(cell);
+    let mut root = root.borrow_mut();
+    let st = &mut root.root;
+    loop {
+        let candidate = format!("x-{}", st.next_name);
+        st.next_name += 1;
+        if st.used_names.insert(candidate.clone()) {
+            return arena.allocate_string(candidate);
+        }
+    }
+}
+
+/// Every symbol occurring in `t`, attributes included
+///
+/// A worklist over the distinct sub-terms rather than a recursion, so neither the term's depth
+/// nor its tree size matters.
+fn used_symbols(t: &Term) -> HashSet<String> {
+    let mut used = HashSet::new();
+    let mut seen: HashSet<Term> = HashSet::new();
+    let mut stack = vec![t.clone()];
+    while let Some(t) = stack.pop() {
+        if !seen.insert(t.clone()) {
+            continue;
+        }
+        match t.repr() {
+            ATerm::Global(qid, _) | ATerm::App(qid, _, _) => {
+                used.insert(qid.0.symbol.to_string());
+            }
+            ATerm::Local(l) => {
+                used.insert(l.symbol.to_string());
+            }
+            ATerm::Let(vs, _) => used.extend(vs.iter().map(|v| v.0.to_string())),
+            ATerm::Exists(vs, _) | ATerm::Forall(vs, _) => {
+                used.extend(vs.iter().map(|v| v.0.to_string()))
+            }
+            ATerm::Matching(_, arms) => {
+                for arm in arms {
+                    match &arm.pattern {
+                        Pattern::Ctor(c) | Pattern::Applied { ctor: c, .. } => {
+                            used.insert(c.to_string());
+                        }
+                        Pattern::Wildcard(_) => {}
+                    }
+                    used.extend(arm.pattern.variables().into_iter().map(|v| v.to_string()));
+                }
+            }
+            ATerm::Annotated(_, ans) => {
+                for a in ans {
+                    if let Attribute::Named(n) | Attribute::Symbol(_, n) = a {
+                        used.insert(n.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+        stack.extend(t.repr().sub_terms().cloned());
+    }
+    used
+}
+
+/// Lends an [Arena] to an API that asks for [HasArena]
+struct ArenaRef<'a>(&'a mut Arena);
+
+impl HasArena for ArenaRef<'_> {
+    fn arena(&mut self) -> &mut Arena {
+        self.0
     }
 }
 
@@ -209,12 +323,74 @@ fn glbs(rs: &[FindResult]) -> Option<FindResult> {
     }
 }
 
+/// A [None] stays: a term depends on a section only if one of its sub-terms does
 fn incr_opt(o: Option<usize>) -> Option<usize> {
-    o.map(|n| n + 1).or(Some(0))
+    o.map(|n| n + 1)
+}
+
+/// Remove the section of a binder from the result of its body, if the body uses the bound
+/// variables, together with the sections it then no longer depends on. The term lands in the
+/// innermost section it depends on, so the result must end there.
+fn leave_section(r: &mut FindResult, sub_level: usize) {
+    if let Some((c, _)) = r.last()
+        && c.borrow().level == sub_level
+    {
+        r.pop();
+    }
+    while let Some((_, None)) = r.last() {
+        r.pop();
+    }
 }
 
 fn incr_result(f: FindResult) -> FindResult {
     f.into_iter().map(|(c, lvl)| (c, incr_opt(lvl))).collect()
+}
+
+/// The [FindResult] of each term visited so far, keyed by the term and the id of the [Section] it
+/// lands in (the cell of the last element of the result).
+///
+/// A term is walked once per section it lands in, rather than once per occurrence, so the walk
+/// follows the DAG of the term rather than its tree. A later occurrence is looked up along the
+/// chain of its `tail`, since the section a term lands in is always an ancestor of the `tail`.
+struct Memo {
+    results: HashMap<(Term, usize), FindResult>,
+}
+
+impl Memo {
+    fn new() -> Self {
+        Self {
+            results: HashMap::new(),
+        }
+    }
+
+    fn lookup(&self, this: &Term, tail: &SectionCell) -> Option<FindResult> {
+        let mut it = tail.clone();
+        loop {
+            let id = it.borrow().id;
+            if let Some(r) = self.results.get(&(this.clone(), id)) {
+                return Some(r.clone());
+            }
+            let parent = it.borrow().parent.clone();
+            it = parent?;
+        }
+    }
+}
+
+/// Count one more reference to `this` in the section it lands in
+fn record_reference(this: &Term, r: &FindResult) {
+    if let Some((r, Some(lvl))) = r.last() {
+        let mut b = r.borrow_mut();
+        let order = b.let_hierarchy.len();
+        let rec = b
+            .let_hierarchy
+            .entry(this.clone())
+            .or_insert_with(|| SecRecord {
+                referenced: 0,
+                level: *lvl,
+                order,
+            });
+        rec.referenced += 1;
+    }
 }
 
 /// The trait that implements the algorithm that builds up the tree of [Section]s
@@ -238,7 +414,8 @@ impl FindSectionsImpl for Term {
         binders: &mut HashMap<Term, SectionCell>,
         insert: bool,
     ) -> FindResult {
-        find_sections_of(self, tail, binders, insert)
+        let mut memo = Memo::new();
+        find_sections_of(self, tail, binders, &mut memo, insert)
     }
 }
 
@@ -267,16 +444,33 @@ mod sections {
         this: &Term,
         tail: &SectionCell,
         binders: &mut HashMap<Term, SectionCell>,
+        memo: &mut Memo,
         insert: bool,
     ) -> FindResult {
+        match this.repr() {
+            ATerm::Constant(_, _) | ATerm::Global(_, _) => return vec![],
+            // an annotated term is never bound: a `:pattern` must stay directly under its
+            // quantifier. It is walked at each occurrence, so its sub-term is referenced at each
+            // occurrence too and gets bound in its place when it is shared.
+            ATerm::Annotated(t, _) => return find_sections_of(t, tail, binders, memo, true),
+            _ => {}
+        }
+        // a term already walked in this section is only referenced once more; its sub-terms have
+        // been counted by its first walk
+        if let Some(r) = memo.lookup(this, tail) {
+            if insert {
+                record_reference(this, &r);
+            }
+            return r;
+        }
         let mut insert = insert;
         let r: FindResult = match this.repr() {
             ATerm::Constant(_, _) => vec![],
             ATerm::Global(_, _) => vec![],
             ATerm::Local(id) => {
-                // first find the binding section
+                // first find the binding section, the only one the variable depends on
                 let cell = find_bound_section(tail, id.symbol.as_str()).unwrap();
-                let mut acc = vec![(cell.clone(), None)];
+                let mut acc = vec![(cell.clone(), Some(0))];
                 let mut it = cell;
                 // then we collect all the parent sections
                 loop {
@@ -294,36 +488,44 @@ mod sections {
             }
             ATerm::Let(_, _) => unreachable!(), // assume let elimination
             ATerm::Exists(vs, t) | ATerm::Forall(vs, t) => {
-                find_sections_binder(vs, t, tail, binders)
+                find_sections_binder(vs, t, tail, binders, memo)
             }
-            ATerm::Annotated(t, _) => find_sections_of(t, tail, binders, insert),
+            ATerm::Annotated(_, _) => unreachable!(), // handled above
             ATerm::Eq(a, b) => {
-                let ra = find_sections_of(a, tail, binders, true);
-                let rb = find_sections_of(b, tail, binders, true);
-                glb(&ra, &rb)
+                let ra = find_sections_of(a, tail, binders, memo, true);
+                let rb = find_sections_of(b, tail, binders, memo, true);
+                combine(vec![ra, rb], tail)
             }
             ATerm::App(_, ts, _)
             | ATerm::Distinct(ts)
             | ATerm::And(ts)
             | ATerm::Or(ts)
-            | ATerm::Xor(ts) => find_sections_slice(ts, tail, binders),
+            | ATerm::Xor(ts) => find_sections_slice(ts, tail, binders, memo),
             ATerm::Implies(a, b) => {
-                let ra = find_sections_slice(a, tail, binders);
-                let rb = find_sections_of(b, tail, binders, true);
-                glb(&ra, &rb)
+                let mut res: Vec<FindResult> = Vec::with_capacity(a.len() + 1);
+                let mut i = 0usize;
+                while i < a.len() {
+                    res.push(find_sections_of(&a[i], tail, binders, memo, true));
+                    i += 1;
+                }
+                res.push(find_sections_of(b, tail, binders, memo, true));
+                combine(res, tail)
             }
-            ATerm::Not(t) => find_sections_of(t, tail, binders, true),
+            ATerm::Not(t) => {
+                let rt = find_sections_of(t, tail, binders, memo, true);
+                combine(vec![rt], tail)
+            }
             ATerm::Ite(b, t, e) => {
                 // the three branches are combined exactly as a slice's elements are, but naming
                 // them here keeps the built `[b, t, e]` out of the recursive call.
-                let rb = find_sections_of(b, tail, binders, true);
-                let rt = find_sections_of(t, tail, binders, true);
-                let re = find_sections_of(e, tail, binders, true);
+                let rb = find_sections_of(b, tail, binders, memo, true);
+                let rt = find_sections_of(t, tail, binders, memo, true);
+                let re = find_sections_of(e, tail, binders, memo, true);
                 let res: Vec<FindResult> = vec![rb, rt, re];
                 combine(res, tail)
             }
             ATerm::Matching(t, cases) => {
-                let tr = find_sections_of(t, tail, binders, true);
+                let tr = find_sections_of(t, tail, binders, memo, true);
                 let mut vc: Vec<FindResult> = vec![tr];
                 let arms: &[PatternArm] = cases;
                 let mut i = 0usize;
@@ -339,32 +541,24 @@ mod sections {
                             .collect::<Vec<_>>(),
                     );
                     binders.insert(case.body.clone(), sub.clone());
-                    let mut arm_r = find_sections_of(&case.body, tail, binders, true);
-                    if let Some((c, _)) = arm_r.last()
-                        && c.borrow().level == sub.borrow().level
-                    {
-                        // get rid of the tail if bound variables are used.
-                        // in this case, we don't want glbs to return the Section under binder
-                        arm_r.pop();
-                    }
+                    // read before the recursion, which `sub` is lent to, as in a quantifier
+                    let sub_level = sub.borrow().level;
+                    let mut arm_r = find_sections_of(&case.body, &sub, binders, memo, true);
+                    // we don't want glbs to return the Section under binder
+                    leave_section(&mut arm_r, sub_level);
                     vc.push(arm_r);
                     i += 1;
                 }
-                // unwrap here because we know it is non-empty
-                glbs(&vc).unwrap()
+                combine(vc, tail)
             }
         };
 
-        if insert && let Some((r, Some(lvl))) = r.last() {
-            let mut b = r.borrow_mut();
-            let rec = b
-                .let_hierarchy
-                .entry(this.clone())
-                .or_insert_with(|| SecRecord {
-                    referenced: 0,
-                    level: *lvl,
-                });
-            rec.referenced += 1;
+        if insert {
+            record_reference(this, &r);
+        }
+        if let Some((c, _)) = r.last() {
+            let id = c.borrow().id;
+            memo.results.insert((this.clone(), id), r.clone());
         }
 
         r
@@ -374,11 +568,12 @@ mod sections {
         ts: &[Term],
         tail: &SectionCell,
         binders: &mut HashMap<Term, SectionCell>,
+        memo: &mut Memo,
     ) -> FindResult {
         let mut res: Vec<FindResult> = Vec::with_capacity(ts.len());
         let mut i = 0usize;
         while i < ts.len() {
-            res.push(find_sections_of(&ts[i], tail, binders, true));
+            res.push(find_sections_of(&ts[i], tail, binders, memo, true));
             i += 1;
         }
         combine(res, tail)
@@ -392,6 +587,7 @@ mod sections {
         t: &Term,
         tail: &SectionCell,
         binders: &mut HashMap<Term, SectionCell>,
+        memo: &mut Memo,
     ) -> FindResult {
         let mut names: Vec<Str> = Vec::with_capacity(vs.len());
         let mut i = 0usize;
@@ -404,13 +600,11 @@ mod sections {
         // Read before the recursion: `sub` is lent to it, and a section's level never changes once
         // it is built, so reading it early is the same answer.
         let sub_level = sub.borrow().level;
-        let mut r = find_sections_of(t, &sub, binders, true);
-        if let Some((c, _)) = r.last()
-            && c.borrow().level == sub_level
-        {
-            r.pop();
-        }
-        r
+        let mut r = find_sections_of(t, &sub, binders, memo, true);
+        leave_section(&mut r, sub_level);
+        // the binder sits one level above its body, which lands in an outer section when it uses
+        // none of the bound variables
+        combine(vec![r], tail)
     }
 }
 
@@ -439,7 +633,7 @@ where
         vars: &mut HashMap<Term, Local>,
         env: &mut E,
     ) -> Self {
-        introduce::let_intro_of(self, cell, binders, vars, env)
+        introduce::let_intro_scope(self, cell, binders, vars, env)
     }
 }
 
@@ -489,17 +683,15 @@ mod introduce {
             }
             ATerm::Let(_, _) => unreachable!(),
             ATerm::Exists(vs, t) => {
-                let sub = binders.get(t).unwrap().clone();
-                let nt = let_intro_of(t, sub, binders, vars, env);
+                let nt = let_intro_quantifier_body(t, binders, vars, env);
                 env.arena_alt().exists(vs.clone(), nt)
             }
             ATerm::Forall(vs, t) => {
-                let sub = binders.get(t).unwrap().clone();
-                let nt = let_intro_of(t, sub, binders, vars, env);
+                let nt = let_intro_quantifier_body(t, binders, vars, env);
                 env.arena_alt().forall(vs.clone(), nt)
             }
             ATerm::Annotated(t, ans) => {
-                let nt = let_intro_body_of(t, cell, binders, vars, top, env);
+                let nt = let_intro_body_of(t, cell, binders, vars, false, env);
                 env.arena_alt().annotated(nt, ans.clone())
             }
             ATerm::Eq(a, b) => {
@@ -545,7 +737,7 @@ mod introduce {
                 let mut i = 0usize;
                 while i < arms.len() {
                     let sub = binders.get(&arms[i].body).unwrap().clone();
-                    let nbody = let_intro_of(&arms[i].body, sub, binders, vars, env);
+                    let nbody = let_intro_scope(&arms[i].body, sub, binders, vars, env);
                     let ncase = PatternArm {
                         pattern: arms[i].pattern.clone(),
                         body: nbody,
@@ -587,6 +779,41 @@ mod introduce {
         out
     }
 
+    /// The body of a quantifier. An annotation on it (e.g. `:pattern`) must stay directly under
+    /// the quantifier, so the lets go inside it.
+    pub(super) fn let_intro_quantifier_body<E>(
+        t: &Term,
+        binders: &mut HashMap<Term, SectionCell>,
+        vars: &mut HashMap<Term, Local>,
+        env: &mut E,
+    ) -> Term
+    where
+        E: HasArenaAlt,
+    {
+        let sub = binders.get(t).unwrap().clone();
+        let_intro_scope(t, sub, binders, vars, env)
+    }
+
+    /// The lets of `cell` around `t`, inside `t`'s annotation if it has one: an assertion's
+    /// `:named` and a quantifier's `:pattern` both stay outermost.
+    pub(super) fn let_intro_scope<E>(
+        t: &Term,
+        cell: SectionCell,
+        binders: &mut HashMap<Term, SectionCell>,
+        vars: &mut HashMap<Term, Local>,
+        env: &mut E,
+    ) -> Term
+    where
+        E: HasArenaAlt,
+    {
+        if let ATerm::Annotated(inner, ans) = t.repr() {
+            let ni = let_intro_of(inner, cell, binders, vars, env);
+            env.arena_alt().annotated(ni, ans.clone())
+        } else {
+            let_intro_of(t, cell, binders, vars, env)
+        }
+    }
+
     pub(super) fn let_intro_of<E>(
         this: &Term,
         cell: SectionCell,
@@ -615,7 +842,9 @@ mod introduce {
         E: HasArenaAlt,
     {
         if i >= bindings.len() {
-            let_intro_body_of(t, cell, binders, vars, true, env)
+            // not `top`: a scope's body is itself bound in an outer section when it uses none of
+            // the scope's variables and is shared
+            let_intro_body_of(t, cell, binders, vars, false, env)
         } else {
             let mut vs = vec![];
             let mut k = 0usize;
@@ -624,7 +853,7 @@ mod introduce {
                 // term is a handle, so the clone costs nothing.
                 let bt: Term = bindings[i][k].clone();
                 let id = env.arena_alt().new_local();
-                let symbol = env.arena_alt().fresh_x();
+                let symbol = fresh_let_name(&cell, env.arena_alt());
                 let sort = bt.get_sort(env);
                 let nt = let_intro_body_of(&bt, cell.clone(), binders, vars, true, env);
                 vs.push(VarBinding(symbol.clone(), id, nt.clone()));
@@ -650,11 +879,14 @@ where
     E: HasArenaAlt,
 {
     fn topo_let_intro(&self, env: &mut E) -> Self {
+        // the walk assumes no lets; eliminating them leaves a let-free term as it is
+        let this = self.let_elim(&mut ArenaRef(env.arena_alt()));
         let cell = Rc::new(RefCell::new(Section::new()));
+        cell.borrow_mut().root.used_names = used_symbols(&this);
         let mut map = HashMap::new();
-        let _ = self.find_sections(&cell, &mut map, false);
+        let _ = this.find_sections(&cell, &mut map, false);
         let mut vars = HashMap::new();
-        self.let_intro(cell, &mut map, &mut vars, env)
+        this.let_intro(cell, &mut map, &mut vars, env)
     }
 
     fn topo_print(&self, env: &mut E) -> String {
@@ -664,8 +896,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::allocator::TermAllocator;
     use crate::ast::letintro::TopoLetIntro;
-    use crate::ast::{Context, Typecheck};
+    use crate::ast::{ATerm, Context, LetElim, Typecheck};
+    use crate::traits::Repr;
     use crate::untyped::UntypedAst;
 
     fn topo_print(s: &str) -> String {
@@ -691,10 +925,7 @@ mod tests {
     #[test]
     fn test_printing3() {
         let s = topo_print("(+ (* (+ 1 2) 3) (* (+ 1 2) 3))");
-        assert_eq!(
-            s,
-            "(let ((x-0 (+ 1 2))) (let ((x-1 (* x-0 3))) (+ x-1 x-1)))"
-        );
+        assert_eq!(s, "(let ((x-0 (* (+ 1 2) 3))) (+ x-0 x-0))");
     }
 
     #[test]
@@ -726,7 +957,321 @@ mod tests {
         );
         assert_eq!(
             s,
-            "(let ((x-0 (+ 1 2))) (and (forall ((x Int) (y Int)) (let ((x-1 (+ x y))) (let ((x-2 (* x-0 x-1))) (= (+ x-2 x-2) 10)))) (= x-0 10)))"
+            "(let ((x-0 (+ 1 2))) (and (forall ((x Int) (y Int)) (let ((x-1 (* x-0 (+ x y)))) (= (+ x-1 x-1) 10))) (= x-0 10)))"
+        );
+    }
+
+    /// Type-check `decls` and then `s` in the same context
+    fn topo_print_with(decls: &str, s: &str) -> String {
+        let mut context = Context::default();
+        context.ensure_logic();
+        for c in UntypedAst.parse_script_str(decls).unwrap() {
+            c.type_check(&mut context).unwrap();
+        }
+        let term = UntypedAst.parse_term_str(s).unwrap();
+        let term = term.type_check(&mut context).unwrap();
+        let out = term.topo_let_intro(&mut context);
+        // eliminating the lets again gives back the term itself, bound variables included
+        assert_eq!(out.let_elim(&mut context), term.let_elim(&mut context));
+        out.to_string()
+    }
+
+    /// `=`, `not` and `=>` must sit one level above their arguments, or their binding refers to a
+    /// variable of the same parallel `let`.
+    #[test]
+    fn test_printing_eq_not_implies() {
+        let decls = "(declare-fun f (Int) Int) (declare-fun p (Int) Bool) (declare-const a Int) (declare-const b Int)";
+        let s = topo_print_with(decls, "(and (= (f a) b) (= (f a) b) (p (f a)))");
+        assert_eq!(
+            s,
+            "(let ((x-0 (f a))) (let ((x-1 (= x-0 b))) (and x-1 x-1 (p x-0))))"
+        );
+        let s = topo_print_with(decls, "(and (not (p (f a))) (not (p (f a))) (p (f a)))");
+        assert_eq!(
+            s,
+            "(let ((x-0 (p (f a)))) (let ((x-1 (not x-0))) (and x-1 x-1 x-0)))"
+        );
+        let s = topo_print_with(
+            decls,
+            "(and (=> (p (f a)) (p b)) (=> (p (f a)) (p b)) (p (f a)))",
+        );
+        assert_eq!(
+            s,
+            "(let ((x-0 (p (f a)))) (let ((x-1 (=> x-0 (p b)))) (and x-1 x-1 x-0)))"
+        );
+    }
+
+    /// The lets of a quantifier body go inside its `!`, so the attribute stays directly under the
+    /// quantifier.
+    #[test]
+    fn test_printing_annotated_quantifier() {
+        let decls = "(declare-fun f (Int) Int) (declare-fun g (Int Int) Int)";
+        let s = topo_print_with(
+            decls,
+            "(forall ((x Int)) (! (and (> (g (f x) 1) 0) (< (g (f x) 1) 5)) :pattern ((f x))))",
+        );
+        assert_eq!(
+            s,
+            "(forall ((x Int)) (! (let ((x-0 (g (f x) 1))) (and (> x-0 0) (< x-0 5))) :pattern ((f x))))"
+        );
+    }
+
+    /// Pattern variables are bound in the arm's own section.
+    #[test]
+    fn test_printing_match() {
+        let decls = "(declare-datatype L ((nil) (cons (hd Int) (tl L)))) (declare-const l L)";
+        let s = topo_print_with(
+            decls,
+            "(match l ((nil 0) ((cons h t) (+ (* h h) (* h h)))))",
+        );
+        assert_eq!(
+            s,
+            "(match l ((nil 0) ((cons h t) (let ((x-0 (* h h))) (+ x-0 x-0)))))"
+        );
+    }
+
+    /// `t_{i+1} = (g t_i t_i)` has `depth + 1` distinct nodes but `2^depth` tree nodes; the walk
+    /// must follow the former.
+    #[test]
+    fn test_printing_dag() {
+        let mut context = Context::default();
+        context.ensure_logic();
+        for c in UntypedAst
+            .parse_script_str("(declare-fun g (Int Int) Int) (declare-const a Int)")
+            .unwrap()
+        {
+            c.type_check(&mut context).unwrap();
+        }
+        let mut t = UntypedAst
+            .parse_term_str("a")
+            .unwrap()
+            .type_check(&mut context)
+            .unwrap();
+        let g = UntypedAst
+            .parse_term_str("(g a a)")
+            .unwrap()
+            .type_check(&mut context)
+            .unwrap();
+        let ATerm::App(gid, _, sort) = g.repr() else {
+            unreachable!()
+        };
+        for _ in 0..64 {
+            t = context.app(gid.clone(), vec![t.clone(), t], sort.clone());
+        }
+        let s = t.topo_print(&mut context);
+        // x-0 binds `(g a a)` and each x-i binds `(g x-(i-1) x-(i-1))`
+        let mut expected = "(let ((x-0 (g a a))) ".to_string();
+        for i in 1..63 {
+            expected.push_str(&format!("(let ((x-{i} (g x-{} x-{}))) ", i - 1, i - 1));
+        }
+        expected.push_str("(g x-62 x-62)");
+        expected.push_str(&")".repeat(63));
+        assert_eq!(s, expected);
+    }
+
+    /// Bindings of one level come in the order the walk meets them, whatever the hash order.
+    #[test]
+    fn test_printing_deterministic_order() {
+        let decls = "(declare-fun f (Int) Int) (declare-fun p (Int) Bool) (declare-const a Int) (declare-const b Int)";
+        let s = topo_print_with(decls, "(and (p (f a)) (p (f a)) (p (f b)) (p (f b)))");
+        assert_eq!(
+            s,
+            "(let ((x-0 (p (f a))) (x-1 (p (f b)))) (and x-0 x-0 x-1 x-1))"
+        );
+    }
+
+    /// Printing twice in one context gives the same names.
+    #[test]
+    fn test_printing_names_per_call() {
+        let mut context = Context::default();
+        context.ensure_logic();
+        for c in UntypedAst
+            .parse_script_str("(declare-fun f (Int) Int) (declare-const a Int)")
+            .unwrap()
+        {
+            c.type_check(&mut context).unwrap();
+        }
+        let t = UntypedAst
+            .parse_term_str("(+ (f a) (f a))")
+            .unwrap()
+            .type_check(&mut context)
+            .unwrap();
+        assert_eq!(
+            t.topo_print(&mut context),
+            "(let ((x-0 (f a))) (+ x-0 x-0))"
+        );
+        assert_eq!(
+            t.topo_print(&mut context),
+            "(let ((x-0 (f a))) (+ x-0 x-0))"
+        );
+    }
+
+    /// A let-bound variable does not shadow a symbol of the term.
+    #[test]
+    fn test_printing_avoids_used_names() {
+        let decls = "(declare-fun f (Int) Int) (declare-const a Int) (declare-const x-0 Int)";
+        let s = topo_print_with(decls, "(+ x-0 (f a) (f a))");
+        assert_eq!(s, "(let ((x-1 (f a))) (+ x-0 x-1 x-1))");
+    }
+
+    /// A quantifier body that uses none of its variables is bound like any other term.
+    #[test]
+    fn test_printing_closed_quantifier_body() {
+        let decls = "(declare-fun f (Int) Int) (declare-fun p (Int) Bool) (declare-const a Int)";
+        let s = topo_print_with(
+            decls,
+            "(and (forall ((x Int)) (p (f a))) (p (f a)) (p (f a)))",
+        );
+        assert_eq!(
+            s,
+            "(let ((x-0 (p (f a)))) (and (forall ((x Int)) x-0) x-0 x-0))"
+        );
+        let s = topo_print_with(
+            decls,
+            "(and (forall ((x Int)) (! (p (f a)) :pattern ((f x)))) (p (f a)) (p (f a)))",
+        );
+        assert_eq!(
+            s,
+            "(let ((x-0 (p (f a)))) (and (forall ((x Int)) (! x-0 :pattern ((f x)))) x-0 x-0))"
+        );
+    }
+
+    /// The lets of the whole term go inside a top-level annotation.
+    #[test]
+    fn test_printing_named() {
+        let decls = "(declare-fun f (Int) Int) (declare-fun p (Int) Bool) (declare-const a Int)";
+        let s = topo_print_with(decls, "(! (and (p (f a)) (p (f a))) :named n1)");
+        assert_eq!(s, "(! (let ((x-0 (p (f a)))) (and x-0 x-0)) :named n1)");
+    }
+
+    /// Lets in the input are eliminated first.
+    #[test]
+    fn test_printing_let_input() {
+        let decls = "(declare-fun f (Int) Int) (declare-const a Int)";
+        let s = topo_print_with(decls, "(let ((y (f a))) (+ y y))");
+        assert_eq!(s, "(let ((x-0 (f a))) (+ x-0 x-0))");
+    }
+
+    const DECLS: &str = "(declare-fun f (Int) Int) (declare-fun g (Int Int) Int) (declare-fun p (Int) Bool) (declare-const a Int) (declare-const b Int) (declare-datatype L ((nil) (cons (hd Int) (tl L)))) (declare-const l L)";
+
+    /// Check each `(input, expected output)`
+    fn check_all(cases: &[(&str, &str)]) {
+        for (t, expected) in cases {
+            assert_eq!(topo_print_with(DECLS, t), *expected, "for {t}");
+        }
+    }
+
+    /// The connectives not covered elsewhere
+    #[test]
+    fn test_printing_connectives() {
+        check_all(&[
+            (
+                "(exists ((x Int)) (and (p (f x)) (p (f x))))",
+                "(exists ((x Int)) (let ((x-0 (p (f x)))) (and x-0 x-0)))",
+            ),
+            (
+                "(and (distinct (f a) b) (distinct (f a) b) (xor (p (f a)) (p b)) (xor (p (f a)) (p b)))",
+                "(let ((x-0 (f a))) (let ((x-1 (distinct x-0 b))) (let ((x-2 (xor (p x-0) (p b)))) (and x-1 x-1 x-2 x-2))))",
+            ),
+            (
+                "(+ (ite (p (f a)) (f a) b) (ite (p (f a)) (f a) b))",
+                "(let ((x-0 (f a))) (let ((x-1 (ite (p x-0) x-0 b))) (+ x-1 x-1)))",
+            ),
+            // `(f a)` occurs only inside the shared `=>`, which prints it once
+            (
+                "(and (=> (p (f a)) (p b) (p a)) (=> (p (f a)) (p b) (p a)))",
+                "(let ((x-0 (=> (p (f a)) (p b) (p a)))) (and x-0 x-0))",
+            ),
+            // an annotation is never bound, but what it annotates is
+            (
+                "(and (! (p (f a)) :weight 3) (! (p (f a)) :weight 3) (p (f a)))",
+                "(let ((x-0 (p (f a)))) (and (! x-0 :weight 3) (! x-0 :weight 3) x-0))",
+            ),
+        ]);
+    }
+
+    /// A term is bound in the innermost section whose variables it uses
+    #[test]
+    fn test_printing_nested_binders() {
+        check_all(&[
+            // shared across sibling quantifiers
+            (
+                "(and (forall ((x Int)) (p (g (f a) x))) (forall ((y Int)) (p (g (f a) y))) (p (f a)))",
+                "(let ((x-0 (f a))) (and (forall ((x Int)) (p (g x-0 x))) (forall ((y Int)) (p (g x-0 y))) (p x-0)))",
+            ),
+            // an outer variable used under inner quantifiers
+            (
+                "(forall ((x Int)) (and (forall ((y Int)) (= (g (f x) y) (g (f x) y))) (forall ((y Int)) (p (g (f x) y))) (p (f x))))",
+                "(forall ((x Int)) (let ((x-0 (f x))) (and (forall ((y Int)) (let ((x-1 (g x-0 y))) (= x-1 x-1))) (forall ((y Int)) (p (g x-0 y))) (p x-0))))",
+            ),
+            // the two `(p (f x))` are of different variables
+            (
+                "(forall ((x Int)) (and (p (f x)) (forall ((x Int)) (and (p (f x)) (p (f x))))))",
+                "(forall ((x Int)) (and (p (f x)) (forall ((x Int)) (let ((x-0 (p (f x)))) (and x-0 x-0)))))",
+            ),
+            // quantifiers parsed apart bind different variables, so they are not shared
+            (
+                "(and (forall ((x Int)) (p (f x))) (forall ((x Int)) (p (f x))))",
+                "(and (forall ((x Int)) (p (f x))) (forall ((x Int)) (p (f x))))",
+            ),
+            (
+                "(and (exists ((y Int)) (and (p y) (forall ((x Int)) (p (g (f a) x))))) (exists ((z Int)) (and (p z) (forall ((x Int)) (p (g (f a) x))))))",
+                "(let ((x-0 (f a))) (and (exists ((y Int)) (and (p y) (forall ((x Int)) (p (g x-0 x))))) (exists ((z Int)) (and (p z) (forall ((x Int)) (p (g x-0 x)))))))",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn test_printing_match_sharing() {
+        check_all(&[
+            // shared between the arms and outside the match
+            (
+                "(+ (match l ((nil (f a)) ((cons h t) (+ (f a) (g h (f a)) (g h (f a)))))) (f a))",
+                "(let ((x-0 (f a))) (+ (match l ((nil x-0) ((cons h t) (let ((x-1 (g h x-0))) (+ x-0 x-1 x-1))))) x-0))",
+            ),
+            // a quantified variable used in the arms
+            (
+                "(forall ((x Int)) (= 0 (match l ((nil (f x)) ((cons h t) (+ (f x) (g h h) (g h h)))))))",
+                "(forall ((x Int)) (let ((x-0 (f x))) (= 0 (match l ((nil x-0) ((cons h t) (let ((x-1 (g h h))) (+ x-0 x-1 x-1))))))))",
+            ),
+        ]);
+    }
+
+    /// One quantifier term, shared: inside another binder and at the top
+    #[test]
+    fn test_printing_shared_quantifier() {
+        let mut context = Context::default();
+        context.ensure_logic();
+        for c in UntypedAst.parse_script_str(DECLS).unwrap() {
+            c.type_check(&mut context).unwrap();
+        }
+        let parse = |s: &str, ctx: &mut Context| {
+            UntypedAst
+                .parse_term_str(s)
+                .unwrap()
+                .type_check(ctx)
+                .unwrap()
+        };
+        let q = parse("(forall ((x Int)) (and (p (f x)) (p (f x))))", &mut context);
+        let e = parse("(exists ((y Int)) (p y))", &mut context);
+        let ATerm::Exists(vs, body) = e.repr() else {
+            unreachable!()
+        };
+        let nb = context.and(vec![body.clone(), q.clone()]);
+        let e1 = context.exists(vs.clone(), nb);
+        let t = context.and(vec![e1, q.clone()]);
+        let out = t.topo_let_intro(&mut context);
+        assert_eq!(out.let_elim(&mut context), t);
+        assert_eq!(
+            out.to_string(),
+            "(let ((x-0 (forall ((x Int)) (let ((x-1 (p (f x)))) (and x-1 x-1))))) (and (exists ((y Int)) (and (p y) x-0)) x-0))"
+        );
+        let t = context.and(vec![q.clone(), q]);
+        let out = t.topo_let_intro(&mut context);
+        assert_eq!(out.let_elim(&mut context), t);
+        assert_eq!(
+            out.to_string(),
+            "(let ((x-0 (forall ((x Int)) (let ((x-1 (p (f x)))) (and x-1 x-1))))) (and x-0 x-0))"
         );
     }
 }
