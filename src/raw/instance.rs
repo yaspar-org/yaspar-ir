@@ -27,7 +27,6 @@ use crate::containers::valid_symbol_char;
 use crate::instantiate_ast;
 use crate::traits::{Allocatable, Contains, MetaData, Repr};
 use hashconsing::{HConsed, HConsign, HashConsign};
-use rustc_hash::FxBuildHasher;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use yaspar_macros::stack_safe;
@@ -106,22 +105,12 @@ impl Display for Theory {
     }
 }
 
-/// The consign of one kind of object.
-///
-/// FxHash rather than the default SipHash: hashing dominates consing, and FxHash about halves it.
-/// It is not resistant to hash flooding, so a script built to collide could slow consing down.
-type Consign<T> = HConsign<T, FxBuildHasher>;
-
-fn consign<T: std::hash::Hash + Eq + Clone>() -> Consign<T> {
-    HConsign::with_capacity_and_hasher(0, FxBuildHasher)
-}
-
 /// The arena for allocating different instances of ASTs
 pub struct Arena {
-    string: Consign<String>,
-    sort: Consign<RSort>,
-    term: Consign<RTerm>,
-    command: Consign<RCommand>,
+    string: HConsign<String>,
+    sort: HConsign<RSort>,
+    term: HConsign<RTerm>,
+    command: HConsign<RCommand>,
     var_counter: u128,
     lvar_id: LocalId,
 }
@@ -129,10 +118,10 @@ pub struct Arena {
 impl Arena {
     pub fn new() -> Self {
         Self {
-            string: consign(),
-            sort: consign(),
-            term: consign(),
-            command: consign(),
+            string: HConsign::empty(),
+            sort: HConsign::empty(),
+            term: HConsign::empty(),
+            command: HConsign::empty(),
             var_counter: 0,
             lvar_id: 0,
         }
