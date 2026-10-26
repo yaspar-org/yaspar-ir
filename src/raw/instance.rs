@@ -137,6 +137,14 @@ impl Arena {
             lvar_id: 0,
         }
     }
+
+    /// Collect dead allocations
+    pub fn collect(&mut self) {
+        self.string.collect();
+        self.sort.collect();
+        self.term.collect();
+        self.command.collect();
+    }
 }
 
 impl Default for Arena {
@@ -285,6 +293,10 @@ pub(crate) trait HasArenaAlt {
 /// being an instance.
 pub trait HasArena {
     fn arena(&mut self) -> &mut Arena;
+
+    fn collect(&mut self) {
+        self.arena().collect()
+    }
 }
 
 impl<T> StrAllocator for T
