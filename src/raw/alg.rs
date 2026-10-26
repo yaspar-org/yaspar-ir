@@ -16,6 +16,7 @@
 //! motivations. One obvious instantiation is to set `T` a boxed version of itself. Again, in
 //! `super::instance`, we show a more memory-efficient version using an interning library.
 
+use crate::deep_drop::DrainChildren;
 use crate::statics::*;
 use crate::traits::{Contains, Repr};
 use dashu::float::DBig;
@@ -1334,6 +1335,61 @@ mod stack_safety {
             .join()
             .expect("evaluating a deep length overflowed the stack");
         assert_eq!(evaluated, Ok(UBig::from(DEEP + 1)));
+    }
+}
+
+// The two recursive shapes of the algebra, shared by the typed and the untyped AST; see
+// [crate::deep_drop].
+
+impl<Str, So, T> DrainChildren for Term<Str, So, T> {
+    type Child = T;
+
+    fn drain_children(&mut self, sink: &mut Vec<T>) {
+        // `Distinct(vec![])` is the cheapest node without children; it breaks `Distinct`'s
+        // non-emptiness invariant, but it is only ever dropped
+        match std::mem::replace(self, Term::Distinct(vec![])) {
+            Term::Constant(..) | Term::Global(..) | Term::Local(_) => {}
+            Term::App(_, ts, _)
+            | Term::Distinct(ts)
+            | Term::And(ts)
+            | Term::Or(ts)
+            | Term::Xor(ts) => sink.extend(ts),
+            Term::Not(t) | Term::Exists(_, t) | Term::Forall(_, t) => sink.push(t),
+            Term::Eq(a, b) => sink.extend([a, b]),
+            Term::Ite(a, b, c) => sink.extend([a, b, c]),
+            Term::Implies(ts, t) => {
+                sink.extend(ts);
+                sink.push(t);
+            }
+            Term::Let(vs, t) => {
+                sink.extend(vs.into_iter().map(|VarBinding(_, _, t)| t));
+                sink.push(t);
+            }
+            Term::Matching(scrutinee, arms) => {
+                sink.push(scrutinee);
+                sink.extend(arms.into_iter().map(|arm| arm.body));
+            }
+            Term::Annotated(t, anns) => {
+                sink.push(t);
+                for ann in anns {
+                    match ann {
+                        Attribute::Pattern(ts) => sink.extend(ts),
+                        #[cfg(feature = "no-pattern")]
+                        Attribute::NoPattern(t) => sink.push(t),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<Str, So> DrainChildren for Sort<Str, So> {
+    type Child = So;
+
+    fn drain_children(&mut self, sink: &mut Vec<So>) {
+        // the parameters are the only children
+        sink.append(&mut self.1)
     }
 }
 
