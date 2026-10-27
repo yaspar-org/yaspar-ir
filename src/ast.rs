@@ -71,7 +71,9 @@ pub use rename::AlphaRename;
 pub use subst::{Substitute, Substitution};
 
 pub use crate::ast::alpha_eq::AlphaEquiv;
-pub use crate::ast::letelim::{LetElim, LetEliminator, LetEliminatorInner};
+pub use crate::ast::letelim::LetElim;
+#[allow(deprecated)]
+pub use crate::ast::letelim::{LetEliminator, LetEliminatorInner};
 use crate::traits::MetaData;
 #[cfg(feature = "implicant-generation")]
 use sat_interface::SatSolver;
