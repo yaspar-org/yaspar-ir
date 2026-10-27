@@ -7,13 +7,8 @@
 //! terms. After let-elimination, the resulting term contains no `let`-bindings, which simplifies
 //! subsequent analysis (e.g. substitution, free variable computation, CNF conversion).
 //!
-//! Two implementations are provided:
-//!
-//! - [`LetElim`] — a trait-based recursive implementation. Simple to use via
-//!   `.let_elim(&mut context)`, but may overflow the call stack on deeply nested terms.
-//! - [`LetEliminator`] — a stack-safe implementation built on [`TermRecursor`]. It uses
-//!   [`Memoize`] for automatic caching of shared sub-terms. Create one via
-//!   [`LetEliminator::create(&mut arena)`](LetEliminator::create).
+//! Use it via [`LetElim`]: `.let_elim(&mut context)`. It is a recursion made stack-safe by
+//! `#[stack_safe]`, and caches the result for each shared sub-term.
 //!
 //! # Untouched sub-terms are shared, not rebuilt
 //!
@@ -29,16 +24,11 @@
 //! [`crate::ast::letintro`].
 
 use crate::allocator::TermAllocator;
-use crate::ast::Sort;
-use crate::ast::{
-    Attribute, Constant, HasArena, Local, Memoize, PatternArm, QualifiedIdentifier, Str, Term,
-    TermRecursor, TypedTermRecursor,
-};
+use crate::ast::{Attribute, Bottom, HasArena, PatternArm, Repr, Str, Term, alg};
 use crate::containers::Mapping;
-use crate::raw::alg::rec::Bottom;
 use crate::raw::alg::{LocalId, VarBinding};
 use std::collections::HashMap;
-use yaspar::ast::Keyword;
+use yaspar_macros::stack_safe;
 
 /// Eliminates all let-bindings by applying substitutions properly
 ///
@@ -47,432 +37,344 @@ pub trait LetElim<Env> {
     fn let_elim(&self, env: &mut Env) -> Self;
 }
 
-/// Rebuild the children of a node, or [`None`] when every one of them is unchanged.
-///
-/// `recs` holds the recursion result for each of `originals`, so the two agree in length, and
-/// `rebuild` turns a changed result back into a child. A [`None`] return is what lets a node
-/// report *itself* as unchanged instead of rebuilding.
-///
-/// The children are walked exactly once, and nothing is allocated at all unless one of them
-/// really changed: the output vector is created on the first change, seeded with the unchanged
-/// children already passed over.
-fn rebuild_if_changed<T, R>(
-    originals: &[T],
-    recs: Vec<Option<R>>,
-    rebuild: impl Fn(&T, R) -> T,
-) -> Option<Vec<T>>
-where
-    T: Clone,
-{
-    let mut out: Option<Vec<T>> = None;
-    for (idx, (rec, original)) in recs.into_iter().zip(originals).enumerate() {
-        match rec {
-            Some(rec) => out
-                .get_or_insert_with(|| {
-                    let mut built = Vec::with_capacity(originals.len());
-                    built.extend_from_slice(&originals[..idx]);
-                    built
-                })
-                .push(rebuild(original, rec)),
-            // an unchanged child is only worth recording once we are already rebuilding
-            None => {
-                if let Some(built) = &mut out {
-                    built.push(original.clone())
-                }
-            }
-        }
-    }
-    out
-}
-
-/// [`rebuild_if_changed`] for children that the recursion already hands back fully rebuilt.
-fn materialize_if_changed<T: Clone>(originals: &[T], recs: Vec<Option<T>>) -> Option<Vec<T>> {
-    rebuild_if_changed(originals, recs, |_, rec| rec)
-}
-
-/// Stack-safe let-elimination using [`TermRecursor`].
-///
-/// It can be wrapped with [`Memoize`] for caching.
-pub struct LetEliminatorInner<'a, E> {
-    arena: &'a mut E,
-    /// Environment stack: each frame maps a local variable id to the substituted term.
-    /// Quantifier/match-bound variables are represented by frames with no entry
-    /// (their locals simply won't be found, so they pass through unchanged).
-    env: Vec<HashMap<LocalId, Option<Term>>>,
-}
-
-/// Memoized, stack-safe let-eliminator. Use [`LetEliminator::create`] to construct.
-pub type LetEliminator<'a, E> = Memoize<LetEliminatorInner<'a, E>, HashMap<Term, Option<Term>>>;
-
-impl<'a, E> LetEliminatorInner<'a, E>
-where
-    E: HasArena,
-{
-    pub fn new(arena: &'a mut E) -> Self {
-        Self {
-            arena,
-            env: Vec::new(),
-        }
-    }
-
-    /// Search the environment stack for a variable by id.
-    ///
-    /// Returns `Some(Some(term))` for let-bound variables (substitute with `term`),
-    /// `Some(None)` for quantifier/match-bound variables (do not substitute),
-    /// or `None` if the variable is not in any scope.
-    fn lookup(&self, id: LocalId) -> Option<Option<Term>> {
-        self.env.lookup(&id)
-    }
-}
-
-impl<'a, E> LetEliminator<'a, E>
-where
-    E: HasArena,
-{
-    /// Create a new memoized let-eliminator backed by the given arena.
-    pub fn create(arena: &'a mut E) -> Self {
-        Memoize::new(LetEliminatorInner::new(arena))
-    }
-}
-
-/// Every callback returns [`None`] to mean "unchanged", so an untouched sub-term costs nothing:
-/// no arena allocation, and the caller keeps sharing the original. `Self::Attr`, `Self::Binding`
-/// and `Self::Arm` carry the same convention for attributes, let-bindings and match arms.
-impl<E: HasArena> TermRecursor<Str, Sort, Term> for LetEliminatorInner<'_, E> {
-    type Out = Option<Term>;
-    type Attr = Option<Attribute>;
-    type Binding = Option<VarBinding<Str, Term>>;
-    type Pattern = (); // match-bound vars use empty frames, no substitution
-    type Arm = Option<Term>; // the arm's new body; the pattern never changes
-    type Err = Bottom;
-
-    // --- Leaves ---
-
-    fn on_constant(
-        &mut self,
-        _: &Term,
-        _: &Constant,
-        _: &Option<Sort>,
-    ) -> Result<Self::Out, Bottom> {
-        Ok(None)
-    }
-
-    fn on_global(
-        &mut self,
-        _: &Term,
-        _: &QualifiedIdentifier,
-        _: &Option<Sort>,
-    ) -> Result<Self::Out, Bottom> {
-        Ok(None)
-    }
-
-    /// Look up the local variable in the environment. A let-bound variable
-    /// (`Some(Some(t))`) is replaced by `t`; a quantifier/match-bound or free one is unchanged.
-    fn on_local(&mut self, _: &Term, id: &Local) -> Result<Self::Out, Bottom> {
-        Ok(self.lookup(id.id).flatten())
-    }
-
-    fn on_app(
-        &mut self,
-        _: &Term,
-        id: &QualifiedIdentifier,
-        ts: &[Term],
-        s: &Option<Sort>,
-        recs: Vec<Self::Out>,
-    ) -> Result<Self::Out, Bottom> {
-        Ok(materialize_if_changed(ts, recs)
-            .map(|ts| self.arena.arena().app(id.clone(), ts, s.clone())))
-    }
-
-    // --- Let ---
-
-    /// A binding whose right-hand side is unchanged reports [`None`], like every other callback,
-    /// so nothing is rebuilt for it. [`Self::setup_let_scope`] reads the original instead.
-    fn on_let_binding(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Term>],
-        _: &Term,
-        binding_idx: usize,
-        rec: Self::Out,
-    ) -> Result<Self::Binding, Bottom> {
-        let v = &vs[binding_idx];
-        Ok(rec.map(|rhs| VarBinding(v.0.clone(), v.1, rhs)))
-    }
-
-    /// Push a new scope frame mapping each let-bound variable to the term it stands for: its
-    /// rebuilt right-hand side, or the original one when the recursion left it unchanged.
-    ///
-    /// This is the same "rebuilt else original" fallback as `rebuild_if_changed`, but there is
-    /// no vector to build here — the right-hand sides go straight into the scope frame.
-    fn setup_let_scope(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Term>],
-        _: &Term,
-        vs_rec: &[Self::Binding],
-    ) -> Result<(), Bottom> {
-        let frame = vs
-            .iter()
-            .zip(vs_rec)
-            .map(|(v, rec)| (v.1, Some(rec.as_ref().unwrap_or(v).2.clone())))
-            .collect();
-        self.env.push(frame);
-        Ok(())
-    }
-
-    /// Pop the let scope and return the body directly — the let-binding is eliminated.
-    ///
-    /// This is always a change: the `let` node itself is gone, whatever happened to the body.
-    fn on_let(
-        &mut self,
-        _: &Term,
-        _: &[VarBinding<Str, Term>],
-        body: &Term,
-        _: Vec<Self::Binding>,
-        body_rec: Self::Out,
-    ) -> Result<Self::Out, Bottom> {
-        self.env.pop();
-        Ok(Some(body_rec.unwrap_or_else(|| body.clone())))
-    }
-
-    // --- Quantifiers ---
-
-    /// Push a scope frame with `None` values so quantifier-bound variables shadow
-    /// any outer let-bindings and are not substituted.
-    fn setup_quantifier_scope(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        _: bool,
-    ) -> Result<(), Bottom> {
-        self.env.push(vs.iter().map(|v| (v.1, None)).collect());
-        Ok(())
-    }
-
-    fn on_exists(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Self::Out,
-    ) -> Result<Self::Out, Bottom> {
-        self.env.pop();
-        Ok(body.map(|body| self.arena.arena().exists(vs.to_vec(), body)))
-    }
-
-    fn on_forall(
-        &mut self,
-        _: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _: &Term,
-        body: Self::Out,
-    ) -> Result<Self::Out, Bottom> {
-        self.env.pop();
-        Ok(body.map(|body| self.arena.arena().forall(vs.to_vec(), body)))
-    }
-
-    // --- Match ---
-
-    /// Push a scope frame with `None` values for pattern-bound variables, similar to quantifiers.
-    fn setup_match_case_scope(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        cases: &[PatternArm],
-        _: &Self::Out,
-        idx: usize,
-    ) -> Result<Self::Pattern, Bottom> {
-        self.env.push(
-            cases[idx]
-                .pattern
-                .variables_and_ids()
-                .into_iter()
-                .map(|(_, id)| (id, None))
-                .collect(),
-        );
-        Ok(())
-    }
-
-    /// Pop the arm's scope and pass its body up. The pattern is left to [`Self::on_match`],
-    /// which only clones it if the match has to be rebuilt at all.
-    fn on_match_arm(
-        &mut self,
-        _: &Term,
-        _: &Term,
-        _: &[PatternArm],
-        _: &Self::Out,
-        _: usize,
-        _: Self::Pattern,
-        body: Self::Out,
-    ) -> Result<Self::Arm, Bottom> {
-        self.env.pop();
-        Ok(body)
-    }
-
-    fn on_match(
-        &mut self,
-        _: &Term,
-        scrutinee: &Term,
-        cases: &[PatternArm],
-        scrutinee_rec: Self::Out,
-        cases_rec: Vec<Self::Arm>,
-    ) -> Result<Self::Out, Bottom> {
-        let arms = rebuild_if_changed(cases, cases_rec, |case, body| PatternArm {
-            pattern: case.pattern.clone(),
-            body,
-        });
-        if scrutinee_rec.is_none() && arms.is_none() {
-            return Ok(None);
-        }
-        let scrutinee = scrutinee_rec.unwrap_or_else(|| scrutinee.clone());
-        let arms = arms.unwrap_or_else(|| cases.to_vec());
-        Ok(Some(self.arena.arena().matching(scrutinee, arms)))
-    }
-
-    // --- Annotations ---
-
-    fn on_annotated(
-        &mut self,
-        _: &Term,
-        t: &Term,
-        anns: &[Attribute],
-        t_rec: Self::Out,
-        anns_rec: Vec<Self::Attr>,
-    ) -> Result<Self::Out, Bottom> {
-        let anns_rec = materialize_if_changed(anns, anns_rec);
-        if t_rec.is_none() && anns_rec.is_none() {
-            return Ok(None);
-        }
-        let body = t_rec.unwrap_or_else(|| t.clone());
-        let anns = anns_rec.unwrap_or_else(|| anns.to_vec());
-        Ok(Some(self.arena.arena().annotated(body, anns)))
-    }
-
-    fn on_attribute_keyword(&mut self, _: &Keyword) -> Result<Self::Attr, Bottom> {
-        Ok(None)
-    }
-
-    fn on_attribute_constant(&mut self, _: &Keyword, _: &Constant) -> Result<Self::Attr, Bottom> {
-        Ok(None)
-    }
-
-    fn on_attribute_symbol(&mut self, _: &Keyword, _: &Str) -> Result<Self::Attr, Bottom> {
-        Ok(None)
-    }
-
-    fn on_attribute_named(&mut self, _: &Str) -> Result<Self::Attr, Bottom> {
-        Ok(None)
-    }
-
-    fn on_attribute_pattern(
-        &mut self,
-        patterns: &[Term],
-        recs: Vec<Self::Out>,
-    ) -> Result<Self::Attr, Bottom> {
-        Ok(materialize_if_changed(patterns, recs).map(Attribute::Pattern))
-    }
-
-    #[cfg(feature = "no-pattern")]
-    fn on_attribute_no_pattern(&mut self, _: &Term, rec: Self::Out) -> Result<Self::Attr, Bottom> {
-        Ok(rec.map(Attribute::NoPattern))
-    }
-
-    // --- Connectives ---
-
-    fn on_eq(
-        &mut self,
-        _: &Term,
-        a: &Term,
-        b: &Term,
-        a_rec: Self::Out,
-        b_rec: Self::Out,
-    ) -> Result<Self::Out, Bottom> {
-        if a_rec.is_none() && b_rec.is_none() {
-            return Ok(None);
-        }
-        let a = a_rec.unwrap_or_else(|| a.clone());
-        let b = b_rec.unwrap_or_else(|| b.clone());
-        Ok(Some(self.arena.arena().eq(a, b)))
-    }
-
-    fn on_distinct(
-        &mut self,
-        _: &Term,
-        ts: &[Term],
-        recs: Vec<Self::Out>,
-    ) -> Result<Self::Out, Bottom> {
-        Ok(materialize_if_changed(ts, recs).map(|ts| self.arena.arena().distinct(ts)))
-    }
-
-    fn on_and(&mut self, _: &Term, ts: &[Term], recs: Vec<Self::Out>) -> Result<Self::Out, Bottom> {
-        Ok(materialize_if_changed(ts, recs).map(|ts| self.arena.arena().and(ts)))
-    }
-
-    fn on_or(&mut self, _: &Term, ts: &[Term], recs: Vec<Self::Out>) -> Result<Self::Out, Bottom> {
-        Ok(materialize_if_changed(ts, recs).map(|ts| self.arena.arena().or(ts)))
-    }
-
-    fn on_xor(&mut self, _: &Term, ts: &[Term], recs: Vec<Self::Out>) -> Result<Self::Out, Bottom> {
-        Ok(materialize_if_changed(ts, recs).map(|ts| self.arena.arena().xor(ts)))
-    }
-
-    fn on_not(&mut self, _: &Term, _: &Term, rec: Self::Out) -> Result<Self::Out, Bottom> {
-        Ok(rec.map(|t| self.arena.arena().not(t)))
-    }
-
-    fn on_implies(
-        &mut self,
-        _: &Term,
-        ts: &[Term],
-        t: &Term,
-        ts_rec: Vec<Self::Out>,
-        t_rec: Self::Out,
-    ) -> Result<Self::Out, Bottom> {
-        let ts_rec = materialize_if_changed(ts, ts_rec);
-        if t_rec.is_none() && ts_rec.is_none() {
-            return Ok(None);
-        }
-        let premises = ts_rec.unwrap_or_else(|| ts.to_vec());
-        let conclusion = t_rec.unwrap_or_else(|| t.clone());
-        Ok(Some(self.arena.arena().implies(premises, conclusion)))
-    }
-
-    fn on_ite(
-        &mut self,
-        _: &Term,
-        b: &Term,
-        t: &Term,
-        e: &Term,
-        b_rec: Self::Out,
-        t_rec: Self::Out,
-        e_rec: Self::Out,
-    ) -> Result<Self::Out, Bottom> {
-        if b_rec.is_none() && t_rec.is_none() && e_rec.is_none() {
-            return Ok(None);
-        }
-        let b = b_rec.unwrap_or_else(|| b.clone());
-        let t = t_rec.unwrap_or_else(|| t.clone());
-        let e = e_rec.unwrap_or_else(|| e.clone());
-        Ok(Some(self.arena.arena().ite(b, t, e)))
-    }
-}
-
-impl<E: HasArena> TypedTermRecursor for LetEliminatorInner<'_, E> {}
-
 impl<E> LetElim<E> for Term
 where
     E: HasArena,
 {
     fn let_elim(&self, env: &mut E) -> Self {
-        LetEliminator::create(env)
-            .recurse_on_term_no_err(self)
-            .unwrap_or_else(|| self.clone())
+        let mut st = LetElimState::default();
+        let_elim::let_elim_rec(self, &mut st, env).unwrap_or_else(|| self.clone())
+    }
+}
+
+/// The let-eliminator that predates [`LetElim`], kept so that code written against it still
+/// compiles. It caches its results across calls, so one eliminator reused on many terms shares
+/// their common sub-terms.
+#[deprecated(
+    note = "use `LetElim::let_elim` instead; `LetEliminator` is no longer a `TermRecursor`"
+)]
+pub struct LetEliminator<'a, E> {
+    arena: &'a mut E,
+    state: LetElimState,
+}
+
+#[allow(deprecated)]
+impl<'a, E> LetEliminator<'a, E>
+where
+    E: HasArena,
+{
+    /// Create a new let-eliminator backed by the given arena.
+    #[deprecated(note = "use `LetElim::let_elim` instead")]
+    pub fn create(arena: &'a mut E) -> Self {
+        Self {
+            arena,
+            state: LetElimState::default(),
+        }
+    }
+
+    /// Eliminate the `let`s in `t`, or return [`None`] when `t` has none and so is unchanged.
+    #[deprecated(note = "use `LetElim::let_elim` instead")]
+    pub fn recurse_on_term_no_err(&mut self, t: &Term) -> Option<Term> {
+        let_elim::let_elim_rec(t, &mut self.state, self.arena)
+    }
+
+    /// [`Self::recurse_on_term_no_err`], which cannot fail.
+    #[deprecated(note = "use `LetElim::let_elim` instead")]
+    pub fn recurse_on_term(&mut self, t: &Term) -> Result<Option<Term>, Bottom> {
+        Ok(let_elim::let_elim_rec(t, &mut self.state, self.arena))
+    }
+}
+
+/// The uncached let-eliminator that predates [`LetElim`], kept so that code written against it
+/// still compiles. Every call starts afresh.
+#[deprecated(
+    note = "use `LetElim::let_elim` instead; `LetEliminatorInner` is no longer a `TermRecursor`"
+)]
+pub struct LetEliminatorInner<'a, E> {
+    arena: &'a mut E,
+}
+
+#[allow(deprecated)]
+impl<'a, E> LetEliminatorInner<'a, E>
+where
+    E: HasArena,
+{
+    #[deprecated(note = "use `LetElim::let_elim` instead")]
+    pub fn new(arena: &'a mut E) -> Self {
+        Self { arena }
+    }
+
+    /// Eliminate the `let`s in `t`, or return [`None`] when `t` has none and so is unchanged.
+    #[deprecated(note = "use `LetElim::let_elim` instead")]
+    pub fn recurse_on_term_no_err(&mut self, t: &Term) -> Option<Term> {
+        let_elim::let_elim_rec(t, &mut LetElimState::default(), self.arena)
+    }
+
+    /// [`Self::recurse_on_term_no_err`], which cannot fail.
+    #[deprecated(note = "use `LetElim::let_elim` instead")]
+    pub fn recurse_on_term(&mut self, t: &Term) -> Result<Option<Term>, Bottom> {
+        Ok(self.recurse_on_term_no_err(t))
+    }
+}
+
+/// The state of [`LetElim::let_elim`].
+#[derive(Default)]
+struct LetElimState {
+    /// Environment stack: each frame maps a local variable id to the substituted term, or to
+    /// [`None`] for a quantifier/match-bound variable, which is not substituted.
+    env: Vec<HashMap<LocalId, Option<Term>>>,
+    /// The result for each sub-term already eliminated.
+    cache: HashMap<Term, Option<Term>>,
+}
+
+/// Record the result `rec` of the child `originals[idx]`, where [`None`] means unchanged.
+///
+/// Nothing is allocated unless a child really changed: the output vector is created on the first
+/// change, seeded with the unchanged children already passed over.
+fn push_if_changed<T: Clone>(
+    out: &mut Option<Vec<T>>,
+    originals: &[T],
+    idx: usize,
+    rec: Option<T>,
+) {
+    match rec {
+        Some(rec) => out
+            .get_or_insert_with(|| {
+                let mut built = Vec::with_capacity(originals.len());
+                built.extend_from_slice(&originals[..idx]);
+                built
+            })
+            .push(rec),
+        None => {
+            if let Some(built) = out {
+                built.push(originals[idx].clone())
+            }
+        }
+    }
+}
+
+/// Rebuild the `distinct`, `and`, `or`, `xor` or application `t` over new arguments.
+fn rebuild_nary<E: HasArena>(env: &mut E, t: &Term, ts: Vec<Term>) -> Term {
+    match t.repr() {
+        alg::Term::App(id, _, s) => env.arena().app(id.clone(), ts, s.clone()),
+        alg::Term::Distinct(_) => env.arena().distinct(ts),
+        alg::Term::And(_) => env.arena().and(ts),
+        alg::Term::Or(_) => env.arena().or(ts),
+        alg::Term::Xor(_) => env.arena().xor(ts),
+        _ => unreachable!("rebuild_nary is only called on an n-ary node"),
+    }
+}
+
+// The loops over match arms and attributes resume after a recursive call, where `#[stack_safe]`
+// leaves the type of the loop variable to inference that has not seen it yet. These typed
+// accessors give it one.
+
+fn arm_body(arm: &PatternArm) -> &Term {
+    &arm.body
+}
+
+fn push_arm_scope(st: &mut LetElimState, arm: &PatternArm) {
+    st.env.push(
+        arm.pattern
+            .variables_and_ids()
+            .into_iter()
+            .map(|(_, id)| (id, None))
+            .collect(),
+    );
+}
+
+/// Let-elimination proper, which recurses over a term of unbounded nesting. Every function returns
+/// [`None`] to mean "unchanged", and a node builds the vector of its new children only once one of
+/// them has changed.
+#[stack_safe]
+mod let_elim {
+    use super::*;
+
+    pub(super) fn let_elim_rec<E: HasArena>(
+        t: &Term,
+        st: &mut LetElimState,
+        env: &mut E,
+    ) -> Option<Term> {
+        if let Some(r) = st.cache.get(t) {
+            return r.clone();
+        }
+        let r: Option<Term> = match t.repr() {
+            alg::Term::Constant(..) | alg::Term::Global(..) => None,
+            alg::Term::Local(l) => st.env.lookup(&l.id).flatten(),
+            alg::Term::App(_, ts, _)
+            | alg::Term::Distinct(ts)
+            | alg::Term::And(ts)
+            | alg::Term::Or(ts)
+            | alg::Term::Xor(ts) => {
+                let ts_rec = let_elim_terms(ts, st, env);
+                ts_rec.map(|ts_rec| rebuild_nary(env, t, ts_rec))
+            }
+            // the `let` node itself is gone, so this is always a change
+            alg::Term::Let(vs, body) => {
+                let frame = let_elim_bindings(vs, st, env);
+                st.env.push(frame);
+                let body_rec = let_elim_rec(body, st, env);
+                st.env.pop();
+                Some(body_rec.unwrap_or_else(|| body.clone()))
+            }
+            alg::Term::Exists(vs, body) | alg::Term::Forall(vs, body) => {
+                st.env.push(vs.iter().map(|v| (v.1, None)).collect());
+                let body_rec = let_elim_rec(body, st, env);
+                st.env.pop();
+                body_rec.map(|body_rec| {
+                    if matches!(t.repr(), alg::Term::Forall(..)) {
+                        env.arena().forall(vs.to_vec(), body_rec)
+                    } else {
+                        env.arena().exists(vs.to_vec(), body_rec)
+                    }
+                })
+            }
+            alg::Term::Matching(scrutinee, cases) => {
+                let scrutinee_rec = let_elim_rec(scrutinee, st, env);
+                let arms = let_elim_arms(cases, st, env);
+                if scrutinee_rec.is_none() && arms.is_none() {
+                    None
+                } else {
+                    let scrutinee_new = scrutinee_rec.unwrap_or_else(|| scrutinee.clone());
+                    let arms_new = arms.unwrap_or_else(|| cases.to_vec());
+                    Some(env.arena().matching(scrutinee_new, arms_new))
+                }
+            }
+            alg::Term::Annotated(body, anns) => {
+                let body_rec = let_elim_rec(body, st, env);
+                let anns_rec = let_elim_attributes(anns, st, env);
+                if body_rec.is_none() && anns_rec.is_none() {
+                    None
+                } else {
+                    let body_new = body_rec.unwrap_or_else(|| body.clone());
+                    let anns_new = anns_rec.unwrap_or_else(|| anns.to_vec());
+                    Some(env.arena().annotated(body_new, anns_new))
+                }
+            }
+            alg::Term::Eq(a, b) => {
+                let a_rec = let_elim_rec(a, st, env);
+                let b_rec = let_elim_rec(b, st, env);
+                if a_rec.is_none() && b_rec.is_none() {
+                    None
+                } else {
+                    let a_new = a_rec.unwrap_or_else(|| a.clone());
+                    let b_new = b_rec.unwrap_or_else(|| b.clone());
+                    Some(env.arena().eq(a_new, b_new))
+                }
+            }
+            alg::Term::Not(x) => {
+                let x_rec = let_elim_rec(x, st, env);
+                x_rec.map(|x_rec| env.arena().not(x_rec))
+            }
+            alg::Term::Implies(ts, concl) => {
+                let ts_rec = let_elim_terms(ts, st, env);
+                let concl_rec = let_elim_rec(concl, st, env);
+                if ts_rec.is_none() && concl_rec.is_none() {
+                    None
+                } else {
+                    let premises = ts_rec.unwrap_or_else(|| ts.to_vec());
+                    let conclusion = concl_rec.unwrap_or_else(|| concl.clone());
+                    Some(env.arena().implies(premises, conclusion))
+                }
+            }
+            alg::Term::Ite(b, x, e) => {
+                let b_rec = let_elim_rec(b, st, env);
+                let x_rec = let_elim_rec(x, st, env);
+                let e_rec = let_elim_rec(e, st, env);
+                if b_rec.is_none() && x_rec.is_none() && e_rec.is_none() {
+                    None
+                } else {
+                    let b_new = b_rec.unwrap_or_else(|| b.clone());
+                    let x_new = x_rec.unwrap_or_else(|| x.clone());
+                    let e_new = e_rec.unwrap_or_else(|| e.clone());
+                    Some(env.arena().ite(b_new, x_new, e_new))
+                }
+            }
+        };
+        st.cache.insert(Term::clone(t), r.clone());
+        r
+    }
+
+    /// The new children, or [`None`] when every one of them is unchanged.
+    fn let_elim_terms<E: HasArena>(
+        ts: &[Term],
+        st: &mut LetElimState,
+        env: &mut E,
+    ) -> Option<Vec<Term>> {
+        let mut out = None;
+        let mut i = 0usize;
+        while i < ts.len() {
+            let rec = let_elim_rec(&ts[i], st, env);
+            push_if_changed(&mut out, ts, i, rec);
+            i += 1;
+        }
+        out
+    }
+
+    /// The scope frame of a `let`: each bound variable mapped to its eliminated right-hand side,
+    /// or to the original one when it is unchanged.
+    fn let_elim_bindings<E: HasArena>(
+        vs: &[VarBinding<Str, Term>],
+        st: &mut LetElimState,
+        env: &mut E,
+    ) -> HashMap<LocalId, Option<Term>> {
+        let mut frame = HashMap::with_capacity(vs.len());
+        let mut i = 0usize;
+        while i < vs.len() {
+            let rec = let_elim_rec(&vs[i].2, st, env);
+            frame.insert(vs[i].1, Some(rec.unwrap_or_else(|| vs[i].2.clone())));
+            i += 1;
+        }
+        frame
+    }
+
+    /// The new arms, each eliminated under the scope of its pattern, or [`None`] when every one
+    /// of them is unchanged.
+    fn let_elim_arms<E: HasArena>(
+        cases: &[PatternArm],
+        st: &mut LetElimState,
+        env: &mut E,
+    ) -> Option<Vec<PatternArm>> {
+        let mut out = None;
+        let mut i = 0usize;
+        while i < cases.len() {
+            push_arm_scope(st, &cases[i]);
+            let rec = let_elim_rec(arm_body(&cases[i]), st, env);
+            st.env.pop();
+            let arm = rec.map(|body| PatternArm {
+                pattern: cases[i].pattern.clone(),
+                body,
+            });
+            push_if_changed(&mut out, cases, i, arm);
+            i += 1;
+        }
+        out
+    }
+
+    /// The new attributes, or [`None`] when every one of them is unchanged.
+    fn let_elim_attributes<E: HasArena>(
+        anns: &[Attribute],
+        st: &mut LetElimState,
+        env: &mut E,
+    ) -> Option<Vec<Attribute>> {
+        let mut out = None;
+        let mut i = 0usize;
+        while i < anns.len() {
+            let rec = match &anns[i] {
+                Attribute::Pattern(ps) => let_elim_terms(ps, st, env).map(Attribute::Pattern),
+                #[cfg(feature = "no-pattern")]
+                Attribute::NoPattern(p) => let_elim_rec(p, st, env).map(Attribute::NoPattern),
+                _ => None,
+            };
+            push_if_changed(&mut out, anns, i, rec);
+            i += 1;
+        }
+        out
     }
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // `test_let_elim_unchanged_is_none` exercises `LetEliminator`
 mod tests {
     use super::*;
     use crate::ast::fv::FreeLocalVars;
@@ -646,5 +548,48 @@ mod tests {
             .type_check(&mut context)
             .unwrap();
         assert!(t.aeq(&equiv), "{t} is not alpha-equivalent to {equiv}");
+    }
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::ast::fv::FreeLocalVars;
+    use crate::ast::{Context, Typecheck};
+    use crate::untyped::UntypedAst;
+
+    /// `(forall ((x0 Int)) (let ((y0 x0)) (forall ((x1 Int)) (let ((y1 (+ y0 x1))) (… (> y 0))))))`.
+    fn deep_binders(depth: usize) -> String {
+        let mut s = String::from("(forall ((x0 Int)) (let ((y0 x0)) ");
+        for i in 1..depth {
+            s.push_str(&format!(
+                "(forall ((x{i} Int)) (let ((y{i} (+ y{} x{i}))) ",
+                i - 1
+            ));
+        }
+        s.push_str(&format!("(> y{} 0)", depth - 1));
+        s.push_str(&"))".repeat(depth));
+        s
+    }
+
+    #[test]
+    fn let_elim_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ctx = Context::new();
+                ctx.ensure_logic();
+                let src = deep_binders(5_000);
+                let u = UntypedAst.parse_term_str(&src).unwrap();
+                let t = u.type_check(&mut ctx).unwrap();
+                let r = t.let_elim(&mut ctx);
+                // every `let` is gone, and with it every let-bound variable
+                let ok = !r.to_string().contains("let") && r.free_loc_vars().is_empty();
+                std::mem::forget((u, t, r));
+                ok
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
     }
 }

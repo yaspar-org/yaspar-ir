@@ -67,6 +67,7 @@ pub fn register(r: &mut Registry) {
     named(r, &d);
     letintro(r, &d, &h, &w);
     gsubst(r, &d, &h, &w);
+    fv_and_let_elim(r, &d, &h, &w);
     maybe_sort(r, &d);
     tc_sort(r, &d, &h, &w);
     bv_len(r, &d, &h);
@@ -357,6 +358,42 @@ fn gsubst(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize]) {
     for (shape, ps, build) in shapes {
         pair!(r, "gsubst", shape, ps, &build,
             |g, side| side::gsubst(&mut g.ctx, &g.names, &g.t), same_term);
+    }
+}
+
+// ── fv.rs and letelim.rs: one function, and one group of five ─────────────────────
+
+fn fv_and_let_elim(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize]) {
+    let shapes: [(&'static str, &[usize], Box<dyn Fn(usize) -> Tm>); 8] = [
+        ("not_chain", d, Box::new(with_ctx(|c, n| {
+            let p = bvar(c, "p");
+            not_chain(c, n, p)
+        }))),
+        ("ite_chain", d, Box::new(with_ctx(|c, n| ite_else_chain(c, n, false)))),
+        ("balanced", h, Box::new(with_ctx(balanced_bool))),
+        ("wide", w, Box::new(with_ctx(wide_bool))),
+        ("forall_chain", d, Box::new(|n| {
+            let (mut c, _) = script("(set-logic ALL)");
+            let t = term(&mut c, &forall_chain_src(n));
+            (c, t)
+        })),
+        ("let_chain", d, Box::new(|n| {
+            let (mut c, _) = script("(set-logic ALL)(declare-const x Int)");
+            let t = term(&mut c, &let_chain_src(n));
+            (c, t)
+        })),
+        ("match_chain", d, Box::new(|n| {
+            let (mut c, _) = script(&format!("(set-logic ALL){LIST_DT}(declare-const l L)"));
+            let t = term(&mut c, &match_chain_src(n));
+            (c, t)
+        })),
+        ("pattern_chain", d, Box::new(with_ctx(pattern_chain))),
+    ];
+    for (shape, ps, build) in &shapes {
+        pair!(r, "fv.free_loc_vars", *shape, ps, build, |(_, t), side| side::free_loc_vars(t), eq);
+    }
+    for (shape, ps, build) in &shapes {
+        pair!(r, "letelim.let_elim", *shape, ps, build, |(c, t), side| side::let_elim(c, t), eq);
     }
 }
 
