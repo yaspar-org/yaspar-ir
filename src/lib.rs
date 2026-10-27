@@ -76,6 +76,7 @@
 mod allocator;
 pub mod ast;
 mod containers;
+mod deep_drop;
 #[cfg(all(feature = "cvc5-dep-1.3.x", feature = "cvc5-dep-1.4.x"))]
 compile_error!(
     "the cvc5 1.3.x and 1.4.x features are mutually exclusive: both link a cvc5 library, \

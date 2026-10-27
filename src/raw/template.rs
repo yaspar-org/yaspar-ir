@@ -55,5 +55,36 @@ macro_rules! instantiate_ast {
         wrapper_type!(RCommand, $crate::raw::alg::Command<Str, Sort, Term>);
 
         pub type Command = $Wrapper<RCommand>;
+
+        // Dropping deep terms and sorts without recursion; see [crate::deep_drop]. A command
+        // never contains a command, so dropping one drops terms and sorts, which drop their
+        // children without recursion themselves.
+        impl $crate::deep_drop::DrainChildren for RTerm {
+            type Child = Term;
+
+            fn drain_children(&mut self, sink: &mut Vec<Term>) {
+                self.0.drain_children(sink)
+            }
+        }
+
+        impl $crate::deep_drop::DrainChildren for RSort {
+            type Child = Sort;
+
+            fn drain_children(&mut self, sink: &mut Vec<Sort>) {
+                self.0.drain_children(sink)
+            }
+        }
+
+        impl Drop for RTerm {
+            fn drop(&mut self) {
+                $crate::deep_drop::drop_children(&mut self.0)
+            }
+        }
+
+        impl Drop for RSort {
+            fn drop(&mut self) {
+                $crate::deep_drop::drop_children(&mut self.0)
+            }
+        }
     };
 }

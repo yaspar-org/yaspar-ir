@@ -92,6 +92,14 @@ impl<T> MetaData for Untyped<T> {
     }
 }
 
+impl<T> crate::deep_drop::TryUnwrap for Untyped<T> {
+    type Node = T;
+
+    fn try_unwrap(self) -> Result<T, Self> {
+        Rc::try_unwrap(self.0).map(|m| m.data).map_err(Untyped)
+    }
+}
+
 type P<T> = Untyped<T>;
 
 instantiate_ast!(P);
