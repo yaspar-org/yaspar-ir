@@ -743,7 +743,7 @@ impl Context {
     /// set the current theory; error if current theory has been set
     pub fn set_ctx_logic(&mut self, s: &str) -> Result<&mut Self, String> {
         match &self.meta.logic {
-            None => match LOGICS.get(s.to_ascii_uppercase().as_str()) {
+            None => match LOGICS.get(s) {
                 None => Err(format!("Theory {} not defined", s)),
                 Some(ts) => {
                     self.meta.logic = Some(s.to_string());
