@@ -70,6 +70,7 @@ pub fn register(r: &mut Registry) {
     fv_and_let_elim(r, &d, &h, &w);
     maybe_sort(r, &d);
     tc_sort(r, &d, &h, &w);
+    tc_term(r, &d, &h, &w);
     bv_len(r, &d, &h);
     unification(r, &d, &h, &w);
     display(r, &d, &h, &w);
@@ -427,6 +428,72 @@ fn maybe_sort(r: &mut Registry, d: &[usize]) {
 fn tc_sort(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize]) {
     for (shape, ps, build) in sort_shapes(d, h, w) {
         pair!(r, "tc.tc_sort", shape, &ps, build, |(c, s), side| side::tc_sort(c, s), eq);
+    }
+}
+
+/// Re-check a typed term: the same walk as checking an untyped one, over inputs the shapes already
+/// build typed. Binders get fresh ids on every check, hence `same_term`. Both sides must succeed,
+/// since a shape that fails to check stops at its first leaf and compares only two errors.
+fn tc_term(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize]) {
+    let same = |a: &Result<Term, String>, b: &Result<Term, String>| match (a, b) {
+        (Ok(a), Ok(b)) => same_term(a, b),
+        _ => false,
+    };
+    /// `f`'s shape, in a context declaring the symbols it uses, so that it type-checks.
+    fn declared(
+        decls: impl Fn(usize) -> String + 'static,
+        f: impl Fn(&mut Context, usize) -> Term + 'static,
+    ) -> Box<dyn Fn(usize) -> Tm> {
+        Box::new(move |n| {
+            let (mut c, _) = script(&format!("(set-logic ALL){}", decls(n)));
+            let t = f(&mut c, n);
+            (c, t)
+        })
+    }
+    fn bools(prefixes: &[&str], n: usize) -> String {
+        let mut s = String::new();
+        for p in prefixes {
+            for i in 0..n {
+                s.push_str(&format!("(declare-const {p}{i} Bool)"));
+            }
+        }
+        s
+    }
+    let shapes: [(&'static str, &[usize], Box<dyn Fn(usize) -> Tm>); 9] = [
+        ("not_chain", d, declared(|_| "(declare-const p Bool)".into(), |c, n| {
+            let p = bvar(c, "p");
+            not_chain(c, n, p)
+        })),
+        ("app_chain", d, declared(
+            |_| "(declare-const x Int)(declare-fun f (Int) Int)".into(),
+            app_chain,
+        )),
+        ("ite_chain", d, declared(
+            |n| format!("(declare-const q Bool){}", bools(&["c", "p"], n)),
+            |c, n| ite_else_chain(c, n, false),
+        )),
+        ("balanced", h, declared(|n| bools(&["p"], 1 << n), balanced_bool)),
+        ("wide", w, declared(|n| bools(&["p", "q"], n), wide_bool)),
+        ("forall_chain", d, Box::new(|n| {
+            let (mut c, _) = script("(set-logic ALL)");
+            let t = term(&mut c, &forall_chain_src(n));
+            (c, t)
+        })),
+        ("let_chain", d, Box::new(|n| {
+            let (mut c, _) = script("(set-logic ALL)(declare-const x Int)");
+            let t = term(&mut c, &let_chain_src(n));
+            (c, t)
+        })),
+        ("match_chain", d, Box::new(|n| {
+            let (mut c, _) = script(&format!("(set-logic ALL){LIST_DT}(declare-const l L)"));
+            let t = term(&mut c, &match_chain_src(n));
+            (c, t)
+        })),
+        // no `pattern_chain`: a `:pattern` outside a quantifier body is ill-typed
+        ("named_chain", d, declared(|_| "(declare-const x Bool)".into(), named_chain)),
+    ];
+    for (shape, ps, build) in shapes {
+        pair!(r, "tc.tc_term", shape, ps, &build, |(c, t), side| side::tc_term(c, t), same);
     }
 }
 

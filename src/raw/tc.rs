@@ -36,7 +36,7 @@ use crate::allocator::*;
 use crate::ast::utils::is_term_bool_alt;
 use crate::ast::{
     Context, ContextMeta, ContextStack, FetchSort, HasArenaAlt, Monomorphization, SymbolQuote,
-    TermRecursor, Theory,
+    Theory,
 };
 use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::meta::WithMeta;
@@ -51,7 +51,6 @@ use num_traits::cast::ToPrimitive;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use unif::SortSubst;
-use yaspar::ast::Keyword;
 use yaspar_macros::stack_safe;
 
 mod app;
@@ -593,599 +592,6 @@ where
     }
 }
 
-impl<St, So, T> TermRecursor<St, So, T> for TCEnv<'_, '_, Sort>
-where
-    St: AllocatableString<Arena> + Contains<T = String>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
-    T: Display + MetaData,
-{
-    type Out = Term;
-    type Attr = Attribute;
-    type Binding = VarBinding<Str, Term>;
-    type Pattern = Pattern;
-    type Arm = PatternArm;
-    type Err = String;
-
-    fn on_constant(
-        &mut self,
-        current: &T,
-        constant: &alg::Constant<St>,
-        sort: &Option<So>,
-    ) -> TC<Term> {
-        let c = constant_conv(constant, self);
-        let t = typed_constant(self, c)
-            .map_err(|e| format!("{e} for {current}{}", current.display_meta_data()))?;
-        if let Some(sort) = sort {
-            let sort = sort.type_check(&mut self.with_empty_local())?;
-            let s = t.get_sort(self);
-            if s != sort {
-                return sort_mismatch(&sort, &s, current, &current.display_meta_data());
-            }
-        }
-        Ok(t)
-    }
-
-    fn on_global(
-        &mut self,
-        current: &T,
-        id: &alg::QualifiedIdentifier<St, So>,
-        sort: &Option<So>,
-    ) -> TC<Term> {
-        let qid = id.type_check(self)?;
-        let sort = match sort {
-            None => None,
-            Some(sort) => Some(sort.type_check(&mut self.with_empty_local())?),
-        };
-        app::typed_qualified_identifier(self, qid, sort, &current.display_meta_data())
-    }
-
-    fn on_local(&mut self, current: &T, id: &alg::Local<St, So>) -> TC<Term> {
-        let symbol = id.symbol.allocate(self.arena);
-        match self.local.lookup(&symbol) {
-            None => Err(format!(
-                "TC: local variable {}{} is not bound!",
-                symbol.sym_quote(),
-                current.display_meta_data()
-            )),
-            Some((id, s)) => Ok(self.arena.local(alg::Local {
-                id,
-                symbol,
-                sort: s,
-            })),
-        }
-    }
-
-    fn on_app(
-        &mut self,
-        current: &T,
-        id: &alg::QualifiedIdentifier<St, So>,
-        ts: &[T],
-        s: &Option<So>,
-        recs: Vec<Self::Out>,
-    ) -> TC<Term> {
-        // 1. first we make sure f is not a local variable.
-        check_global_var_locally(self, id.id_str())?;
-        let nf = id.type_check(self)?;
-
-        // 2. then we associate the type-checked arguments with potential location information
-        let args = ts
-            .iter()
-            .zip(recs)
-            .map(|(a, t)| WithMeta::new(t, a.display_meta_data()))
-            .collect();
-        let outs = match s {
-            None => None,
-            Some(outs) => Some(outs.type_check(&mut self.with_empty_local())?),
-        };
-
-        app::typed_app(
-            self,
-            nf,
-            args,
-            outs,
-            &id.id_str().display_meta_data(),
-            &current.display_meta_data(),
-        )
-    }
-
-    fn on_let_binding(
-        &mut self,
-        _current: &T,
-        vs: &[VarBinding<St, T>],
-        _body: &T,
-        binding_idx: usize,
-        binding_rec: Self::Out,
-    ) -> Result<Self::Binding, Self::Err> {
-        let v = &vs[binding_idx];
-        let sym = v.0.allocate(self.arena);
-        let new_id = self.arena.new_local();
-        Ok(VarBinding(sym, new_id, binding_rec))
-    }
-
-    fn setup_let_scope(
-        &mut self,
-        _current: &T,
-        _vs: &[VarBinding<St, T>],
-        _body: &T,
-        vs_rec: &[Self::Binding],
-    ) -> Result<(), Self::Err> {
-        let sorts = vs_rec
-            .iter()
-            .map(|v| VarBinding(v.0.clone(), v.1, v.2.get_sort(self)))
-            .collect::<Vec<_>>();
-        sanitize_bindings(&sorts, |v| v.0.clone())?;
-        self.local.loc_inc.push(sorts);
-        Ok(())
-    }
-
-    fn on_let(
-        &mut self,
-        current: &T,
-        _vs: &[VarBinding<St, T>],
-        _body: &T,
-        vs_rec: Vec<Self::Binding>,
-        body_rec: Self::Out,
-    ) -> TC<Term> {
-        self.local.scope_pop(current)?;
-        Ok(self.arena.let_term(vs_rec, body_rec))
-    }
-
-    fn cleanup_let_scope_on_error(
-        &mut self,
-        current: &T,
-        _vs: &[VarBinding<St, T>],
-        _body: &T,
-        _vs_rec: Vec<Self::Binding>,
-    ) {
-        let _ = self.local.scope_pop(current);
-    }
-
-    fn setup_quantifier_scope(
-        &mut self,
-        _current: &T,
-        vs: &[VarBinding<St, So>],
-        _t: &T,
-        _is_forall: bool,
-    ) -> Result<(), Self::Err> {
-        if !self.meta.theories.contains(&Theory::Quantifiers) {
-            return Err("TC: the current logic does not support quantifiers!".to_string());
-        }
-        let sorts = vs
-            .iter()
-            .map(|v| {
-                let sym = v.0.allocate(self.arena);
-                let sort = v.2.type_check(&mut self.with_empty_local())?;
-                Ok(VarBinding(sym, self.arena.new_local(), sort))
-            })
-            .collect::<TC<Vec<_>>>()?;
-        sanitize_bindings(&sorts, |v| v.0.clone())?;
-        self.local.loc_inc.push(sorts);
-        Ok(())
-    }
-
-    fn on_exists(
-        &mut self,
-        current: &T,
-        _vs: &[VarBinding<St, So>],
-        t: &T,
-        t_rec: Self::Out,
-    ) -> TC<Term> {
-        let sorts = self.local.scope_pop(current)?;
-        is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
-        Ok(self.arena.exists(sorts, t_rec))
-    }
-
-    fn on_forall(
-        &mut self,
-        current: &T,
-        _vs: &[VarBinding<St, So>],
-        t: &T,
-        t_rec: Self::Out,
-    ) -> TC<Term> {
-        let sorts =
-            self.local.loc_inc.pop().ok_or_else(|| {
-                format!("TC: scoping error, failed to manage scope for {current}")
-            })?;
-        is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
-        Ok(self.arena.forall(sorts, t_rec))
-    }
-
-    fn cleanup_quantifier_scope_on_error(
-        &mut self,
-        current: &T,
-        _vs: &[VarBinding<St, So>],
-        _t: &T,
-        _is_forall: bool,
-    ) {
-        let _ = self.local.scope_pop(current);
-    }
-
-    fn setup_match_case_scope(
-        &mut self,
-        _current: &T,
-        scrutinee: &T,
-        cases: &[alg::PatternArm<St, T>],
-        scrutinee_rec: &Self::Out,
-        case_idx: usize,
-    ) -> TC<Self::Pattern> {
-        if !self.meta.theories.contains(&Theory::Datatypes) {
-            return Err("TC: current logic does not support the theory of datatypes!".into());
-        }
-
-        // We determine the sorts of constructors if not already exists
-        if !self.local.scrutinee_map.contains_key(scrutinee_rec) {
-            let constructors = tc_determine_datatype_sort_map(
-                self,
-                scrutinee_rec,
-                &scrutinee.display_meta_data(),
-            )?;
-            self.local
-                .scrutinee_map
-                .insert(scrutinee_rec.clone(), constructors);
-        }
-        let so = scrutinee_rec.get_sort(self);
-        let constructors = self.local.scrutinee_map.get(scrutinee_rec).unwrap();
-        let case = &cases[case_idx];
-        let pattern = match &case.pattern {
-            alg::Pattern::Ctor(ctor) => {
-                let ctr = ctor.allocate(self.arena);
-                match constructors.get(&ctr) {
-                    None => {
-                        return Err(format!(
-                            "TC: case {ctr}{} is not a constructor!",
-                            ctor.display_meta_data()
-                        ));
-                    }
-                    Some(args) => {
-                        if !args.is_empty() {
-                            return Err(format!(
-                                "TC: constructor {ctr}{} requires a non-empty list of arguments",
-                                ctor.display_meta_data()
-                            ));
-                        }
-                    }
-                }
-                self.local.loc_inc.push(vec![]);
-                Pattern::Ctor(ctr)
-            }
-            alg::Pattern::Wildcard(ctor) => {
-                // in this case, [ctor] is either a wildcard variable, or a nullary constructor.
-                // depending on the case, we just need to TC with an extra variable [ctor],
-                // if it is a wildcard.
-                let (sorts, pattern) = match ctor {
-                    None => (vec![], Pattern::Wildcard(None)),
-                    Some((ctor, _)) => {
-                        let ctr = ctor.allocate(self.arena);
-                        match constructors.get(&ctr) {
-                            None => {
-                                let id = self.arena.new_local();
-                                (
-                                    vec![VarBinding(ctr.clone(), id, so.clone())],
-                                    Pattern::Wildcard(Some((ctr.clone(), id))),
-                                )
-                            }
-                            Some(args) => {
-                                if args.is_empty() {
-                                    (vec![], Pattern::Ctor(ctr.clone()))
-                                } else {
-                                    return Err(format!(
-                                        "TC: constructor {ctr}{} requires a non-empty list of arguments!",
-                                        ctr.display_meta_data()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                };
-                sanitize_bindings(&sorts, |v| v.0.clone())?;
-                self.local.loc_inc.push(sorts);
-                pattern
-            }
-            alg::Pattern::Applied { ctor, arguments } => {
-                // in this case, [ctor] must be a constructor, so we must extract its signature
-                // from [constructors].
-                let ctr = ctor.allocate(self.arena);
-                match constructors.get(&ctr) {
-                    None => {
-                        return Err(format!(
-                            "TC: {ctr}{} is not a constructor of sort {so}!",
-                            ctor.display_meta_data()
-                        ));
-                    }
-                    Some(sig) => {
-                        // first, the signature and the provided arguments must have the same
-                        // length.
-                        if sig.len() != arguments.len() {
-                            return Err(format!(
-                                "TC: {ctr}{} include {} arguments, but {} are required of sorts {}!",
-                                ctor.display_meta_data(),
-                                arguments.len(),
-                                sig.len(),
-                                sig.iter()
-                                    .map(|s| s.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ));
-                        }
-                        let arguments = arguments
-                            .iter()
-                            .map(|o| {
-                                o.as_ref().map(|(name, _)| {
-                                    let symbol = name.allocate(self.arena);
-                                    let fresh_id = self.arena.new_local();
-                                    (symbol, fresh_id)
-                                })
-                            })
-                            .collect::<Vec<_>>();
-                        let sorts = arguments
-                            .iter()
-                            .zip(sig)
-                            .filter_map(|(o, s)| {
-                                o.as_ref()
-                                    .map(|(name, id)| alg::VarBinding(name.clone(), *id, s.clone()))
-                            })
-                            .collect::<Vec<_>>();
-                        sanitize_bindings(&sorts, |v| v.0.clone())?;
-                        self.local.loc_inc.push(sorts);
-                        Pattern::Applied {
-                            ctor: ctr,
-                            arguments,
-                        }
-                    }
-                }
-            }
-        };
-        Ok(pattern)
-    }
-
-    fn on_match_arm(
-        &mut self,
-        current: &T,
-        _scrutinee: &T,
-        _cases: &[alg::PatternArm<St, T>],
-        _scrutinee_rec: &Self::Out,
-        _case_idx: usize,
-        current_pattern: Self::Pattern,
-        arm: Self::Out,
-    ) -> Result<Self::Arm, Self::Err> {
-        self.local.scope_pop(current)?;
-        Ok(PatternArm {
-            pattern: current_pattern,
-            body: arm,
-        })
-    }
-
-    fn cleanup_match_case_scope_on_error(
-        &mut self,
-        current: &T,
-        _scrutinee: &T,
-        _cases: &[alg::PatternArm<St, T>],
-        _scrutinee_rec: Self::Out,
-        _case_idx: usize,
-    ) {
-        let _ = self.local.scope_pop(current);
-    }
-
-    fn on_match(
-        &mut self,
-        current: &T,
-        _scrutinee: &T,
-        _cases: &[alg::PatternArm<St, T>],
-        scrutinee_rec: Self::Out,
-        cases_rec: Vec<Self::Arm>,
-    ) -> TC<Term> {
-        let constructors = self.local.scrutinee_map.get(&scrutinee_rec).unwrap();
-        let mut unseen_ctors: HashSet<Str> = constructors.keys().cloned().collect();
-        let mut covered = false;
-        for case in &cases_rec {
-            match &case.pattern {
-                alg::Pattern::Wildcard(_) => {
-                    covered = true;
-                    break;
-                }
-                alg::Pattern::Ctor(ctor) | alg::Pattern::Applied { ctor, .. } => {
-                    unseen_ctors.remove(ctor);
-                }
-            }
-        }
-        if unseen_ctors.is_empty() {
-            covered = true;
-        }
-        if !covered {
-            Err(format!(
-                "TC: arms for constructors {} are needed in the match expression{}!",
-                unseen_ctors
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                current.display_meta_data()
-            ))
-        } else {
-            Ok(self.arena.matching(scrutinee_rec, cases_rec))
-        }
-    }
-
-    fn on_annotated(
-        &mut self,
-        _current: &T,
-        _t: &T,
-        _anns: &[alg::Attribute<St, T>],
-        t_rec: Self::Out,
-        anns_rec: Vec<Self::Attr>,
-    ) -> TC<Term> {
-        Ok(self.arena.annotated(t_rec, anns_rec))
-    }
-
-    fn on_attribute_keyword(&mut self, keyword: &Keyword) -> Result<Self::Attr, Self::Err> {
-        Ok(Attribute::Keyword(keyword.clone()))
-    }
-
-    fn on_attribute_constant(
-        &mut self,
-        keyword: &Keyword,
-        constant: &alg::Constant<St>,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(Attribute::Constant(
-            keyword.clone(),
-            constant_conv(constant, self),
-        ))
-    }
-
-    fn on_attribute_symbol(
-        &mut self,
-        keyword: &Keyword,
-        symbol: &St,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(Attribute::Symbol(
-            keyword.clone(),
-            symbol.allocate(self.arena),
-        ))
-    }
-
-    fn on_attribute_named(&mut self, name: &St) -> TC<Self::Attr> {
-        Ok(Attribute::Named(name.allocate(self.arena)))
-    }
-
-    fn on_attribute_pattern(
-        &mut self,
-        _patterns: &[T],
-        patterns_rec: Vec<Self::Out>,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(Attribute::Pattern(patterns_rec))
-    }
-
-    #[cfg(feature = "no-pattern")]
-    fn on_attribute_no_pattern(
-        &mut self,
-        _pattern: &T,
-        pattern_rec: Self::Out,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(Attribute::NoPattern(pattern_rec))
-    }
-
-    fn on_eq(
-        &mut self,
-        _current: &T,
-        _a: &T,
-        b: &T,
-        a_rec: Self::Out,
-        b_rec: Self::Out,
-    ) -> TC<Term> {
-        typed_eq(self, a_rec, b_rec, &b.display_meta_data())
-    }
-
-    fn on_distinct(&mut self, _current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
-        typed_distinct(
-            self,
-            ts.iter()
-                .zip(ts_rec)
-                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data()))
-                .collect(),
-        )
-    }
-
-    fn on_and(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
-        if ts_rec.is_empty() {
-            return Err(format!(
-                "TC: 'and'{} requires at least one argument!",
-                current.display_meta_data()
-            ));
-        }
-
-        check_all_bool_terms(
-            ts.iter()
-                .zip(&ts_rec)
-                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
-            self,
-        )?;
-        Ok(self.arena.and(ts_rec))
-    }
-
-    fn on_or(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
-        if ts_rec.is_empty() {
-            return Err(format!(
-                "TC: 'or'{} requires at least one argument!",
-                current.display_meta_data()
-            ));
-        }
-
-        check_all_bool_terms(
-            ts.iter()
-                .zip(&ts_rec)
-                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
-            self,
-        )?;
-        Ok(self.arena.or(ts_rec))
-    }
-
-    fn on_xor(&mut self, current: &T, ts: &[T], ts_rec: Vec<Self::Out>) -> TC<Term> {
-        if ts.len() < 2 {
-            return Err(format!(
-                "TC: 'xor'{} requires at least two arguments!",
-                current.display_meta_data()
-            ));
-        }
-
-        check_all_bool_terms(
-            ts.iter()
-                .zip(&ts_rec)
-                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
-            self,
-        )?;
-        Ok(self.arena.xor(ts_rec))
-    }
-
-    fn on_not(&mut self, _current: &T, t: &T, t_rec: Self::Out) -> TC<Term> {
-        typed_not(self, t_rec, &t.display_meta_data())
-    }
-
-    fn on_implies(
-        &mut self,
-        current: &T,
-        ts: &[T],
-        t: &T,
-        ts_rec: Vec<Self::Out>,
-        t_rec: Self::Out,
-    ) -> TC<Term> {
-        if ts_rec.is_empty() {
-            return Err(format!(
-                "TC: implies '=>'{} should take at least one antecedent!",
-                current.display_meta_data()
-            ));
-        }
-        check_all_bool_terms(
-            ts.iter()
-                .zip(&ts_rec)
-                .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
-            self,
-        )?;
-
-        is_term_bool_alt(self, &t_rec, &t.display_meta_data())?;
-        Ok(self.arena.implies(ts_rec, t_rec))
-    }
-
-    fn on_ite(
-        &mut self,
-        _current: &T,
-        b: &T,
-        _t: &T,
-        e: &T,
-        b_rec: Self::Out,
-        t_rec: Self::Out,
-        e_rec: Self::Out,
-    ) -> TC<Term> {
-        is_term_bool_alt(self, &b_rec, &b.display_meta_data())?;
-        let ts = t_rec.get_sort(self);
-        let es = e_rec.get_sort(self);
-        if ts != es {
-            sort_mismatch(&ts, &es, e, &e.display_meta_data())
-        } else {
-            Ok(self.arena.ite(b_rec, t_rec, e_rec))
-        }
-    }
-}
-
 impl<St, So, T> Typecheck<TCEnv<'_, '_, Sort>> for T
 where
     St: AllocatableString<Arena> + Contains<T = String>,
@@ -1195,7 +601,720 @@ where
     type Out = Term;
 
     fn type_check(&self, env: &mut TCEnvGen<'_, TCLocal<Sort>>) -> TC<Self::Out> {
-        env.recurse_on_term(self)
+        tc_term_rec(self, false, env)
+    }
+}
+
+/// The body of [`Typecheck::type_check`] for a term, which recurses over a term of unbounded
+/// nesting. Like [`tc_sort_rec`], it lives out here so that `#[stack_safe]` can rewrite it, and a
+/// nested term re-enters this driver rather than starting a new one.
+///
+/// Every loop over a term's children is a member of its own, so the slices it walks are typed by
+/// its signature. Every scope pushed onto `env.local` before descending into a body is popped once
+/// that body returns, whether it succeeded or not, so an error leaves the local environment as it
+/// was found.
+#[stack_safe]
+mod term_rec {
+    use super::*;
+
+    /// `pattern_ok` says whether `this` is the body of a quantifier, the only place where
+    /// `:pattern` and `:no-pattern` may annotate a term (§3.6.5).
+    pub(super) fn tc_term_rec<St, So, T>(
+        this: &T,
+        pattern_ok: bool,
+        env: &mut TCEnv<'_, '_, Sort>,
+    ) -> TC<Term>
+    where
+        St: AllocatableString<Arena> + Contains<T = String>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
+    {
+        match this.inner().repr() {
+            alg::Term::Constant(constant, sort) => tc_constant(env, this, constant, sort),
+            alg::Term::Global(id, sort) => tc_global(env, this, id, sort),
+            alg::Term::Local(id) => tc_local(env, this, id),
+            alg::Term::App(id, ts, sort) => {
+                let recs = tc_terms_rec(ts, env)?;
+                tc_app(env, this, id, ts, sort, recs)
+            }
+            alg::Term::Let(vs, body) => {
+                let bindings = tc_let_bindings_rec(vs, env)?;
+                tc_let_scope(env, &bindings)?;
+                let body_res = tc_term_rec(body, false, env);
+                let popped = env.local.scope_pop(this);
+                let body_rec = body_res?;
+                popped?;
+                Ok(env.arena.let_term(bindings, body_rec))
+            }
+            alg::Term::Exists(vs, body) | alg::Term::Forall(vs, body) => {
+                tc_quantifier_scope(env, vs)?;
+                let body_res = tc_term_rec(body, true, env);
+                let popped = env.local.scope_pop(this);
+                let body_rec = body_res?;
+                let sorts = popped?;
+                is_term_bool_alt(env, &body_rec, &body.display_meta_data())?;
+                if matches!(this.inner().repr(), alg::Term::Forall(..)) {
+                    Ok(env.arena.forall(sorts, body_rec))
+                } else {
+                    Ok(env.arena.exists(sorts, body_rec))
+                }
+            }
+            alg::Term::Matching(scrutinee, cases) => {
+                let scrutinee_rec = tc_term_rec(scrutinee, false, env)?;
+                tc_match_arms_rec(this, scrutinee, cases, scrutinee_rec, env)
+            }
+            alg::Term::Annotated(t, anns) => {
+                check_pattern_placement(this, anns, pattern_ok)?;
+                // a nested annotation is still the body of the quantifier
+                let t_rec = tc_term_rec(t, pattern_ok, env)?;
+                let anns_rec = tc_attributes_rec(anns, env)?;
+                Ok(env.arena.annotated(t_rec, anns_rec))
+            }
+            alg::Term::Eq(a, b) => {
+                let a_rec = tc_term_rec(a, false, env)?;
+                let b_rec = tc_term_rec(b, false, env)?;
+                typed_eq(env, a_rec, b_rec, &b.display_meta_data())
+            }
+            alg::Term::Distinct(ts)
+            | alg::Term::And(ts)
+            | alg::Term::Or(ts)
+            | alg::Term::Xor(ts) => {
+                let recs = tc_terms_rec(ts, env)?;
+                tc_nary(env, this, ts, recs)
+            }
+            alg::Term::Not(t) => {
+                let t_rec = tc_term_rec(t, false, env)?;
+                typed_not(env, t_rec, &t.display_meta_data())
+            }
+            alg::Term::Implies(ts, t) => {
+                let recs = tc_terms_rec(ts, env)?;
+                let t_rec = tc_term_rec(t, false, env)?;
+                tc_implies(env, this, ts, t, recs, t_rec)
+            }
+            alg::Term::Ite(b, t, e) => {
+                let b_rec = tc_term_rec(b, false, env)?;
+                let t_rec = tc_term_rec(t, false, env)?;
+                let e_rec = tc_term_rec(e, false, env)?;
+                tc_ite(env, b, e, b_rec, t_rec, e_rec)
+            }
+        }
+    }
+
+    /// Type-check a list of terms, left to right.
+    fn tc_terms_rec<St, So, T>(ts: &[T], env: &mut TCEnv<'_, '_, Sort>) -> TC<Vec<Term>>
+    where
+        St: AllocatableString<Arena> + Contains<T = String>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
+    {
+        let mut recs = Vec::with_capacity(ts.len());
+        let mut i = 0usize;
+        while i < ts.len() {
+            recs.push(tc_term_rec(&ts[i], false, env)?);
+            i += 1;
+        }
+        Ok(recs)
+    }
+
+    /// Type-check the bindings of a `let`, left to right, each under a fresh local id.
+    fn tc_let_bindings_rec<St, So, T>(
+        vs: &[VarBinding<St, T>],
+        env: &mut TCEnv<'_, '_, Sort>,
+    ) -> TC<Vec<VarBinding<Str, Term>>>
+    where
+        St: AllocatableString<Arena> + Contains<T = String>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
+    {
+        let mut bindings = Vec::with_capacity(vs.len());
+        let mut i = 0usize;
+        while i < vs.len() {
+            let t = tc_term_rec(&vs[i].2, false, env)?;
+            let sym = vs[i].0.allocate(env.arena);
+            bindings.push(VarBinding(sym, env.arena.new_local(), t));
+            i += 1;
+        }
+        Ok(bindings)
+    }
+
+    /// Type-check the arms of the match expression `this`, each under the scope its pattern binds,
+    /// and build the match from them and its type-checked scrutinee.
+    fn tc_match_arms_rec<St, So, T>(
+        this: &T,
+        scrutinee: &T,
+        cases: &[alg::PatternArm<St, T>],
+        scrutinee_rec: Term,
+        env: &mut TCEnv<'_, '_, Sort>,
+    ) -> TC<Term>
+    where
+        St: AllocatableString<Arena> + Contains<T = String>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
+    {
+        let mut arms = Vec::with_capacity(cases.len());
+        let mut i = 0usize;
+        while i < cases.len() {
+            let pattern = tc_match_case_scope(env, scrutinee, &scrutinee_rec, &cases[i])?;
+            let arm_res = tc_term_rec(&cases[i].body, false, env);
+            let popped = env.local.scope_pop(this);
+            let arm_rec = arm_res?;
+            popped?;
+            arms.push(PatternArm {
+                pattern,
+                body: arm_rec,
+            });
+            i += 1;
+        }
+        tc_match(env, this, cases, scrutinee_rec, arms)
+    }
+
+    /// Type-check the attributes of an annotated term, left to right.
+    fn tc_attributes_rec<St, So, T>(
+        anns: &[alg::Attribute<St, T>],
+        env: &mut TCEnv<'_, '_, Sort>,
+    ) -> TC<Vec<Attribute>>
+    where
+        St: AllocatableString<Arena> + Contains<T = String>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
+    {
+        let mut anns_rec = Vec::with_capacity(anns.len());
+        let mut i = 0usize;
+        while i < anns.len() {
+            match &anns[i] {
+                alg::Attribute::Pattern(ts) => {
+                    let pats = tc_terms_rec(ts, env)?;
+                    anns_rec.push(Attribute::Pattern(pats));
+                }
+                #[cfg(feature = "no-pattern")]
+                alg::Attribute::NoPattern(p) => {
+                    let p_rec = tc_term_rec(p, false, env)?;
+                    anns_rec.push(Attribute::NoPattern(p_rec));
+                }
+                alg::Attribute::Keyword(kw) => anns_rec.push(Attribute::Keyword(kw.clone())),
+                alg::Attribute::Constant(kw, c) => {
+                    let conv = constant_conv(c, env);
+                    anns_rec.push(Attribute::Constant(kw.clone(), conv));
+                }
+                alg::Attribute::Symbol(kw, sym) => {
+                    let sym_rec = sym.allocate(env.arena);
+                    anns_rec.push(Attribute::Symbol(kw.clone(), sym_rec));
+                }
+                alg::Attribute::Named(name) => {
+                    let name_rec = name.allocate(env.arena);
+                    anns_rec.push(Attribute::Named(name_rec));
+                }
+            }
+            i += 1;
+        }
+        Ok(anns_rec)
+    }
+}
+
+/// Reject a `:pattern` or `:no-pattern` among `anns` unless the annotated term `current` is the
+/// body of a quantifier.
+fn check_pattern_placement<St, T>(
+    current: &T,
+    anns: &[alg::Attribute<St, T>],
+    pattern_ok: bool,
+) -> TC<()>
+where
+    T: MetaData,
+{
+    if pattern_ok {
+        return Ok(());
+    }
+    for ann in anns {
+        let keyword = match ann {
+            alg::Attribute::Pattern(_) => ":pattern",
+            #[cfg(feature = "no-pattern")]
+            alg::Attribute::NoPattern(_) => ":no-pattern",
+            _ => continue,
+        };
+        return Err(format!(
+            "TC: {keyword}{} may only annotate the body of a quantifier!",
+            current.display_meta_data()
+        ));
+    }
+    Ok(())
+}
+
+/// Type-check a constant, against its sort annotation if there is one.
+fn tc_constant<St, So, T>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    constant: &alg::Constant<St>,
+    sort: &Option<So>,
+) -> TC<Term>
+where
+    St: AllocatableString<Arena> + Contains<T = String>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    T: Display + MetaData,
+{
+    let c = constant_conv(constant, env);
+    let t = typed_constant(env, c)
+        .map_err(|e| format!("{e} for {current}{}", current.display_meta_data()))?;
+    if let Some(sort) = sort {
+        let sort = sort.type_check(&mut env.with_empty_local())?;
+        let s = t.get_sort(env);
+        if s != sort {
+            return sort_mismatch(&sort, &s, current, &current.display_meta_data());
+        }
+    }
+    Ok(t)
+}
+
+/// Type-check a global identifier, with its optional sort annotation.
+fn tc_global<St, So, T>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    id: &alg::QualifiedIdentifier<St, So>,
+    sort: &Option<So>,
+) -> TC<Term>
+where
+    St: AllocatableString<Arena>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    T: MetaData,
+{
+    let qid = id.type_check(env)?;
+    let sort = match sort {
+        None => None,
+        Some(sort) => Some(sort.type_check(&mut env.with_empty_local())?),
+    };
+    app::typed_qualified_identifier(env, qid, sort, &current.display_meta_data())
+}
+
+/// Resolve a local variable against the local scope.
+fn tc_local<St, So, T>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    id: &alg::Local<St, So>,
+) -> TC<Term>
+where
+    St: AllocatableString<Arena>,
+    T: MetaData,
+{
+    let symbol = id.symbol.allocate(env.arena);
+    match env.local.lookup(&symbol) {
+        None => Err(format!(
+            "TC: local variable {}{} is not bound!",
+            symbol.sym_quote(),
+            current.display_meta_data()
+        )),
+        Some((id, s)) => Ok(env.arena.local(alg::Local {
+            id,
+            symbol,
+            sort: s,
+        })),
+    }
+}
+
+/// Type-check a function application, given its type-checked arguments `recs`.
+fn tc_app<St, So, T>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    id: &alg::QualifiedIdentifier<St, So>,
+    ts: &[T],
+    s: &Option<So>,
+    recs: Vec<Term>,
+) -> TC<Term>
+where
+    St: AllocatableString<Arena>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    T: MetaData,
+{
+    // 1. first we make sure f is not a local variable.
+    check_global_var_locally(env, id.id_str())?;
+    let nf = id.type_check(env)?;
+
+    // 2. then we associate the type-checked arguments with potential location information
+    let args = ts
+        .iter()
+        .zip(recs)
+        .map(|(a, t)| WithMeta::new(t, a.display_meta_data()))
+        .collect();
+    let outs = match s {
+        None => None,
+        Some(outs) => Some(outs.type_check(&mut env.with_empty_local())?),
+    };
+
+    app::typed_app(
+        env,
+        nf,
+        args,
+        outs,
+        &id.id_str().display_meta_data(),
+        &current.display_meta_data(),
+    )
+}
+
+/// Push the scope of a `let` whose bindings have been type-checked.
+fn tc_let_scope(env: &mut TCEnv<'_, '_, Sort>, bindings: &[VarBinding<Str, Term>]) -> TC<()> {
+    let sorts = bindings
+        .iter()
+        .map(|v| VarBinding(v.0.clone(), v.1, v.2.get_sort(env)))
+        .collect::<Vec<_>>();
+    sanitize_bindings(&sorts, |v| v.0.clone())?;
+    env.local.loc_inc.push(sorts);
+    Ok(())
+}
+
+/// Push the scope of a quantifier.
+fn tc_quantifier_scope<St, So>(env: &mut TCEnv<'_, '_, Sort>, vs: &[VarBinding<St, So>]) -> TC<()>
+where
+    St: AllocatableString<Arena>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+{
+    if !env.meta.theories.contains(&Theory::Quantifiers) {
+        return Err("TC: the current logic does not support quantifiers!".to_string());
+    }
+    let sorts = vs
+        .iter()
+        .map(|v| {
+            let sym = v.0.allocate(env.arena);
+            let sort = v.2.type_check(&mut env.with_empty_local())?;
+            Ok(VarBinding(sym, env.arena.new_local(), sort))
+        })
+        .collect::<TC<Vec<_>>>()?;
+    sanitize_bindings(&sorts, |v| v.0.clone())?;
+    env.local.loc_inc.push(sorts);
+    Ok(())
+}
+
+/// Type-check the pattern of a match arm, and push the scope of the variables it binds.
+fn tc_match_case_scope<St, T>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    scrutinee: &T,
+    scrutinee_rec: &Term,
+    case: &alg::PatternArm<St, T>,
+) -> TC<Pattern>
+where
+    St: AllocatableString<Arena>,
+    T: MetaData,
+{
+    if !env.meta.theories.contains(&Theory::Datatypes) {
+        return Err("TC: current logic does not support the theory of datatypes!".into());
+    }
+
+    // We determine the sorts of constructors if not already exists
+    if !env.local.scrutinee_map.contains_key(scrutinee_rec) {
+        let constructors =
+            tc_determine_datatype_sort_map(env, scrutinee_rec, &scrutinee.display_meta_data())?;
+        env.local
+            .scrutinee_map
+            .insert(scrutinee_rec.clone(), constructors);
+    }
+    let so = scrutinee_rec.get_sort(env);
+    let constructors = env.local.scrutinee_map.get(scrutinee_rec).unwrap();
+    let pattern = match &case.pattern {
+        alg::Pattern::Ctor(ctor) => {
+            let ctr = ctor.allocate(env.arena);
+            match constructors.get(&ctr) {
+                None => {
+                    return Err(format!(
+                        "TC: case {ctr}{} is not a constructor!",
+                        ctor.display_meta_data()
+                    ));
+                }
+                Some(args) => {
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "TC: constructor {ctr}{} requires a non-empty list of arguments",
+                            ctor.display_meta_data()
+                        ));
+                    }
+                }
+            }
+            env.local.loc_inc.push(vec![]);
+            Pattern::Ctor(ctr)
+        }
+        alg::Pattern::Wildcard(ctor) => {
+            // in this case, [ctor] is either a wildcard variable, or a nullary constructor.
+            // depending on the case, we just need to TC with an extra variable [ctor],
+            // if it is a wildcard.
+            let (sorts, pattern) = match ctor {
+                None => (vec![], Pattern::Wildcard(None)),
+                Some((ctor, _)) => {
+                    let ctr = ctor.allocate(env.arena);
+                    match constructors.get(&ctr) {
+                        None => {
+                            let id = env.arena.new_local();
+                            (
+                                vec![VarBinding(ctr.clone(), id, so.clone())],
+                                Pattern::Wildcard(Some((ctr.clone(), id))),
+                            )
+                        }
+                        Some(args) => {
+                            if args.is_empty() {
+                                (vec![], Pattern::Ctor(ctr.clone()))
+                            } else {
+                                return Err(format!(
+                                    "TC: constructor {ctr}{} requires a non-empty list of arguments!",
+                                    ctr.display_meta_data()
+                                ));
+                            }
+                        }
+                    }
+                }
+            };
+            sanitize_bindings(&sorts, |v| v.0.clone())?;
+            env.local.loc_inc.push(sorts);
+            pattern
+        }
+        alg::Pattern::Applied { ctor, arguments } => {
+            // in this case, [ctor] must be a constructor, so we must extract its signature
+            // from [constructors].
+            let ctr = ctor.allocate(env.arena);
+            match constructors.get(&ctr) {
+                None => {
+                    return Err(format!(
+                        "TC: {ctr}{} is not a constructor of sort {so}!",
+                        ctor.display_meta_data()
+                    ));
+                }
+                Some(sig) => {
+                    // first, the signature and the provided arguments must have the same
+                    // length.
+                    if sig.len() != arguments.len() {
+                        return Err(format!(
+                            "TC: {ctr}{} include {} arguments, but {} are required of sorts {}!",
+                            ctor.display_meta_data(),
+                            arguments.len(),
+                            sig.len(),
+                            sig.iter()
+                                .map(|s| s.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                    let arguments = arguments
+                        .iter()
+                        .map(|o| {
+                            o.as_ref().map(|(name, _)| {
+                                let symbol = name.allocate(env.arena);
+                                let fresh_id = env.arena.new_local();
+                                (symbol, fresh_id)
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let sorts = arguments
+                        .iter()
+                        .zip(sig)
+                        .filter_map(|(o, s)| {
+                            o.as_ref()
+                                .map(|(name, id)| alg::VarBinding(name.clone(), *id, s.clone()))
+                        })
+                        .collect::<Vec<_>>();
+                    sanitize_bindings(&sorts, |v| v.0.clone())?;
+                    env.local.loc_inc.push(sorts);
+                    Pattern::Applied {
+                        ctor: ctr,
+                        arguments,
+                    }
+                }
+            }
+        }
+    };
+    Ok(pattern)
+}
+
+/// Build a match expression from its type-checked arms, checking that they are exhaustive.
+fn tc_match<St, T: Display + MetaData>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    cases: &[alg::PatternArm<St, T>],
+    scrutinee_rec: Term,
+    cases_rec: Vec<PatternArm>,
+) -> TC<Term> {
+    // the parser never produces an empty match, but the unchecked API can
+    let Some(first) = cases_rec.first() else {
+        return Err(format!(
+            "TC: match expression{} must have at least one arm!",
+            current.display_meta_data()
+        ));
+    };
+    // all arms must have the same sort as the first one
+    let arm_sort = first.body.get_sort(env);
+    for (case, case_rec) in cases.iter().zip(&cases_rec).skip(1) {
+        let s = case_rec.body.get_sort(env);
+        if s != arm_sort {
+            return sort_mismatch(&arm_sort, &s, &case.body, &case.body.display_meta_data());
+        }
+    }
+    let constructors = env.local.scrutinee_map.get(&scrutinee_rec).unwrap();
+    let mut unseen_ctors: HashSet<Str> = constructors.keys().cloned().collect();
+    let mut covered = false;
+    for case in &cases_rec {
+        match &case.pattern {
+            alg::Pattern::Wildcard(_) => {
+                covered = true;
+                break;
+            }
+            alg::Pattern::Ctor(ctor) | alg::Pattern::Applied { ctor, .. } => {
+                unseen_ctors.remove(ctor);
+            }
+        }
+    }
+    if unseen_ctors.is_empty() {
+        covered = true;
+    }
+    if !covered {
+        Err(format!(
+            "TC: arms for constructors {} are needed in the match expression{}!",
+            unseen_ctors
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            current.display_meta_data()
+        ))
+    } else {
+        Ok(env.arena.matching(scrutinee_rec, cases_rec))
+    }
+}
+
+/// Build a `distinct`, `and`, `or` or `xor` term, whichever `current` is, from its type-checked
+/// arguments.
+fn tc_nary<St, So, T>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    ts: &[T],
+    ts_rec: Vec<Term>,
+) -> TC<Term>
+where
+    T: Contains<T: Repr<T = alg::Term<St, So, T>>> + MetaData,
+{
+    match current.inner().repr() {
+        alg::Term::Distinct(_) => tc_distinct(env, ts, ts_rec),
+        alg::Term::And(_) => tc_and(env, current, ts, ts_rec),
+        alg::Term::Or(_) => tc_or(env, current, ts, ts_rec),
+        alg::Term::Xor(_) => tc_xor(env, current, ts, ts_rec),
+        _ => unreachable!("tc_nary is only called on distinct, and, or and xor"),
+    }
+}
+
+fn tc_distinct<T: MetaData>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    ts: &[T],
+    ts_rec: Vec<Term>,
+) -> TC<Term> {
+    typed_distinct(
+        env,
+        ts.iter()
+            .zip(ts_rec)
+            .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data()))
+            .collect(),
+    )
+}
+
+fn tc_and<T: MetaData>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    ts: &[T],
+    ts_rec: Vec<Term>,
+) -> TC<Term> {
+    if ts_rec.is_empty() {
+        return Err(format!(
+            "TC: 'and'{} requires at least one argument!",
+            current.display_meta_data()
+        ));
+    }
+
+    check_all_bool_terms(
+        ts.iter()
+            .zip(&ts_rec)
+            .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+        env,
+    )?;
+    Ok(env.arena.and(ts_rec))
+}
+
+fn tc_or<T: MetaData>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    ts: &[T],
+    ts_rec: Vec<Term>,
+) -> TC<Term> {
+    if ts_rec.is_empty() {
+        return Err(format!(
+            "TC: 'or'{} requires at least one argument!",
+            current.display_meta_data()
+        ));
+    }
+
+    check_all_bool_terms(
+        ts.iter()
+            .zip(&ts_rec)
+            .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+        env,
+    )?;
+    Ok(env.arena.or(ts_rec))
+}
+
+fn tc_xor<T: MetaData>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    ts: &[T],
+    ts_rec: Vec<Term>,
+) -> TC<Term> {
+    if ts.len() < 2 {
+        return Err(format!(
+            "TC: 'xor'{} requires at least two arguments!",
+            current.display_meta_data()
+        ));
+    }
+
+    check_all_bool_terms(
+        ts.iter()
+            .zip(&ts_rec)
+            .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+        env,
+    )?;
+    Ok(env.arena.xor(ts_rec))
+}
+
+/// Build an implication from its type-checked premises and conclusion.
+fn tc_implies<T: MetaData>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    current: &T,
+    ts: &[T],
+    t: &T,
+    ts_rec: Vec<Term>,
+    t_rec: Term,
+) -> TC<Term> {
+    if ts_rec.is_empty() {
+        return Err(format!(
+            "TC: implies '=>'{} should take at least one antecedent!",
+            current.display_meta_data()
+        ));
+    }
+    check_all_bool_terms(
+        ts.iter()
+            .zip(&ts_rec)
+            .map(|(t, tr)| WithMeta::new(tr, t.display_meta_data())),
+        env,
+    )?;
+
+    is_term_bool_alt(env, &t_rec, &t.display_meta_data())?;
+    Ok(env.arena.implies(ts_rec, t_rec))
+}
+
+/// Build an `ite` term from its type-checked condition and branches.
+fn tc_ite<T: Display + MetaData>(
+    env: &mut TCEnv<'_, '_, Sort>,
+    b: &T,
+    e: &T,
+    b_rec: Term,
+    t_rec: Term,
+    e_rec: Term,
+) -> TC<Term> {
+    is_term_bool_alt(env, &b_rec, &b.display_meta_data())?;
+    let ts = t_rec.get_sort(env);
+    let es = e_rec.get_sort(env);
+    if ts != es {
+        sort_mismatch(&ts, &es, e, &e.display_meta_data())
+    } else {
+        Ok(env.arena.ite(b_rec, t_rec, e_rec))
     }
 }
 
@@ -1231,7 +1350,7 @@ where
 #[cfg(test)]
 mod stack_safety {
     use crate::allocator::ObjectAllocatorExt;
-    use crate::ast::{Context, ScopedSortApi, Sort, Typecheck};
+    use crate::ast::{AlphaEquiv, Context, ScopedSortApi, Sort, Typecheck};
 
     /// `Array Int (Array Int (… Int))`, nested `depth` deep.
     fn deep_array(ctx: &mut Context, depth: usize) -> Sort {
@@ -1261,5 +1380,106 @@ mod stack_safety {
             .expect("spawn")
             .join();
         assert_eq!(ok.ok(), Some(true));
+    }
+
+    /// `(let ((x true)) (not (forall ((y Int)) (and x (=> x (ite x … x x))))))`, a cycle of five
+    /// constructs nested `depth` cycles deep, so every scoped and unscoped kind of node recurses.
+    fn deep_term_str(depth: usize) -> String {
+        let mut s = String::new();
+        for _ in 0..depth {
+            s.push_str("(let ((x true)) (not (forall ((y Int)) (and x (=> x (ite x ");
+        }
+        s.push('x');
+        for _ in 0..depth {
+            s.push_str(" x))))))");
+        }
+        s
+    }
+
+    /// Checking an untyped term, and then re-checking the typed result.
+    #[test]
+    fn tc_term_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ctx = Context::new();
+                ctx.ensure_logic();
+                let src = deep_term_str(5_000);
+                let t = crate::untyped::UntypedAst.parse_term_str(&src).unwrap();
+                let checked = t.type_check(&mut ctx).unwrap();
+                let rechecked = checked.type_check(&mut ctx).unwrap();
+                // re-checking gives every binder a fresh local id
+                let r = checked.aeq(&rechecked);
+                std::mem::forget((t, checked, rechecked));
+                r
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
+    }
+}
+
+#[cfg(test)]
+mod pattern_placement {
+    use crate::ast::{Context, Typecheck};
+    use crate::untyped::UntypedAst;
+
+    fn check(src: &str) -> Result<(), String> {
+        let mut ctx = Context::new();
+        let decls = "(set-logic ALL)(declare-fun p (Int) Bool)(declare-fun f (Int) Int)";
+        UntypedAst
+            .parse_script_str(decls)
+            .unwrap()
+            .type_check(&mut ctx)?;
+        let t = UntypedAst.parse_term_str(src).unwrap();
+        t.type_check(&mut ctx).map(|_| ())
+    }
+
+    #[test]
+    fn a_pattern_on_a_quantifier_body_is_accepted() {
+        for src in [
+            "(forall ((x Int)) (! (p x) :pattern ((p x))))",
+            "(exists ((x Int)) (! (p x) :pattern ((f x)) :pattern ((p x))))",
+            // a nested annotation is still the body
+            "(forall ((x Int)) (! (! (p x) :pattern ((p x))) :named n))",
+            "(forall ((x Int)) (! (! (p x) :named n) :pattern ((p x))))",
+        ] {
+            assert_eq!(check(src), Ok(()), "{src}");
+        }
+    }
+
+    #[test]
+    fn a_pattern_anywhere_else_is_rejected() {
+        for src in [
+            // the case of #166
+            "(! (p 0) :pattern ((p 0)))",
+            "(and (p 0) (! (p 1) :pattern ((p 1))))",
+            // inside a quantifier, but not its body
+            "(forall ((x Int)) (and (p x) (! (p x) :pattern ((p x)))))",
+            "(forall ((x Int)) (let ((y x)) (! (p y) :pattern ((p y)))))",
+            "(forall ((x Int)) (not (! (p x) :pattern ((p x)))))",
+            // a pattern term is not a quantifier body either
+            "(forall ((x Int)) (! (p x) :pattern ((! (p x) :pattern ((p x))))))",
+        ] {
+            let r = check(src);
+            assert!(
+                r.as_ref().is_err_and(|e| e.contains(":pattern")),
+                "{src} gave {r:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "no-pattern")]
+    #[test]
+    fn no_pattern_follows_the_same_rule() {
+        assert_eq!(
+            check("(forall ((x Int)) (! (p x) :no-pattern (f x)))"),
+            Ok(())
+        );
+        let r = check("(! (p 0) :no-pattern (f 0))");
+        assert!(
+            r.as_ref().is_err_and(|e| e.contains(":no-pattern")),
+            "{r:?}"
+        );
     }
 }

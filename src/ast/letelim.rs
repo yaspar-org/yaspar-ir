@@ -404,17 +404,19 @@ mod tests {
         let mut context = Context::default();
         context.ensure_logic();
         let t = UntypedAst
-            .parse_term_str("(let ((x (+ 1 2))) (! (* x x) :pattern (x)))")
+            .parse_term_str(
+                "(let ((x (+ 1 2))) (forall ((y Int)) (! (> (* x y) 0) :pattern ((* x y)))))",
+            )
             .unwrap()
             .type_check(&mut context)
             .unwrap()
             .let_elim(&mut context);
         let equiv = UntypedAst
-            .parse_term_str("(! (* (+ 1 2) (+ 1 2)) :pattern ((+ 1 2)))")
+            .parse_term_str("(forall ((y Int)) (! (> (* (+ 1 2) y) 0) :pattern ((* (+ 1 2) y))))")
             .unwrap()
             .type_check(&mut context)
             .unwrap();
-        assert_eq!(t, equiv);
+        assert!(t.aeq(&equiv), "{t} is not alpha-equivalent to {equiv}");
     }
 
     #[test]
@@ -487,7 +489,7 @@ mod tests {
         context.ensure_logic();
         let t = UntypedAst
             .parse_term_str(
-                "(let ((a 1)) (forall ((y Int)) (let ((b (+ a y))) (! (= b b) :pattern (b)))))",
+                "(let ((a 1)) (forall ((y Int)) (! (let ((b (+ a y))) (= b b)) :pattern ((+ a y)))))",
             )
             .unwrap()
             .type_check(&mut context)
