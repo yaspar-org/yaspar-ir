@@ -7,7 +7,7 @@ use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, Result, Sort, Str, TCEnv, Term};
 use crate::ast::utils::is_term_bool;
-use crate::ast::{MatchContext, Theory};
+use crate::ast::{Attribute, MatchContext, Theory};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::TC;
@@ -21,7 +21,9 @@ use crate::traits::{AllocatableString, HasMutRef};
 ///
 /// Once the body is built, finalize with [`typed_forall`](Self::typed_forall) or
 /// [`typed_exists`](Self::typed_exists), both of which consume the context and return the
-/// quantified term. The body must be `Bool`-sorted.
+/// quantified term. The body must be `Bool`-sorted. To give the quantifier patterns, finalize with
+/// [`typed_forall_with_patterns`](Self::typed_forall_with_patterns) or
+/// [`typed_exists_with_patterns`](Self::typed_exists_with_patterns) instead.
 ///
 /// This context implements [`CheckedApi`], so all term-building methods are available inside it,
 /// and nested builder contexts (let-bindings, inner quantifiers, match expressions) can be created.
@@ -88,6 +90,39 @@ impl<'a, 'b> QuantifierContext<'a, 'b> {
         is_term_bool(&mut self, &body)?;
         Ok(self.0.context.exists(self.0.env, body))
     }
+
+    /// Build a forall whose body carries the given patterns, i.e.
+    /// `(forall (…) (! body :pattern (p₁ …) :pattern (q₁ …) …))`.
+    ///
+    /// Body and patterns are terms built in `self` context. Each pattern is a multi-pattern, and
+    /// must not be empty. With no patterns at all, this is [`typed_forall`](Self::typed_forall).
+    pub fn typed_forall_with_patterns(mut self, body: Term, patterns: Vec<Vec<Term>>) -> TC<Term> {
+        let body = self.annotate_with_patterns(body, patterns)?;
+        self.typed_forall(body)
+    }
+
+    /// Build an exists whose body carries the given patterns, i.e.
+    /// `(exists (…) (! body :pattern (p₁ …) :pattern (q₁ …) …))`.
+    ///
+    /// Body and patterns are terms built in `self` context. Each pattern is a multi-pattern, and
+    /// must not be empty. With no patterns at all, this is [`typed_exists`](Self::typed_exists).
+    pub fn typed_exists_with_patterns(mut self, body: Term, patterns: Vec<Vec<Term>>) -> TC<Term> {
+        let body = self.annotate_with_patterns(body, patterns)?;
+        self.typed_exists(body)
+    }
+
+    /// Put `patterns` on `body`, the one position a pattern may annotate (§3.6.5).
+    fn annotate_with_patterns(&mut self, body: Term, patterns: Vec<Vec<Term>>) -> TC<Term> {
+        is_term_bool(self, &body)?;
+        if patterns.is_empty() {
+            return Ok(body);
+        }
+        if patterns.iter().any(|p| p.is_empty()) {
+            return Err("TC: a :pattern must contain at least one term!".into());
+        }
+        let anns = patterns.into_iter().map(Attribute::Pattern).collect();
+        Ok(self.0.context.annotated(body, anns))
+    }
 }
 
 impl HasArena for QuantifierContext<'_, '_> {
@@ -128,5 +163,89 @@ impl CheckedApi for QuantifierContext<'_, '_> {
 
     fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
         self.0.build_matching(scrutinee)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::{CheckedApi, Context, ScopedSortApi, Term, Typecheck};
+    use crate::untyped::UntypedAst;
+
+    fn context() -> Context {
+        let mut context = Context::new();
+        let decls = "(set-logic ALL)(declare-fun p (Int) Bool)(declare-fun f (Int) Int)";
+        let cmds = UntypedAst.parse_script_str(decls).unwrap();
+        cmds.type_check(&mut context).unwrap();
+        context
+    }
+
+    /// `(p x)`, `(f x)` and `(p (f x))`, built in a quantifier over `x : Int`, and finalized by
+    /// `finish` with the patterns `[[(p x)], [(f x), (p (f x))]]`.
+    fn build(
+        context: &mut Context,
+        finish: impl FnOnce(super::QuantifierContext, Term, Vec<Vec<Term>>) -> crate::raw::tc::TC<Term>,
+    ) -> crate::raw::tc::TC<Term> {
+        let int = context.wf_sort("Int").unwrap();
+        let mut q = context.build_quantifier_with_domain([("x", int)]).unwrap();
+        let x = q.typed_symbol("x").unwrap();
+        let px = q.typed_simp_app("p", [x.clone()]).unwrap();
+        let fx = q.typed_simp_app("f", [x]).unwrap();
+        let pfx = q.typed_simp_app("p", [fx.clone()]).unwrap();
+        finish(q, px.clone(), vec![vec![px], vec![fx, pfx]])
+    }
+
+    #[test]
+    fn patterns_go_on_the_body() {
+        let mut context = context();
+        let t = build(&mut context, |q, body, ps| {
+            q.typed_forall_with_patterns(body, ps)
+        })
+        .unwrap();
+        assert_eq!(
+            t.to_string(),
+            "(forall ((x Int)) (! (p x) :pattern ((p x)) :pattern ((f x) (p (f x)))))"
+        );
+        // and that is where the type checker accepts them
+        assert!(t.type_check(&mut context).is_ok());
+
+        let t = build(&mut context, |q, body, ps| {
+            q.typed_exists_with_patterns(body, ps)
+        })
+        .unwrap();
+        assert_eq!(
+            t.to_string(),
+            "(exists ((x Int)) (! (p x) :pattern ((p x)) :pattern ((f x) (p (f x)))))"
+        );
+        assert!(t.type_check(&mut context).is_ok());
+    }
+
+    #[test]
+    fn no_patterns_is_a_plain_quantifier() {
+        let mut context = context();
+        let t = build(&mut context, |q, body, _| {
+            q.typed_forall_with_patterns(body, vec![])
+        })
+        .unwrap();
+        assert_eq!(t.to_string(), "(forall ((x Int)) (p x))");
+    }
+
+    #[test]
+    fn an_empty_multi_pattern_is_rejected() {
+        let mut context = context();
+        let r = build(&mut context, |q, body, mut ps| {
+            ps.push(vec![]);
+            q.typed_forall_with_patterns(body, ps)
+        });
+        assert!(r.is_err_and(|e| e.contains(":pattern")));
+    }
+
+    #[test]
+    fn the_body_must_be_bool() {
+        let mut context = context();
+        let r = build(&mut context, |q, _, mut ps| {
+            let fx = ps[1].remove(0);
+            q.typed_forall_with_patterns(fx, ps)
+        });
+        assert!(r.is_err());
     }
 }

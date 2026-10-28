@@ -253,9 +253,12 @@ pub(crate) mod __ssbench {
         }
     }
 """),
-    "src/raw/tc.rs": shim(["tc_sort_rec"], """
+    "src/raw/tc.rs": shim(["tc_sort_rec", "tc_term_rec"], """
     pub(crate) fn tc_sort(env: &mut crate::ast::TCEnv<'_, '_, ()>, s: &Sort) -> TC<Sort> {
         tc_sort_rec(s, env)
+    }
+    pub(crate) fn tc_term(env: &mut crate::ast::TCEnv<'_, '_, Sort>, t: &Term) -> TC<Term> {
+        tc_term_rec(t, false, env)
     }
 """),
     "src/raw/alg.rs": shim(["eval_bv_len"], """
@@ -422,6 +425,9 @@ side!(stacksafe, {
         let mut env = crate::ast::ScopedSortApi::get_sort_tcenv(ctx);
         s.type_check(&mut env)
     }
+    pub fn tc_term(ctx: &mut Context, t: &Term) -> Result<Term, String> {
+        t.type_check(ctx)
+    }
     pub fn eval_bv_len(e: &crate::ast::alg::BvLenExpr) -> Result<dashu::integer::UBig, String> {
         e.eval(&[])
     }
@@ -468,6 +474,10 @@ side!(native, {
     pub fn tc_sort(ctx: &mut Context, s: &Sort) -> Result<Sort, String> {
         let mut env = crate::ast::ScopedSortApi::get_sort_tcenv(ctx);
         crate::raw::tc::__ssbench::native::tc_sort(&mut env, s)
+    }
+    pub fn tc_term(ctx: &mut Context, t: &Term) -> Result<Term, String> {
+        let mut env = crate::ast::CheckedApi::get_tcenv(ctx);
+        crate::raw::tc::__ssbench::native::tc_term(&mut env, t)
     }
     pub fn eval_bv_len(e: &crate::ast::alg::BvLenExpr) -> Result<dashu::integer::UBig, String> {
         crate::raw::alg::__ssbench::native::eval(e)
