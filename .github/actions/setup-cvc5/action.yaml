@@ -48,13 +48,6 @@ runs:
         git clone --depth 1 --branch "cvc5-$cvc5_ver" \
           https://github.com/cvc5/cvc5.git cvc5-built
         cd cvc5-built
-        # On macOS, Apple Clang errors on a deprecated literal operator in a GMP
-        # header used by LibPoly; patch cvc5's FindPoly.cmake to keep it a warning.
-        # See https://github.com/cvc5/cvc5/pull/12585, which cvc5 1.4.0 already includes.
-        patch="${{ github.action_path }}/cvc5-poly-literal-operator.patch"
-        if [ "$RUNNER_OS" = "macOS" ] && git apply --check "$patch" 2>/dev/null; then
-          git apply "$patch"
-        fi
         # cvc5 1.4.0 requires a build type; pass the one cvc5-sys passes when it builds cvc5
         build_type=""
         if grep -q "unrestricted)" configure.sh; then
