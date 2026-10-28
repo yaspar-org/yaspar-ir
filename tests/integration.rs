@@ -1763,3 +1763,29 @@ fn test_mutual_datatype_emptiness_order_independent() {
         failures.first(),
     );
 }
+
+#[test]
+fn test_match_arm_sorts() {
+    // all arms of a match must have the same sort; issue #159
+    let script: String = r"
+(set-logic ALL)
+(declare-datatype Lst (par (X) ((nil) (cons (hd X) (tl (Lst X))))))
+(declare-const l (Lst Int))
+(declare-const y Int)
+(assert (= y (match l ((nil 0) ((cons h t) h)))))"
+        .into();
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(&script).unwrap();
+    assert!(cs.type_check(&mut ctx).is_ok());
+
+    let script: String = r"
+(set-logic ALL)
+(declare-datatype Lst (par (X) ((nil) (cons (hd X) (tl (Lst X))))))
+(declare-const l (Lst Int))
+(assert (match l ((nil 0) ((cons h t) true))))"
+        .into();
+    let mut ctx = Context::new();
+    let cs = UntypedAst.parse_script_str(&script).unwrap();
+    let err = cs.type_check(&mut ctx).unwrap_err();
+    assert!(err.contains("Int is expected for true"), "{err}");
+}

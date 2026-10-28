@@ -970,10 +970,18 @@ where
         &mut self,
         current: &T,
         _scrutinee: &T,
-        _cases: &[alg::PatternArm<St, T>],
+        cases: &[alg::PatternArm<St, T>],
         scrutinee_rec: Self::Out,
         cases_rec: Vec<Self::Arm>,
     ) -> TC<Term> {
+        // all arms must have the same sort as the first one
+        let arm_sort = cases_rec[0].body.get_sort(self);
+        for (case, case_rec) in cases.iter().zip(&cases_rec).skip(1) {
+            let s = case_rec.body.get_sort(self);
+            if s != arm_sort {
+                return sort_mismatch(&arm_sort, &s, &case.body, &case.body.display_meta_data());
+            }
+        }
         let constructors = self.local.scrutinee_map.get(&scrutinee_rec).unwrap();
         let mut unseen_ctors: HashSet<Str> = constructors.keys().cloned().collect();
         let mut covered = false;
