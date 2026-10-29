@@ -10,11 +10,10 @@
 //! Use [`is_closed`] as a convenience check for whether a term has
 //! no free local variables.
 
-use crate::ast::alg::{LocalId, VarBinding};
-use crate::ast::{Attribute, Constant, Memoize, PatternArm, QualifiedIdentifier};
-use crate::ast::{Bottom, Local, Sort, Str, Term, TermRecursor, TypedTermRecursor};
-use std::collections::{HashMap, HashSet};
-use yaspar::ast::Keyword;
+use crate::ast::alg::{self, LocalId};
+use crate::ast::{Attribute, PatternArm, Repr, Str, Term};
+use std::collections::HashSet;
+use yaspar_macros::stack_safe;
 
 /// Compute the set of free local variables in a term.
 ///
@@ -26,18 +25,19 @@ pub trait FreeLocalVars {
 
 impl FreeLocalVars for Term {
     fn free_loc_vars(&self) -> HashSet<(Str, LocalId)> {
-        // The value type is `()`: the cache records only *whether* a node was visited. See the
-        // module docs for why skipping a revisit cannot change the answer.
-        let mut finder: Memoize<_, HashMap<Term, ()>> =
-            Memoize::new(FreeLocalVariableFinder::default());
-        finder.recurse_on_term_no_err(self);
-        finder.inner.vars
+        let mut finder = FreeLocalVariableFinder::default();
+        fv_rec(self, &mut finder);
+        finder.vars
     }
 }
 
 #[derive(Default)]
 struct FreeLocalVariableFinder {
     vars: HashSet<(Str, LocalId)>,
+    /// The sub-terms already visited, which are not walked again. A sub-term's locals are the
+    /// same wherever it occurs, and every binder introduces fresh ids, so the variables a binder
+    /// removes are never free elsewhere and skipping a revisit cannot change the answer.
+    visited: HashSet<Term>,
 }
 
 impl FreeLocalVariableFinder {
@@ -52,290 +52,137 @@ impl FreeLocalVariableFinder {
     }
 }
 
-impl TermRecursor<Str, Sort, Term> for FreeLocalVariableFinder {
-    type Out = ();
-    type Attr = ();
-    type Binding = ();
-    type Pattern = ();
-    type Arm = ();
-    type Err = Bottom;
-
-    fn on_constant(
-        &mut self,
-        _current: &Term,
-        _constant: &Constant,
-        _sort: &Option<Sort>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
+/// Collect the free local variables of `t` into `finder`, which recurses over a term of unbounded
+/// nesting.
+#[stack_safe]
+fn fv_rec(t: &Term, finder: &mut FreeLocalVariableFinder) {
+    if finder.visited.contains(t) {
+        return;
     }
-
-    fn on_global(
-        &mut self,
-        _current: &Term,
-        _id: &QualifiedIdentifier,
-        _sort: &Option<Sort>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
+    match t.repr() {
+        alg::Term::Constant(..) | alg::Term::Global(..) => {}
+        alg::Term::Local(l) => {
+            finder.vars.insert((l.symbol.clone(), l.id));
+        }
+        alg::Term::App(_, ts, _)
+        | alg::Term::Distinct(ts)
+        | alg::Term::And(ts)
+        | alg::Term::Or(ts)
+        | alg::Term::Xor(ts) => {
+            for x in ts {
+                fv_rec(x, finder);
+            }
+        }
+        alg::Term::Let(vs, body) => {
+            for v in vs {
+                fv_rec(&v.2, finder);
+            }
+            fv_rec(body, finder);
+            finder.remove_bindings(vs.iter(), |v| (v.0.clone(), v.1));
+        }
+        alg::Term::Exists(vs, body) | alg::Term::Forall(vs, body) => {
+            finder.remove_bindings(vs.iter(), |v| (v.0.clone(), v.1));
+            fv_rec(body, finder);
+            finder.remove_bindings(vs.iter(), |v| (v.0.clone(), v.1));
+        }
+        alg::Term::Matching(scrutinee, arms) => {
+            fv_rec(scrutinee, finder);
+            for arm in arms {
+                fv_rec(arm_body(arm), finder);
+                finder.remove_bindings(arm_variables(arm).into_iter(), |v| v);
+            }
+        }
+        alg::Term::Annotated(body, anns) => {
+            fv_rec(body, finder);
+            for ann in anns {
+                for p in attribute_terms(ann) {
+                    fv_rec(p, finder);
+                }
+            }
+        }
+        alg::Term::Eq(a, b) => {
+            fv_rec(a, finder);
+            fv_rec(b, finder);
+        }
+        alg::Term::Not(x) => fv_rec(x, finder),
+        alg::Term::Implies(ts, x) => {
+            for y in ts {
+                fv_rec(y, finder);
+            }
+            fv_rec(x, finder);
+        }
+        alg::Term::Ite(a, b, c) => {
+            fv_rec(a, finder);
+            fv_rec(b, finder);
+            fv_rec(c, finder);
+        }
     }
-
-    fn on_local(&mut self, _current: &Term, id: &Local) -> Result<Self::Out, Self::Err> {
-        self.vars.insert((id.symbol.clone(), id.id));
-        Ok(())
-    }
-
-    fn on_app(
-        &mut self,
-        _current: &Term,
-        _id: &QualifiedIdentifier,
-        _ts: &[Term],
-        _s: &Option<Sort>,
-        _recs: Vec<Self::Out>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_let_binding(
-        &mut self,
-        _current: &Term,
-        _vs: &[VarBinding<Str, Term>],
-        _body: &Term,
-        _binding_idx: usize,
-        _binding_rec: Self::Out,
-    ) -> Result<Self::Binding, Self::Err> {
-        Ok(())
-    }
-
-    fn setup_let_scope(
-        &mut self,
-        _current: &Term,
-        _vs: &[VarBinding<Str, Term>],
-        _body: &Term,
-        _vs_rec: &[Self::Binding],
-    ) -> Result<(), Self::Err> {
-        Ok(())
-    }
-
-    fn on_let(
-        &mut self,
-        _current: &Term,
-        vs: &[VarBinding<Str, Term>],
-        _body: &Term,
-        _vs_rec: Vec<Self::Binding>,
-        _body_rec: Self::Out,
-    ) -> Result<Self::Out, Self::Err> {
-        self.remove_bindings(vs.iter(), |v| (v.0.clone(), v.1));
-        Ok(())
-    }
-
-    fn setup_quantifier_scope(
-        &mut self,
-        _current: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _t: &Term,
-        _is_forall: bool,
-    ) -> Result<(), Self::Err> {
-        self.remove_bindings(vs.iter(), |v| (v.0.clone(), v.1));
-        Ok(())
-    }
-
-    fn on_exists(
-        &mut self,
-        _current: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _t: &Term,
-        _t_rec: Self::Out,
-    ) -> Result<Self::Out, Self::Err> {
-        self.remove_bindings(vs.iter(), |v| (v.0.clone(), v.1));
-        Ok(())
-    }
-
-    fn on_forall(
-        &mut self,
-        _current: &Term,
-        vs: &[VarBinding<Str, Sort>],
-        _t: &Term,
-        _t_rec: Self::Out,
-    ) -> Result<Self::Out, Self::Err> {
-        self.remove_bindings(vs.iter(), |v| (v.0.clone(), v.1));
-        Ok(())
-    }
-
-    fn setup_match_case_scope(
-        &mut self,
-        _current: &Term,
-        _scrutinee: &Term,
-        _cases: &[PatternArm],
-        _scrutinee_rec: &Self::Out,
-        _case_idx: usize,
-    ) -> Result<Self::Pattern, Self::Err> {
-        Ok(())
-    }
-
-    fn on_match_arm(
-        &mut self,
-        _current: &Term,
-        _scrutinee: &Term,
-        cases: &[PatternArm],
-        _scrutinee_rec: &Self::Out,
-        case_idx: usize,
-        _current_pattern: Self::Pattern,
-        _arm: Self::Out,
-    ) -> Result<Self::Arm, Self::Err> {
-        self.remove_bindings(
-            cases[case_idx].pattern.variables_and_ids().into_iter(),
-            |v| v.clone(),
-        );
-
-        Ok(())
-    }
-
-    fn on_match(
-        &mut self,
-        _current: &Term,
-        _scrutinee: &Term,
-        _cases: &[PatternArm],
-        _scrutinee_rec: Self::Out,
-        _cases_rec: Vec<Self::Arm>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_annotated(
-        &mut self,
-        _current: &Term,
-        _t: &Term,
-        _anns: &[Attribute],
-        _t_rec: Self::Out,
-        _anns_rec: Vec<Self::Attr>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_attribute_keyword(&mut self, _keyword: &Keyword) -> Result<Self::Attr, Self::Err> {
-        Ok(())
-    }
-
-    fn on_attribute_constant(
-        &mut self,
-        _keyword: &Keyword,
-        _constant: &Constant,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(())
-    }
-
-    fn on_attribute_symbol(
-        &mut self,
-        _keyword: &Keyword,
-        _symbol: &Str,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(())
-    }
-
-    fn on_attribute_named(&mut self, _name: &Str) -> Result<Self::Attr, Self::Err> {
-        Ok(())
-    }
-
-    fn on_attribute_pattern(
-        &mut self,
-        _patterns: &[Term],
-        _patterns_rec: Vec<Self::Out>,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(())
-    }
-
-    #[cfg(feature = "no-pattern")]
-    fn on_attribute_no_pattern(
-        &mut self,
-        _pattern: &Term,
-        _pattern_rec: Self::Out,
-    ) -> Result<Self::Attr, Self::Err> {
-        Ok(())
-    }
-
-    fn on_eq(
-        &mut self,
-        _current: &Term,
-        _a: &Term,
-        _b: &Term,
-        _a_rec: Self::Out,
-        _b_rec: Self::Out,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_distinct(
-        &mut self,
-        _current: &Term,
-        _ts: &[Term],
-        _ts_rec: Vec<Self::Out>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_and(
-        &mut self,
-        _current: &Term,
-        _ts: &[Term],
-        _ts_rec: Vec<Self::Out>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_or(
-        &mut self,
-        _current: &Term,
-        _ts: &[Term],
-        _ts_rec: Vec<Self::Out>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_xor(
-        &mut self,
-        _current: &Term,
-        _ts: &[Term],
-        _ts_rec: Vec<Self::Out>,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_not(
-        &mut self,
-        _current: &Term,
-        _t: &Term,
-        _t_rec: Self::Out,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_implies(
-        &mut self,
-        _current: &Term,
-        _ts: &[Term],
-        _t: &Term,
-        _ts_rec: Vec<Self::Out>,
-        _t_rec: Self::Out,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
-
-    fn on_ite(
-        &mut self,
-        _current: &Term,
-        _b: &Term,
-        _t: &Term,
-        _e: &Term,
-        _b_rec: Self::Out,
-        _t_rec: Self::Out,
-        _e_rec: Self::Out,
-    ) -> Result<Self::Out, Self::Err> {
-        Ok(())
-    }
+    finder.visited.insert(Term::clone(t));
 }
 
-impl TypedTermRecursor for FreeLocalVariableFinder {}
+// The loops over match arms and attributes resume after a recursive call, where `#[stack_safe]`
+// leaves the type of the loop variable to inference that has not seen it yet. These typed
+// accessors give it one.
+
+fn arm_body(arm: &PatternArm) -> &Term {
+    &arm.body
+}
+
+fn arm_variables(arm: &PatternArm) -> Vec<(Str, LocalId)> {
+    arm.pattern.variables_and_ids()
+}
+
+/// The sub-terms of an attribute: those of `:pattern` and `:no-pattern`, and none otherwise.
+fn attribute_terms(ann: &Attribute) -> &[Term] {
+    match ann {
+        Attribute::Pattern(ps) => ps,
+        #[cfg(feature = "no-pattern")]
+        Attribute::NoPattern(p) => std::slice::from_ref(p),
+        _ => &[],
+    }
+}
 
 /// check whether a term is closed; i.e. no open local variables
 pub fn is_closed(t: &Term) -> bool {
     t.free_loc_vars().is_empty()
+}
+
+#[cfg(test)]
+mod stack_safety {
+    use super::*;
+    use crate::ast::{Context, Typecheck};
+    use crate::untyped::UntypedAst;
+
+    /// `(forall ((x0 Int)) (let ((y0 x0)) (forall ((x1 Int)) (let ((y1 (+ y0 x1))) (… (> y 0))))))`.
+    fn deep_binders(depth: usize) -> String {
+        let mut s = String::from("(forall ((x0 Int)) (let ((y0 x0)) ");
+        for i in 1..depth {
+            s.push_str(&format!(
+                "(forall ((x{i} Int)) (let ((y{i} (+ y{} x{i}))) ",
+                i - 1
+            ));
+        }
+        s.push_str(&format!("(> y{} 0)", depth - 1));
+        s.push_str(&"))".repeat(depth));
+        s
+    }
+
+    #[test]
+    fn free_loc_vars_is_flat() {
+        let ok = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ctx = Context::new();
+                ctx.ensure_logic();
+                let src = deep_binders(5_000);
+                let u = UntypedAst.parse_term_str(&src).unwrap();
+                let t = u.type_check(&mut ctx).unwrap();
+                let r = t.free_loc_vars().is_empty();
+                std::mem::forget((u, t));
+                r
+            })
+            .expect("spawn")
+            .join();
+        assert_eq!(ok.ok(), Some(true));
+    }
 }

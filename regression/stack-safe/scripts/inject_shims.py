@@ -226,6 +226,21 @@ pub(crate) mod __ssbench {
         gsubst_term(t, &mut g)
     }
 """),
+    "src/ast/fv.rs": shim(["fv_rec"], """
+    /// `FreeLocalVars::free_loc_vars`.
+    pub(crate) fn free_loc_vars(t: &Term) -> HashSet<(Str, LocalId)> {
+        let mut finder = FreeLocalVariableFinder::default();
+        fv_rec(t, &mut finder);
+        finder.vars
+    }
+"""),
+    "src/ast/letelim.rs": shim(["let_elim_rec"], """
+    /// `LetElim::let_elim`.
+    pub(crate) fn let_elim<E: HasArena>(t: &Term, env: &mut E) -> Term {
+        let mut st = LetElimState::default();
+        let_elim_rec(t, &mut st, env).unwrap_or_else(|| t.clone())
+    }
+"""),
     "src/raw/instance.rs": shim(["term_maybe_sort"], """
     /// `FetchSort::maybe_sort`: its fast path, then the descent.
     pub(crate) fn maybe_sort<T: HasArenaAlt>(t: &Term, arena: &mut T) -> Option<Sort> {
@@ -384,7 +399,15 @@ macro_rules! side {
 
 // the rewritten functions, through yaspar-ir's own public entry points where there are any
 side!(stacksafe, {
-    use crate::ast::{AlphaEquiv, FetchSort, GlobalSubst, Typecheck};
+    use crate::ast::fv::FreeLocalVars;
+    use crate::ast::{AlphaEquiv, FetchSort, GlobalSubst, LetElim, Typecheck};
+
+    pub fn free_loc_vars(t: &Term) -> HashSet<(Str, crate::ast::LocalId)> {
+        t.free_loc_vars()
+    }
+    pub fn let_elim(ctx: &mut Context, t: &Term) -> Term {
+        t.let_elim(ctx)
+    }
 
     pub fn aeq(a: &Term, b: &Term, permissive: bool) -> bool {
         if permissive { a.aeq_permissive(b) } else { a.aeq(b) }
@@ -427,6 +450,12 @@ side!(stacksafe, {
 
 // the `_orig` copies, through shims that mirror those entry points
 side!(native, {
+    pub fn free_loc_vars(t: &Term) -> HashSet<(Str, crate::ast::LocalId)> {
+        crate::ast::fv::__ssbench::native::free_loc_vars(t)
+    }
+    pub fn let_elim(ctx: &mut Context, t: &Term) -> Term {
+        crate::ast::letelim::__ssbench::native::let_elim(t, ctx)
+    }
     pub fn aeq(a: &Term, b: &Term, permissive: bool) -> bool {
         crate::ast::alpha_eq::__ssbench::native::aeq(a, b, permissive)
     }
