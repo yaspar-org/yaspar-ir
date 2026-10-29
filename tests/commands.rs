@@ -209,3 +209,17 @@ fn test_exit() {
     assert_eq!(cmds[0].to_string(), "(set-logic ALL)");
     assert_eq!(cmds[1].to_string(), "(exit)");
 }
+
+#[test]
+fn test_set_logic_is_case_sensitive() {
+    // logic names are symbols, which are case-sensitive; issue #158
+    for logic in ["qf_lia", "qf_bv", "all", "Qf_Lia"] {
+        let mut ctx = Context::new();
+        let script = format!("(set-logic {logic})\n(declare-const x Int)");
+        let result = UntypedAst
+            .parse_script_str(&script)
+            .unwrap()
+            .type_check(&mut ctx);
+        assert!(result.is_err(), "{logic} should be rejected");
+    }
+}
