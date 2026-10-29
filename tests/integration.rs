@@ -1763,3 +1763,31 @@ fn test_mutual_datatype_emptiness_order_independent() {
         failures.first(),
     );
 }
+
+#[test]
+fn test_reserved_symbol_prefixes() {
+    // symbols beginning with `@` or `.` are reserved for solvers (§3.1); issue #171
+    for decl in [
+        "(declare-const @x Int)",
+        "(declare-const .y Int)",
+        "(declare-const |@x| Int)",
+        "(declare-fun @f (Int) Int)",
+        "(define-fun .g () Int 0)",
+        "(declare-sort @S 0)",
+        "(define-sort .T () Int)",
+        "(declare-datatype D ((@c)))",
+    ] {
+        let script = format!("(set-logic ALL){decl}");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        // some declarations report a generic "cannot be added" instead of the reason
+        assert!(
+            cs.type_check(&mut Context::new()).is_err(),
+            "{decl} was accepted"
+        );
+    }
+
+    // only the first character is reserved
+    let script = "(set-logic ALL)(declare-const x@ Int)(declare-const x.y Int)(declare-const $generated@@18 Int)";
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut Context::new()).is_ok());
+}
