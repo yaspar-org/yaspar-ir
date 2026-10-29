@@ -293,6 +293,7 @@ impl Context {
     /// Check whether a given sort name can be added to the sort table
     pub fn can_add_sort(&self, symbol: &Str) -> Result<()> {
         self.check_sym_chars(symbol)?;
+        self.check_reserved_prefix(symbol)?;
         self.check_special_symbols(symbol)?;
         self.check_bv(symbol)?;
         if self.stack.contains_sort(symbol) {
@@ -371,6 +372,19 @@ impl Context {
         }
     }
 
+    /// Symbols beginning with `@` or `.` are reserved for solver-generated names (§3.1). The check is
+    /// on the unquoted name, since `|@x|` and `@x` are the same symbol.
+    fn check_reserved_prefix(&self, sym: &Str) -> Result<()> {
+        if sym.inner().starts_with(['@', '.']) {
+            Err(format!(
+                "Symbols beginning with `@` or `.` are reserved for solvers: {}!",
+                sym.sym_quote()
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn check_bv_sym(&self, sym: &Str) -> Result<()> {
         if self.check_support_theory(Theory::Bitvectors).is_ok() && BV_RE.is_match(sym) {
             Err("Symbols of the form bvX cannot be declared!".to_string())
@@ -390,6 +404,7 @@ impl Context {
     /// Check the validity of a given symbol
     pub(crate) fn check_sym_validity(&self, sym: &Str) -> Result<()> {
         self.check_sym_chars(sym)?;
+        self.check_reserved_prefix(sym)?;
         self.check_special_symbols(sym)?;
         self.check_bv_sym(sym)?;
         self.check_is_sym(sym)
