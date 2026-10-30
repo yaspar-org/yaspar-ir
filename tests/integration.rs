@@ -1922,3 +1922,47 @@ fn test_match_errors_agree_with_the_builder() {
     let built = m.typed_matching().unwrap_err();
     assert!(built.contains("at least one arm"), "{built}");
 }
+
+/// Every name a script binds, not only the ones it declares, must be a valid symbol.
+#[test]
+fn test_binders_are_valid_symbols() {
+    let rejected = [
+        "(assert (let ((@x 1)) (> @x 0)))",
+        "(assert (let ((|.x| 1)) (> |.x| 0)))",
+        "(assert (forall ((@y Int)) (> @y 0)))",
+        "(assert (exists ((.y Int)) (> .y 0)))",
+        "(assert (forall ((bv1 (_ BitVec 4))) true))",
+        "(assert (forall ((is Int)) (> is 0)))",
+        "(define-fun f ((@a Int)) Int @a)",
+        "(define-fun-rec g ((.a Int)) Int .a)",
+        "(define-funs-rec ((h ((@a Int)) Int)) (@a))",
+        "(define-sort S (@X) (Array @X @X))",
+        "(define-sort T (BitVec) (Array BitVec BitVec))",
+        "(declare-datatype D (par (@T) ((c (s @T)))))",
+    ];
+    for src in rejected {
+        let script = format!("(set-logic ALL){src}");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        assert!(
+            cs.type_check(&mut Context::new()).is_err(),
+            "{src} was accepted"
+        );
+    }
+    // the reason is reported for the binders of terms
+    let script = "(set-logic ALL)(assert (let ((@x 1)) (> @x 0)))";
+    let err = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut Context::new())
+        .unwrap_err();
+    assert!(err.contains("reserved"), "{err}");
+
+    let accepted = "(set-logic ALL)
+(assert (let ((x@ 1)) (> x@ 0)))
+(assert (forall ((x.y Int)) (> x.y 0)))
+(define-fun f ((a Int)) Int a)
+(define-sort S (X) (Array X X))
+(declare-datatype D (par (T) ((c (s T)))))";
+    let cs = UntypedAst.parse_script_str(accepted).unwrap();
+    assert!(cs.type_check(&mut Context::new()).is_ok());
+}

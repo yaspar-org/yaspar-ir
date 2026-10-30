@@ -6,7 +6,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::{Arena, Context, TCEnv};
 use crate::ast::ctx::{Command, Sort, Str, TC};
 use crate::ast::{ScopedSortApi, SymbolQuote};
-use crate::containers::{LocEnv, sanitize_bindings};
+use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, HasMutRef};
 
@@ -60,7 +60,7 @@ impl<'a> DefSortContext<'a> {
                 VarBinding(s, 0, ())
             })
             .collect::<Vec<_>>();
-        sanitize_bindings(&params, |v| v.0.clone())?;
+        context.meta.check_sort_params(&params, |v| v.0.clone())?;
         Ok(Self {
             context,
             name: symbol,

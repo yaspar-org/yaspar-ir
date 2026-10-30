@@ -35,7 +35,7 @@ pub mod utils;
 
 #[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::{ImplicantEnumerator, ImplicantIterator};
-use crate::containers::{LocEnv, valid_symbol_char};
+use crate::containers::{LocEnv, sanitize_bindings, valid_symbol_char};
 pub use crate::raw::alg::{
     Command as ACommand, Constant as AConstant, Index as AIndex, SortDef as ASortDef, StrQuote,
     SymbolQuote, Term as ATerm,
@@ -307,6 +307,39 @@ impl ContextMeta {
         self.check_bv_sym(sym)?;
         self.check_is_sym(sym)
     }
+
+    /// Check the validity of a given sort name, including that of a sort parameter
+    pub(crate) fn check_sort_validity(&self, sort: &Str) -> Result<()> {
+        self.check_sym_chars(sort)?;
+        self.check_reserved_prefix(sort)?;
+        self.check_special_symbols(sort)?;
+        if sort.inner() == BITVEC && self.theories.contains(&Theory::Bitvectors) {
+            Err("BitVec cannot be redeclared!".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check the names `vars` bind: each must be a valid symbol, and no two the same.
+    pub(crate) fn check_bindings<T>(&self, vars: &[T], name: impl Fn(&T) -> Str) -> Result<()> {
+        for v in vars {
+            self.check_sym_validity(&name(v))?;
+        }
+        sanitize_bindings(vars, name)
+    }
+
+    /// Check the sort parameters `params` bind: each must be a valid sort name, and no two the
+    /// same.
+    pub(crate) fn check_sort_params<T>(
+        &self,
+        params: &[T],
+        name: impl Fn(&T) -> Str,
+    ) -> Result<()> {
+        for p in params {
+            self.check_sort_validity(&name(p))?;
+        }
+        sanitize_bindings(params, name)
+    }
 }
 
 /// Global context for the current session
@@ -341,20 +374,9 @@ impl Context {
         }
     }
 
-    fn check_bv(&self, sort: &Str) -> Result<()> {
-        if sort.inner() == BITVEC && self.check_support_theory(Theory::Bitvectors).is_ok() {
-            Err("BitVec cannot be redeclared!".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
     /// Check whether a given sort name can be added to the sort table
     pub fn can_add_sort(&self, symbol: &Str) -> Result<()> {
-        self.meta.check_sym_chars(symbol)?;
-        self.meta.check_reserved_prefix(symbol)?;
-        self.meta.check_special_symbols(symbol)?;
-        self.check_bv(symbol)?;
+        self.meta.check_sort_validity(symbol)?;
         if self.stack.contains_sort(symbol) {
             Err(format!("sort {} is already defined!", symbol.sym_quote()))
         } else {
