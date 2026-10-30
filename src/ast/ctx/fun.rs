@@ -10,7 +10,7 @@ use crate::ast::ctx::{
     Arena, CheckedApi, Context, FetchSort, SymbolQuote, TCEnv, TCEnvGen, TCLocal,
 };
 use crate::ast::ctx::{Command, FunctionDef, Sort, Str, TC, Term};
-use crate::containers::{LocEnv, sanitize_bindings};
+use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, HasMutRef};
 use std::collections::HashSet;
@@ -75,7 +75,7 @@ impl<'a> FunctionContext<'a> {
                 VarBinding(s, id, so)
             })
             .collect::<Vec<_>>();
-        sanitize_bindings(&inputs, |v| v.0.clone())?;
+        context.meta.check_bindings(&inputs, |v| v.0.clone())?;
         Ok(Self {
             context,
             name: symbol,
