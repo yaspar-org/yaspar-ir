@@ -8,7 +8,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::checked::CheckedApi;
 use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
 use crate::ast::{FetchSort, LetContext, MatchContext, QuantifierContext, SymbolQuote, Term};
-use crate::containers::{LocEnv, sanitize_bindings};
+use crate::containers::LocEnv;
 use crate::traits::{AllocatableString, HasMutRef};
 use std::collections::{HashMap, HashSet};
 
@@ -117,7 +117,7 @@ impl<'a> RecFunsContext<'a> {
                     VarBinding(s, id, so)
                 })
                 .collect::<Vec<_>>();
-            sanitize_bindings(&inputs, |v| v.0.clone())?;
+            context.meta.check_bindings(&inputs, |v| v.0.clone())?;
             sigs.insert(symbol, (inputs, fun.output));
         }
         if new_funs.is_empty() {

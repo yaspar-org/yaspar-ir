@@ -15,7 +15,7 @@ use crate::ast::{
     DatatypeFunction, FunctionDef, FunctionMeta, FunctionMetaDefined, Identifier, Index, Local,
     SymbolQuote, Typecheck, alg,
 };
-use crate::containers::{LocEnv, Mapping, sanitize_bindings};
+use crate::containers::{LocEnv, Mapping};
 use crate::raw::instance::HasArena;
 use crate::statics::{IS, IS_DASH};
 use crate::traits::{AllocatableString, Contains, HasMutRef};
@@ -107,7 +107,7 @@ impl<'a> DatatypeContext<'a> {
                 .into_iter()
                 .map(|x| x.allocate(context.arena()))
                 .collect::<Vec<_>>();
-            sanitize_bindings(&params, |v| v.clone())?;
+            context.meta.check_sort_params(&params, |v| v.clone())?;
             dt_defs.insert(
                 symbol.clone(),
                 DatatypeDef {

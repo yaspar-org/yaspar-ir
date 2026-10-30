@@ -728,6 +728,7 @@ mod term_rec {
         while i < vs.len() {
             let t = tc_term_rec(&vs[i].2, false, env)?;
             let sym = vs[i].0.allocate(env.arena);
+            check_binder(env, &sym, &vs[i].0.display_meta_data())?;
             bindings.push(VarBinding(sym, env.arena.new_local(), t));
             i += 1;
         }
@@ -951,6 +952,13 @@ where
     )
 }
 
+/// Check that `sym`, which `meta` locates, may be bound by a `let` or a quantifier.
+fn check_binder<L>(env: &TCEnvGen<'_, L>, sym: &Str, meta: &str) -> TC<()> {
+    env.meta
+        .check_sym_validity(sym)
+        .map_err(|e| format!("TC: {e}{meta}"))
+}
+
 /// Push the scope of a `let` whose bindings have been type-checked.
 fn tc_let_scope(env: &mut TCEnv<'_, '_, Sort>, bindings: &[VarBinding<Str, Term>]) -> TC<()> {
     let sorts = bindings
@@ -975,6 +983,7 @@ where
         .iter()
         .map(|v| {
             let sym = v.0.allocate(env.arena);
+            check_binder(env, &sym, &v.0.display_meta_data())?;
             let sort = v.2.type_check(&mut env.with_empty_local())?;
             Ok(VarBinding(sym, env.arena.new_local(), sort))
         })
