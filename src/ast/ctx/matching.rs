@@ -9,6 +9,7 @@ use crate::ast::ctx::{
     Arena, CheckedApi, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TC, TCEnv,
     TCEnvGen, TCLocal, Term,
 };
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::matching::MatchChecker;
@@ -55,8 +56,8 @@ use std::collections::HashSet;
 /// let term = m.typed_matching().unwrap();
 /// assert_eq!(term.to_string(), "(match l ((nil 0) ((cons h t) h)))");
 /// ```
-pub struct MatchContext<'a, 'b> {
-    context: &'a mut Context,
+pub struct MatchContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT> {
+    context: &'a mut Context<D>,
     tail: LocEnv<'b, Str, Sort>,
     scrutinee: Term,
     /// The constructors, their coverage, and the sort of the arms.
@@ -73,15 +74,15 @@ pub struct MatchContext<'a, 'b> {
 /// context. Build the arm body using any [`CheckedApi`] method, then finalize with
 /// [`typed_arm`](Self::typed_arm), which validates that the body sort matches other arms and
 /// returns control to the parent [`MatchContext`].
-pub struct ArmContext<'a, 'b, 'c> {
-    parent: &'c mut MatchContext<'a, 'b>,
+pub struct ArmContext<'a, 'b, 'c, const D: Dialect = DEFAULT_DIALECT> {
+    parent: &'c mut MatchContext<'a, 'b, D>,
     env: Vec<VarBinding<Str, Sort>>,
     pattern: Pattern,
 }
 
-impl<'a, 'b> MatchContext<'a, 'b> {
+impl<'a, 'b, const D: Dialect> MatchContext<'a, 'b, D> {
     pub(crate) fn new(
-        context: &'a mut Context,
+        context: &'a mut Context<D>,
         tail: LocEnv<'b, Str, Sort>,
         scrutinee: Term,
     ) -> TC<Self> {
@@ -147,7 +148,7 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     /// The sorts of the variables are inferred from the constructor.
     ///
     /// c.f. [Self::build_arm_wildcard], [Self::build_arm_nullary], [Self::build_arm_catchall]
-    pub fn build_arm<'c, T, S>(&'c mut self, c: S, vars: T) -> TC<ArmContext<'a, 'b, 'c>>
+    pub fn build_arm<'c, T, S>(&'c mut self, c: S, vars: T) -> TC<ArmContext<'a, 'b, 'c, D>>
     where
         T: IntoIterator<Item = Option<S>>,
         S: AllocatableString<Arena>,
@@ -173,7 +174,7 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     /// Return a builder context for an arm of a nullary constructor
     ///
     /// c.f. [Self::build_arm]
-    pub fn build_arm_nullary<'c, S>(&'c mut self, ctor: S) -> TC<ArmContext<'a, 'b, 'c>>
+    pub fn build_arm_nullary<'c, S>(&'c mut self, ctor: S) -> TC<ArmContext<'a, 'b, 'c, D>>
     where
         S: AllocatableString<Arena>,
     {
@@ -185,7 +186,7 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     /// The variable, if it's some, must not be the name of a constructor
     ///
     /// c.f. [Self::build_arm]
-    pub fn build_arm_wildcard<'c, S>(&'c mut self, var: Option<S>) -> TC<ArmContext<'a, 'b, 'c>>
+    pub fn build_arm_wildcard<'c, S>(&'c mut self, var: Option<S>) -> TC<ArmContext<'a, 'b, 'c, D>>
     where
         S: AllocatableString<Arena>,
     {
@@ -203,7 +204,7 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     /// A case of `_`
     ///
     /// c.f. [Self::build_arm_wildcard] and [Self::build_arm]
-    pub fn build_arm_catchall<'c>(&'c mut self) -> ArmContext<'a, 'b, 'c> {
+    pub fn build_arm_catchall<'c>(&'c mut self) -> ArmContext<'a, 'b, 'c, D> {
         // we unwrap because we know it won't fail
         self.build_arm_wildcard::<String>(None).unwrap()
     }
@@ -217,16 +218,16 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     }
 }
 
-impl HasArena for MatchContext<'_, '_> {
+impl<const D: Dialect> HasArena for MatchContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl HasMutRef<Context> for MatchContext<'_, '_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for MatchContext<'_, '_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -236,7 +237,7 @@ impl HasMutRef<Context> for MatchContext<'_, '_> {
     }
 }
 
-impl ArmContext<'_, '_, '_> {
+impl<const D: Dialect> ArmContext<'_, '_, '_, D> {
     /// finalize the arm by giving a body
     ///
     /// invoking this method will make the parent [MatchContext] available.
@@ -253,15 +254,15 @@ impl ArmContext<'_, '_, '_> {
     }
 }
 
-impl HasArena for ArmContext<'_, '_, '_> {
+impl<const D: Dialect> HasArena for ArmContext<'_, '_, '_, D> {
     fn arena(&mut self) -> &mut Arena {
         self.parent.context.arena()
     }
 }
 
-impl HasMutRef<Context> for ArmContext<'_, '_, '_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for ArmContext<'_, '_, '_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -271,8 +272,8 @@ impl HasMutRef<Context> for ArmContext<'_, '_, '_> {
     }
 }
 
-impl CheckedApi for ArmContext<'_, '_, '_> {
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
+impl<const D: Dialect> CheckedApi<D> for ArmContext<'_, '_, '_, D> {
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen {
             arena: &mut self.parent.context.arena,
             meta: &self.parent.context.meta,
@@ -287,7 +288,7 @@ impl CheckedApi for ArmContext<'_, '_, '_> {
         }
     }
 
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>> {
         QuantifierContext::new(
             self.parent.context,
             LocEnv::Cons {
@@ -297,7 +298,7 @@ impl CheckedApi for ArmContext<'_, '_, '_> {
         )
     }
 
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>,
@@ -312,7 +313,7 @@ impl CheckedApi for ArmContext<'_, '_, '_> {
         )
     }
 
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>> {
         MatchContext::new(
             self.parent.context,
             LocEnv::Cons {

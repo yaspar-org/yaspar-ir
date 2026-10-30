@@ -22,6 +22,7 @@ pub use crate::allocator::{
     CommandAllocator, LocalVarAllocator, ObjectAllocatorExt, SortAllocator, StrAllocator,
     TermAllocator,
 };
+use crate::ast::Dialect;
 use crate::ast::{ACommand, ATerm, Context};
 use crate::containers::valid_symbol_char;
 use crate::instantiate_ast;
@@ -356,7 +357,7 @@ where
     }
 }
 
-impl CommandAllocator<Str, Sort, Term, Command> for Context {
+impl<const D: Dialect> CommandAllocator<Str, Sort, Term, Command> for Context<D> {
     fn allocate_command(&mut self, c: ACommand<Str, Sort, Term>) -> Command {
         self.arena().allocate_command(c)
     }
