@@ -5,6 +5,7 @@ use crate::allocator::TermAllocator;
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, FetchSort, Result, TCEnv};
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::ast::ctx::{Sort, Str, Term};
 use crate::ast::{MatchContext, QuantifierContext, TC};
 use crate::containers::LocEnv;
@@ -42,14 +43,14 @@ use crate::traits::{AllocatableString, HasMutRef};
 /// let term = l.typed_let(body);
 /// assert_eq!(term.to_string(), "(let ((s (+ a b))) (* s s))");
 /// ```
-pub struct LetContext<'a, 'b> {
+pub struct LetContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT> {
     // reuse LocalContext to reuse apis
-    inner: LocalContext<'a, 'b>,
+    inner: LocalContext<'a, 'b, D>,
     bindings: Vec<VarBinding<Str, Term>>,
 }
 
-impl<'a, 'b> LetContext<'a, 'b> {
-    pub(crate) fn new(context: &'a mut Context, tail: LocEnv<'b, Str, Sort>) -> Self {
+impl<'a, 'b, const D: Dialect> LetContext<'a, 'b, D> {
+    pub(crate) fn new(context: &'a mut Context<D>, tail: LocEnv<'b, Str, Sort>) -> Self {
         Self {
             inner: LocalContext::new(context, tail),
             bindings: vec![],
@@ -57,7 +58,7 @@ impl<'a, 'b> LetContext<'a, 'b> {
     }
 
     pub(crate) fn new_with_bindings<T, S>(
-        context: &'a mut Context,
+        context: &'a mut Context<D>,
         tail: LocEnv<'b, Str, Sort>,
         tups: T,
     ) -> Result<Self>
@@ -106,16 +107,16 @@ impl<'a, 'b> LetContext<'a, 'b> {
     }
 }
 
-impl HasArena for LetContext<'_, '_> {
+impl<const D: Dialect> HasArena for LetContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.inner.arena()
     }
 }
 
-impl HasMutRef<Context> for LetContext<'_, '_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for LetContext<'_, '_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -125,18 +126,18 @@ impl HasMutRef<Context> for LetContext<'_, '_> {
     }
 }
 
-impl CheckedApi for LetContext<'_, '_> {
+impl<const D: Dialect> CheckedApi<D> for LetContext<'_, '_, D> {
     #[inline]
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         self.inner.get_tcenv()
     }
 
     #[inline]
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>> {
         self.inner.build_quantifier()
     }
 
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>,
@@ -144,7 +145,7 @@ impl CheckedApi for LetContext<'_, '_> {
         self.inner.build_let(bindings)
     }
 
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>> {
         self.inner.build_matching(scrutinee)
     }
 }

@@ -58,6 +58,7 @@ use crate::ast::ctx::fun::FunctionContext;
 use crate::ast::ctx::matching::MatchContext;
 use crate::ast::ctx::quantifier::QuantifierContext;
 use crate::ast::ctx::recs::RecFunsContext;
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::ast::fv::is_closed;
 use crate::ast::utils::{is_quantifier_free, is_term_bool, is_term_bool_alt};
 use crate::ast::{
@@ -114,11 +115,11 @@ use yaspar_macros::stack_safe;
 ///   [`build_let`](Self::build_let), [`build_matching`](Self::build_matching)
 ///
 /// See also [`ScopedSortApi`] for sort construction.
-pub trait CheckedApi: HasArena {
+pub trait CheckedApi<const D: Dialect = DEFAULT_DIALECT>: HasArena {
     /// Obtain a type-checking environment
     ///
     /// This is used internally to implement other functions
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort>;
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D>;
 
     /// Enter a builder context that builds a quantifier
     ///
@@ -126,7 +127,7 @@ pub trait CheckedApi: HasArena {
     /// quantified term
     ///
     /// c.f. [Self::build_quantifier_with_domain]
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>>;
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>>;
 
     /// Enter a context for building a let binding
     ///
@@ -136,7 +137,7 @@ pub trait CheckedApi: HasArena {
     /// It is a scope-level mistake to bind a term only bound in the let context.
     ///
     /// Invoke [`LetContext::typed_let`] to finalize the let binding
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>;
@@ -147,7 +148,7 @@ pub trait CheckedApi: HasArena {
     /// of variables, or [MatchContext::build_arm_wildcard] for building a wildcard arm.
     ///
     /// Invoke [MatchContext::typed_matching] to conclude the term of matching
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>>;
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>>;
 
     /// Build a typed [`Term`] from a [`Constant`] value.
     fn typed_constant(&mut self, c: Constant) -> TC<Term> {
@@ -388,7 +389,7 @@ pub trait CheckedApi: HasArena {
     /// Create a builder context for a quantifier with a given domain
     ///
     /// c.f. [Self::build_quantifier]
-    fn build_quantifier_with_domain<T, S>(&mut self, domain: T) -> TC<QuantifierContext<'_, '_>>
+    fn build_quantifier_with_domain<T, S>(&mut self, domain: T) -> TC<QuantifierContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Sort)>,
         S: AllocatableString<Arena>,
@@ -429,11 +430,11 @@ where
 /// - [`wf_bv_sort(len)`](Self::wf_bv_sort) — bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds.
 ///
 /// See also [`CheckedApi`] for term construction.
-pub trait ScopedSortApi: HasArena {
+pub trait ScopedSortApi<const D: Dialect = DEFAULT_DIALECT>: HasArena {
     /// Obtain a type-checking environment
     ///
     /// This is used internally to implement other functions
-    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, ()>;
+    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D>;
 
     /// Return a well-formed sort given an identifier and parameters
     fn wf_sort_id<T>(&mut self, id: &Identifier, params: T) -> TC<Sort>
@@ -470,16 +471,16 @@ pub trait ScopedSortApi: HasArena {
     }
 }
 
-impl<X> ScopedSortApi for X
+impl<X, const D: Dialect> ScopedSortApi<D> for X
 where
-    X: StrAllocator<Str = Str> + TermAllocator<Str, Sort, Term> + CheckedApi,
+    X: StrAllocator<Str = Str> + TermAllocator<Str, Sort, Term> + CheckedApi<D>,
 {
-    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, ()> {
+    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
         self.get_tcenv().convert_to_empty_local()
     }
 }
 
-impl Context {
+impl<const D: Dialect> Context<D> {
     /// Create a context for building `define-fun` with a given output sort
     ///
     /// c.f. [Self::build_fun]
@@ -488,7 +489,7 @@ impl Context {
         name: S,
         inputs: T,
         output: Sort,
-    ) -> TC<FunctionContext<'_>>
+    ) -> TC<FunctionContext<'_, D>>
     where
         T: IntoIterator<Item = (S, Sort)>,
         S: AllocatableString<Arena>,
@@ -499,7 +500,7 @@ impl Context {
     /// Create a context for building `define-fun` without a given output sort
     ///
     /// c.f. [Self::build_fun_out_sort]
-    pub fn build_fun<T, S>(&mut self, name: S, inputs: T) -> TC<FunctionContext<'_>>
+    pub fn build_fun<T, S>(&mut self, name: S, inputs: T) -> TC<FunctionContext<'_, D>>
     where
         T: IntoIterator<Item = (S, Sort)>,
         S: AllocatableString<Arena>,
@@ -508,7 +509,7 @@ impl Context {
     }
 
     /// Create a context for building [`define-fun-rec`](RecFunsContext) and `define-fun-recs`
-    pub fn build_rec_funs<T, S>(&mut self, funs: T) -> TC<RecFunsContext<'_>>
+    pub fn build_rec_funs<T, S>(&mut self, funs: T) -> TC<RecFunsContext<'_, D>>
     where
         T: IntoIterator<Item = RecFunc<S, Sort>>,
         S: AllocatableString<Arena>,
@@ -521,7 +522,7 @@ impl Context {
         &mut self,
         name: S,
         params: impl IntoIterator<Item = S>,
-    ) -> TC<DefSortContext<'_>>
+    ) -> TC<DefSortContext<'_, D>>
     where
         S: AllocatableString<Arena>,
     {
@@ -531,7 +532,7 @@ impl Context {
     /// Create a context for building datatypes
     ///
     /// Use [Self::typed_enum] to build simple enum datatypes
-    pub fn build_datatypes<T, P, S>(&mut self, dt_names_and_sorts: T) -> TC<DatatypeContext<'_>>
+    pub fn build_datatypes<T, P, S>(&mut self, dt_names_and_sorts: T) -> TC<DatatypeContext<'_, D>>
     where
         T: IntoIterator<Item = (S, P)>,
         P: IntoIterator<Item = S>,

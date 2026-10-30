@@ -88,6 +88,7 @@
 
 use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::*;
+use crate::ast::{DEFAULT_DIALECT, Dialect};
 use crate::raw::alg;
 use crate::raw::alg::CheckIdentifier;
 use crate::raw::alg::rec::TermRecursionScheme;
@@ -259,7 +260,7 @@ type SortSubst<'tm> = Option<(Vec<CSort<'tm>>, Vec<CSort<'tm>>)>;
 /// let mut ctx = Context::new();
 /// let mut env = Cvc5Env::new(&tm, &mut ctx);
 /// ```
-pub struct Cvc5Env<'tm, Ctx> {
+pub struct Cvc5Env<'tm, Ctx, const D: Dialect = DEFAULT_DIALECT> {
     // ── Shared (used by both forward and reverse translation) ────────────
     /// The cvc5 term manager that owns all created sorts and terms.
     tm: &'tm TermManager,
@@ -301,9 +302,9 @@ pub struct Cvc5Env<'tm, Ctx> {
     uninterpreted_values: HashSet<Str>,
 }
 
-impl<'tm, Ctx> Cvc5Env<'tm, Ctx>
+impl<'tm, Ctx, const D: Dialect> Cvc5Env<'tm, Ctx, D>
 where
-    Ctx: HasMutRef<Context>,
+    Ctx: HasMutRef<Context<D>>,
 {
     /// Create a new translation environment backed by the given [`TermManager`] and [`Context`].
     pub fn new(tm: &'tm TermManager, ctx: Ctx) -> Self {
@@ -349,7 +350,7 @@ where
     }
 }
 
-impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
+impl<'tm, Ctx, const D: Dialect> Cvc5Env<'tm, Ctx, D> {
     /// Returns the set of uninterpreted sort value names encountered.
     pub fn uninterpreted_values(&self) -> &HashSet<Str> {
         &self.uninterpreted_values
@@ -433,7 +434,7 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
     }
 }
 
-impl<'tm, Ctx> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, Ctx> {
+impl<'tm, Ctx, const D: Dialect> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, Ctx, D> {
     type Cache<'a>
         = &'a mut ScopedBiCache<Term, WithPattern<'tm>>
     where
@@ -464,25 +465,25 @@ impl<'tm, Ctx> Memoizing<Term, WithPattern<'tm>> for Cvc5Env<'tm, Ctx> {
 /// let mut es = Cvc5EnvSolver::new(&mut env, &solver);
 /// // now use es.to_cvc5() on Command values
 /// ```
-pub struct Cvc5EnvSolver<'a, 'tm, Ctx> {
+pub struct Cvc5EnvSolver<'a, 'tm, Ctx, const D: Dialect = DEFAULT_DIALECT> {
     /// The translation environment for sorts and terms.
-    pub env: &'a mut Cvc5Env<'tm, Ctx>,
+    pub env: &'a mut Cvc5Env<'tm, Ctx, D>,
     /// The cvc5 solver instance.
     pub solver: &'a Solver<'tm>,
 }
 
-impl<'a, 'tm, Ctx> Cvc5EnvSolver<'a, 'tm, Ctx> {
+impl<'a, 'tm, Ctx, const D: Dialect> Cvc5EnvSolver<'a, 'tm, Ctx, D> {
     /// Create a new command-translation environment from a [`Cvc5Env`] and a [`Solver`].
-    pub fn new(env: &'a mut Cvc5Env<'tm, Ctx>, solver: &'a Solver<'tm>) -> Self {
+    pub fn new(env: &'a mut Cvc5Env<'tm, Ctx, D>, solver: &'a Solver<'tm>) -> Self {
         Self { env, solver }
     }
 }
 
 // ── Sort translation ─────────────────────────────────────────
-impl<'tm, Ctx> ConvertToCvc5<Cvc5Env<'tm, Ctx>> for Sort {
+impl<'tm, Ctx, const D: Dialect> ConvertToCvc5<Cvc5Env<'tm, Ctx, D>> for Sort {
     type Output = CSort<'tm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<CSort<'tm>> {
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx, D>) -> Res<CSort<'tm>> {
         sort_to_cvc5(self, env)
     }
 }
@@ -497,9 +498,9 @@ mod csort_forward {
     use super::*;
 
     /// Translate `sort`, answering from the cache when it has been translated before.
-    pub(super) fn sort_to_cvc5<'tm, Ctx>(
+    pub(super) fn sort_to_cvc5<'tm, Ctx, const D: Dialect>(
         sort: &Sort,
-        env: &mut Cvc5Env<'tm, Ctx>,
+        env: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<CSort<'tm>> {
         if let Some(cs) = env.sort_cache.get_by_left(sort) {
             return Ok(cs.clone());
@@ -509,9 +510,9 @@ mod csort_forward {
         Ok(cs)
     }
 
-    pub(super) fn translate_sort_inner<'tm, Ctx>(
+    pub(super) fn translate_sort_inner<'tm, Ctx, const D: Dialect>(
         sort: &Sort,
-        env: &mut Cvc5Env<'tm, Ctx>,
+        env: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<CSort<'tm>> {
         let s = sort.repr();
         let name = s.sort_name();
@@ -572,9 +573,9 @@ mod csort_forward {
     }
 
     /// Translate every argument of `sort`, in order.
-    pub(super) fn params_to_cvc5<'tm, Ctx>(
+    pub(super) fn params_to_cvc5<'tm, Ctx, const D: Dialect>(
         sort: &Sort,
-        env: &mut Cvc5Env<'tm, Ctx>,
+        env: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<Vec<CSort<'tm>>> {
         let count: usize = sort.repr().1.len();
         let mut out: Vec<CSort<'tm>> = Vec::with_capacity(count);
@@ -589,13 +590,13 @@ mod csort_forward {
 
 // ── Reverse sort translation (CSort → Sort) ─────────────────
 
-impl<'tm, Ctx> ConvertFromCvc5<Cvc5Env<'tm, Ctx>> for CSort<'tm>
+impl<'tm, Ctx, const D: Dialect> ConvertFromCvc5<Cvc5Env<'tm, Ctx, D>> for CSort<'tm>
 where
-    Ctx: HasMutRef<Context>,
+    Ctx: HasMutRef<Context<D>>,
 {
     type Output = Sort;
 
-    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort> {
+    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx, D>) -> Res<Sort> {
         conv_csort(self, fenv)
     }
 }
@@ -604,9 +605,12 @@ where
 mod csort_cycle {
     use super::*;
 
-    pub(super) fn conv_csort<'tm, Ctx>(cs: &CSort<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Sort>
+    pub(super) fn conv_csort<'tm, Ctx, const D: Dialect>(
+        cs: &CSort<'tm>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
+    ) -> Res<Sort>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         if let Some(s) = fenv.sort_cache.get_by_right(&cs) {
             return Ok(s.clone());
@@ -616,12 +620,12 @@ mod csort_cycle {
         Ok(s)
     }
 
-    pub(super) fn translate_sort_from_cvc5<'tm, Ctx>(
+    pub(super) fn translate_sort_from_cvc5<'tm, Ctx, const D: Dialect>(
         cs: &CSort<'tm>,
-        fenv: &mut Cvc5Env<'tm, Ctx>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<Sort>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         if cs.is_boolean() {
             return Ok(fenv.ctx.ref_mut().bool_sort());
@@ -696,13 +700,13 @@ mod csort_cycle {
 
 // ── Term: cvc5 → yaspar-ir ───────────────────────────────────
 
-impl<'tm, Ctx, T> ConvertFromCvc5<Cvc5Env<'tm, Ctx>> for [T]
+impl<'tm, Ctx, T, const D: Dialect> ConvertFromCvc5<Cvc5Env<'tm, Ctx, D>> for [T]
 where
-    T: ConvertFromCvc5<Cvc5Env<'tm, Ctx>>,
+    T: ConvertFromCvc5<Cvc5Env<'tm, Ctx, D>>,
 {
     type Output = Vec<T::Output>;
 
-    fn conv_from_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Self::Output> {
+    fn conv_from_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx, D>) -> Res<Self::Output> {
         let mut out = Vec::with_capacity(self.len());
         for s in self {
             out.push(s.conv_from_cvc5(env)?);
@@ -711,13 +715,13 @@ where
     }
 }
 
-impl<'tm, Ctx> ConvertFromCvc5<Cvc5Env<'tm, Ctx>> for CTerm<'tm>
+impl<'tm, Ctx, const D: Dialect> ConvertFromCvc5<Cvc5Env<'tm, Ctx, D>> for CTerm<'tm>
 where
-    Ctx: HasMutRef<Context>,
+    Ctx: HasMutRef<Context<D>>,
 {
     type Output = Term;
 
-    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term> {
+    fn conv_from_cvc5(&self, fenv: &mut Cvc5Env<'tm, Ctx, D>) -> Res<Term> {
         conv_cterm(self, fenv)
     }
 }
@@ -726,9 +730,12 @@ where
 mod cterm_cycle {
     use super::*;
 
-    pub(super) fn conv_cterm<'tm, Ctx>(ct: &CTerm<'tm>, fenv: &mut Cvc5Env<'tm, Ctx>) -> Res<Term>
+    pub(super) fn conv_cterm<'tm, Ctx, const D: Dialect>(
+        ct: &CTerm<'tm>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
+    ) -> Res<Term>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         // Reverse lookup: a plain CTerm corresponds to a `WithPattern` with empty
         // patterns (the quantifier case never reaches us as a standalone CTerm).
@@ -741,12 +748,12 @@ mod cterm_cycle {
         Ok(t)
     }
 
-    pub(super) fn translate_term_from_cvc5<'tm, Ctx>(
+    pub(super) fn translate_term_from_cvc5<'tm, Ctx, const D: Dialect>(
         ct: &CTerm<'tm>,
-        fenv: &mut Cvc5Env<'tm, Ctx>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<Term>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         let kind: Kind = ct.kind();
 
@@ -1206,12 +1213,12 @@ mod cterm_cycle {
         Err(format!("unsupported cvc5 term kind: {kind:?}"))
     }
 
-    pub(super) fn translate_children<'tm, Ctx>(
+    pub(super) fn translate_children<'tm, Ctx, const D: Dialect>(
         ct: &CTerm<'tm>,
-        fenv: &mut Cvc5Env<'tm, Ctx>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<Vec<Term>>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         let n: usize = ct.num_children();
         let mut children = Vec::with_capacity(n);
@@ -1221,12 +1228,12 @@ mod cterm_cycle {
         Ok(children)
     }
 
-    pub(super) fn translate_match_case_from_cvc5<'tm, Ctx>(
+    pub(super) fn translate_match_case_from_cvc5<'tm, Ctx, const D: Dialect>(
         case: &CTerm<'tm>,
-        fenv: &mut Cvc5Env<'tm, Ctx>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<alg::PatternArm<Str, Term>>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         let case_kind: Kind = case.kind();
         match case_kind {
@@ -1356,13 +1363,13 @@ mod cterm_cycle {
         }
     }
 
-    pub(super) fn translate_indexed_from_cvc5<'tm, Ctx>(
+    pub(super) fn translate_indexed_from_cvc5<'tm, Ctx, const D: Dialect>(
         ct: &CTerm<'tm>,
         op: &cvc5::Op<'tm>,
-        fenv: &mut Cvc5Env<'tm, Ctx>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<Option<Term>>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         let op_kind: Kind = op.kind();
         let children = translate_children(ct, fenv)?;
@@ -1429,12 +1436,12 @@ mod cterm_cycle {
     }
 
     /// Translate a quantifier body together with its `:pattern` triggers.
-    fn translate_quantifier_body_from_cvc5<'tm, Ctx>(
+    fn translate_quantifier_body_from_cvc5<'tm, Ctx, const D: Dialect>(
         probe: WithPattern<'tm>,
-        fenv: &mut Cvc5Env<'tm, Ctx>,
+        fenv: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<Term>
     where
-        Ctx: HasMutRef<Context>,
+        Ctx: HasMutRef<Context<D>>,
     {
         if let Some(cached) = fenv.term_cache.get_by_right(&probe) {
             return Ok(cached.clone());
@@ -1482,7 +1489,7 @@ mod cterm_cycle {
 ///
 /// A `Numeral` is non-negative, so a negative value becomes a unary-minus
 /// application `(- mag)`, matching [`CheckedApi::integer`](crate::ast::CheckedApi::integer).
-fn signed_int_term(rf: &mut Context, value: IBig, sort: Sort) -> Term {
+fn signed_int_term<const D: Dialect>(rf: &mut Context<D>, value: IBig, sort: Sort) -> Term {
     let (sign, mag) = value.into_parts();
     let num = rf.allocate_term(ATerm::Constant(Constant::Numeral(mag), Some(sort.clone())));
     match sign {
@@ -1496,7 +1503,7 @@ fn signed_int_term(rf: &mut Context, value: IBig, sort: Sort) -> Term {
 }
 
 /// A similar function to [signed_int_term]
-fn signed_decimal_term(rf: &mut Context, value: DBig, sort: Sort) -> Term {
+fn signed_decimal_term<const D: Dialect>(rf: &mut Context<D>, value: DBig, sort: Sort) -> Term {
     let sign = value.sign();
     let num = rf.allocate_term(ATerm::Constant(
         Constant::Decimal(value.abs()),
@@ -1739,10 +1746,10 @@ fn ident_kind_to_cvc5(k: &IdentifierKind) -> Option<Kind> {
 }
 
 // ── Term translation ─────────────────────────────────────────
-impl<'tm, Ctx> ConvertToCvc5<Cvc5Env<'tm, Ctx>> for Term {
+impl<'tm, Ctx, const D: Dialect> ConvertToCvc5<Cvc5Env<'tm, Ctx, D>> for Term {
     type Output = CTerm<'tm>;
 
-    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx>) -> Res<Self::Output> {
+    fn to_cvc5(&self, env: &mut Cvc5Env<'tm, Ctx, D>) -> Res<Self::Output> {
         let mut wrapped = MemoizedRecursion(env);
         MemoizedScheme::term_recursion(&mut wrapped, self).map(|t| t.into())
     }
@@ -1752,7 +1759,7 @@ fn to_term_vec(terms: Vec<WithPattern>) -> Vec<CTerm> {
     terms.into_iter().map(|t| t.into()).collect()
 }
 
-impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
+impl<'tm, Ctx, const D: Dialect> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx, D> {
     type Out = WithPattern<'tm>;
     type Attr = PatternAttrs<'tm>;
     type Binding = (LocalId, WithPattern<'tm>);
@@ -2167,7 +2174,7 @@ impl<'tm, Ctx> TermRecursor<Str, Sort, Term> for Cvc5Env<'tm, Ctx> {
     }
 }
 
-impl<'tm, Ctx> TypedTermRecursor for Cvc5Env<'tm, Ctx> {}
+impl<'tm, Ctx, const D: Dialect> TypedTermRecursor for Cvc5Env<'tm, Ctx, D> {}
 
 impl<T, Env, E> ConvertToCvc5<Env> for [T]
 where
@@ -2220,7 +2227,7 @@ fn is_const_of(t: CTerm) -> bool {
     true
 }
 
-impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
+impl<'tm, Ctx, const D: Dialect> Cvc5Env<'tm, Ctx, D> {
     fn translate_constant(&self, c: &Constant, s: &Sort) -> Res<WithPattern<'tm>> {
         use alg::Constant::*;
         match c {
@@ -2503,13 +2510,13 @@ impl<'tm, Ctx> Cvc5Env<'tm, Ctx> {
 }
 
 // ── Command translation ──────────────────────────────────────
-impl<'p, 'tm, Ctx> ConvertToCvc5<Cvc5EnvSolver<'p, 'tm, Ctx>> for Command
+impl<'p, 'tm, Ctx, const D: Dialect> ConvertToCvc5<Cvc5EnvSolver<'p, 'tm, Ctx, D>> for Command
 where
-    Ctx: HasMutRef<Context>,
+    Ctx: HasMutRef<Context<D>>,
 {
     type Output = CommandResult<'p>;
 
-    fn to_cvc5(&self, es: &mut Cvc5EnvSolver<'p, 'tm, Ctx>) -> Res<Self::Output> {
+    fn to_cvc5(&self, es: &mut Cvc5EnvSolver<'p, 'tm, Ctx, D>) -> Res<Self::Output> {
         use alg::Command as AC;
         let env = &mut *es.env;
         // `&Solver` is `Copy`, so this hands out the solver for the whole `'p` — results and
@@ -2694,9 +2701,9 @@ where
 }
 
 // ── Command helper methods ───────────────────────────────────
-impl<'p, 'tm, Ctx> Cvc5EnvSolver<'p, 'tm, Ctx>
+impl<'p, 'tm, Ctx, const D: Dialect> Cvc5EnvSolver<'p, 'tm, Ctx, D>
 where
-    Ctx: HasMutRef<Context>,
+    Ctx: HasMutRef<Context<D>>,
 {
     fn translate_define_fun(
         &mut self,
@@ -2794,7 +2801,7 @@ where
     }
 
     fn build_dt_decls(
-        env: &mut Cvc5Env<'tm, Ctx>,
+        env: &mut Cvc5Env<'tm, Ctx, D>,
         defs: &[alg::DatatypeDef<Str, Sort>],
     ) -> Res<Vec<cvc5::DatatypeDecl<'tm>>> {
         let mut decls = Vec::with_capacity(defs.len());
@@ -2827,7 +2834,7 @@ where
         Ok(decls)
     }
 
-    fn register_dt_functions(env: &mut Cvc5Env<'tm, Ctx>, sort: CSort<'tm>, dec: &DatatypeDec) {
+    fn register_dt_functions(env: &mut Cvc5Env<'tm, Ctx, D>, sort: CSort<'tm>, dec: &DatatypeDec) {
         let dt = sort.datatype();
         let mut rf = env.ctx.ref_mut();
         for (i, ctor_dec) in dec.constructors.iter().enumerate() {
