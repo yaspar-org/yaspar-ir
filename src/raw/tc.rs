@@ -29,8 +29,8 @@
 use super::alg;
 use super::alg::{LocalId, VarBinding};
 use super::instance::{
-    Arena, Attribute, Constant, DatatypeDec, Identifier, Index, Pattern, PatternArm,
-    QualifiedIdentifier, Sort, SortDef, Str, Term,
+    Arena, Attribute, Constant, DatatypeDec, Identifier, Index, PatternArm, QualifiedIdentifier,
+    Sort, SortDef, Str, Term,
 };
 use crate::allocator::*;
 use crate::ast::utils::is_term_bool_alt;
@@ -47,13 +47,15 @@ pub(crate) use app::{
     typed_app, typed_app_sig, typed_qualified_identifier, typed_qualified_identifier_sig,
 };
 use dashu::integer::UBig;
+use matching::{ArmScope, MatchChecker};
 use num_traits::cast::ToPrimitive;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Display;
 use unif::SortSubst;
 use yaspar_macros::stack_safe;
 
 mod app;
+pub(crate) mod matching;
 pub(crate) mod unif;
 
 /// Type-checking monad
@@ -175,7 +177,6 @@ impl<'a, 'b, S> TCEnv<'a, 'b, S> {
             local: TCLocal {
                 loc: local,
                 loc_inc: vec![],
-                scrutinee_map: Default::default(),
             },
         }
     }
@@ -521,12 +522,9 @@ pub(crate) fn tc_determine_datatype_sort_map<L>(
 ///
 /// - `loc`: the linked-list local variable environment (bindings from `let`, quantifiers, etc.)
 /// - `loc_inc`: incremental scope extensions accumulated during traversal
-/// - `scrutinee_map`: tracks datatype sort information for match scrutinees, used to
-///   resolve constructor patterns
 pub struct TCLocal<'b, T> {
     pub(crate) loc: LocEnv<'b, Str, T>,
     pub(crate) loc_inc: Vec<Vec<VarBinding<Str, T>>>,
-    pub(crate) scrutinee_map: HashMap<Term, HashMap<Str, Vec<Sort>>>,
 }
 
 impl<T> Default for TCLocal<'_, T> {
@@ -534,7 +532,6 @@ impl<T> Default for TCLocal<'_, T> {
         Self {
             loc: LocEnv::Nil,
             loc_inc: vec![],
-            scrutinee_map: Default::default(),
         }
     }
 }
@@ -751,21 +748,27 @@ mod term_rec {
         So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
         T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
     {
+        let mut checker: MatchChecker =
+            MatchChecker::new(env, &scrutinee_rec, &scrutinee.display_meta_data())?;
         let mut arms = Vec::with_capacity(cases.len());
         let mut i = 0usize;
         while i < cases.len() {
-            let pattern = tc_match_case_scope(env, scrutinee, &scrutinee_rec, &cases[i])?;
+            let (pattern, scope) = tc_arm_scope(env, &checker, &cases[i])?;
+            env.local.loc_inc.push(scope);
             let arm_res = tc_term_rec(&cases[i].body, false, env);
             let popped = env.local.scope_pop(this);
             let arm_rec = arm_res?;
             popped?;
+            let body_meta = cases[i].body.display_meta_data();
+            checker.add_arm(env, &pattern, &arm_rec, &cases[i].body, &body_meta)?;
             arms.push(PatternArm {
                 pattern,
                 body: arm_rec,
             });
             i += 1;
         }
-        tc_match(env, this, cases, scrutinee_rec, arms)
+        checker.finish(&this.display_meta_data())?;
+        Ok(env.arena.matching(scrutinee_rec, arms))
     }
 
     /// Type-check the attributes of an annotated term, left to right.
@@ -981,195 +984,38 @@ where
     Ok(())
 }
 
-/// Type-check the pattern of a match arm, and push the scope of the variables it binds.
-fn tc_match_case_scope<St, T>(
+/// Resolve the pattern of a match arm into the pattern and the variables it binds.
+fn tc_arm_scope<St, T>(
     env: &mut TCEnv<'_, '_, Sort>,
-    scrutinee: &T,
-    scrutinee_rec: &Term,
+    checker: &MatchChecker,
     case: &alg::PatternArm<St, T>,
-) -> TC<Pattern>
+) -> TC<ArmScope>
 where
     St: AllocatableString<Arena>,
-    T: MetaData,
 {
-    if !env.meta.theories.contains(&Theory::Datatypes) {
-        return Err("TC: current logic does not support the theory of datatypes!".into());
-    }
-
-    // We determine the sorts of constructors if not already exists
-    if !env.local.scrutinee_map.contains_key(scrutinee_rec) {
-        let constructors =
-            tc_determine_datatype_sort_map(env, scrutinee_rec, &scrutinee.display_meta_data())?;
-        env.local
-            .scrutinee_map
-            .insert(scrutinee_rec.clone(), constructors);
-    }
-    let so = scrutinee_rec.get_sort(env);
-    let constructors = env.local.scrutinee_map.get(scrutinee_rec).unwrap();
-    let pattern = match &case.pattern {
+    match &case.pattern {
         alg::Pattern::Ctor(ctor) => {
             let ctr = ctor.allocate(env.arena);
-            match constructors.get(&ctr) {
-                None => {
-                    return Err(format!(
-                        "TC: case {ctr}{} is not a constructor!",
-                        ctor.display_meta_data()
-                    ));
-                }
-                Some(args) => {
-                    if !args.is_empty() {
-                        return Err(format!(
-                            "TC: constructor {ctr}{} requires a non-empty list of arguments",
-                            ctor.display_meta_data()
-                        ));
-                    }
-                }
-            }
-            env.local.loc_inc.push(vec![]);
-            Pattern::Ctor(ctr)
+            checker.ctor_arm(env, ctr, &ctor.display_meta_data(), vec![])
         }
-        alg::Pattern::Wildcard(ctor) => {
-            // in this case, [ctor] is either a wildcard variable, or a nullary constructor.
-            // depending on the case, we just need to TC with an extra variable [ctor],
-            // if it is a wildcard.
-            let (sorts, pattern) = match ctor {
-                None => (vec![], Pattern::Wildcard(None)),
-                Some((ctor, _)) => {
-                    let ctr = ctor.allocate(env.arena);
-                    match constructors.get(&ctr) {
-                        None => {
-                            let id = env.arena.new_local();
-                            (
-                                vec![VarBinding(ctr.clone(), id, so.clone())],
-                                Pattern::Wildcard(Some((ctr.clone(), id))),
-                            )
-                        }
-                        Some(args) => {
-                            if args.is_empty() {
-                                (vec![], Pattern::Ctor(ctr.clone()))
-                            } else {
-                                return Err(format!(
-                                    "TC: constructor {ctr}{} requires a non-empty list of arguments!",
-                                    ctr.display_meta_data()
-                                ));
-                            }
-                        }
-                    }
-                }
-            };
-            sanitize_bindings(&sorts, |v| v.0.clone())?;
-            env.local.loc_inc.push(sorts);
-            pattern
+        alg::Pattern::Wildcard(var) => {
+            let var = var
+                .as_ref()
+                .map(|(name, _)| (name.allocate(env.arena), name.display_meta_data()));
+            // the concrete syntax cannot tell a variable from a nullary constructor
+            checker.wildcard_arm(env, var, true)
         }
         alg::Pattern::Applied { ctor, arguments } => {
-            // in this case, [ctor] must be a constructor, so we must extract its signature
-            // from [constructors].
             let ctr = ctor.allocate(env.arena);
-            match constructors.get(&ctr) {
-                None => {
-                    return Err(format!(
-                        "TC: {ctr}{} is not a constructor of sort {so}!",
-                        ctor.display_meta_data()
-                    ));
-                }
-                Some(sig) => {
-                    // first, the signature and the provided arguments must have the same
-                    // length.
-                    if sig.len() != arguments.len() {
-                        return Err(format!(
-                            "TC: {ctr}{} include {} arguments, but {} are required of sorts {}!",
-                            ctor.display_meta_data(),
-                            arguments.len(),
-                            sig.len(),
-                            sig.iter()
-                                .map(|s| s.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ));
-                    }
-                    let arguments = arguments
-                        .iter()
-                        .map(|o| {
-                            o.as_ref().map(|(name, _)| {
-                                let symbol = name.allocate(env.arena);
-                                let fresh_id = env.arena.new_local();
-                                (symbol, fresh_id)
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let sorts = arguments
-                        .iter()
-                        .zip(sig)
-                        .filter_map(|(o, s)| {
-                            o.as_ref()
-                                .map(|(name, id)| alg::VarBinding(name.clone(), *id, s.clone()))
-                        })
-                        .collect::<Vec<_>>();
-                    sanitize_bindings(&sorts, |v| v.0.clone())?;
-                    env.local.loc_inc.push(sorts);
-                    Pattern::Applied {
-                        ctor: ctr,
-                        arguments,
-                    }
-                }
-            }
-        }
-    };
-    Ok(pattern)
-}
-
-/// Build a match expression from its type-checked arms, checking that they are exhaustive.
-fn tc_match<St, T: Display + MetaData>(
-    env: &mut TCEnv<'_, '_, Sort>,
-    current: &T,
-    cases: &[alg::PatternArm<St, T>],
-    scrutinee_rec: Term,
-    cases_rec: Vec<PatternArm>,
-) -> TC<Term> {
-    // the parser never produces an empty match, but the unchecked API can
-    let Some(first) = cases_rec.first() else {
-        return Err(format!(
-            "TC: match expression{} must have at least one arm!",
-            current.display_meta_data()
-        ));
-    };
-    // all arms must have the same sort as the first one
-    let arm_sort = first.body.get_sort(env);
-    for (case, case_rec) in cases.iter().zip(&cases_rec).skip(1) {
-        let s = case_rec.body.get_sort(env);
-        if s != arm_sort {
-            return sort_mismatch(&arm_sort, &s, &case.body, &case.body.display_meta_data());
-        }
-    }
-    let constructors = env.local.scrutinee_map.get(&scrutinee_rec).unwrap();
-    let mut unseen_ctors: HashSet<Str> = constructors.keys().cloned().collect();
-    let mut covered = false;
-    for case in &cases_rec {
-        match &case.pattern {
-            alg::Pattern::Wildcard(_) => {
-                covered = true;
-                break;
-            }
-            alg::Pattern::Ctor(ctor) | alg::Pattern::Applied { ctor, .. } => {
-                unseen_ctors.remove(ctor);
-            }
-        }
-    }
-    if unseen_ctors.is_empty() {
-        covered = true;
-    }
-    if !covered {
-        Err(format!(
-            "TC: arms for constructors {} are needed in the match expression{}!",
-            unseen_ctors
+            let vars = arguments
                 .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            current.display_meta_data()
-        ))
-    } else {
-        Ok(env.arena.matching(scrutinee_rec, cases_rec))
+                .map(|o| {
+                    o.as_ref()
+                        .map(|(name, _)| (name.allocate(env.arena), name.display_meta_data()))
+                })
+                .collect();
+            checker.ctor_arm(env, ctr, &ctor.display_meta_data(), vars)
+        }
     }
 }
 
