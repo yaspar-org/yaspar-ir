@@ -1833,3 +1833,92 @@ fn test_empty_match_is_rejected() {
     let err = t.type_check(&mut ctx).unwrap_err();
     assert!(err.contains("at least one arm"), "{err}");
 }
+
+/// The type checker and the `MatchContext` builder share their checks on a `match`, so they
+/// report each mistake in the same words.
+#[test]
+fn test_match_errors_agree_with_the_builder() {
+    let decls = r"
+(set-logic ALL)
+(declare-datatype Lst (par (X) ((nil) (cons (hd X) (tl (Lst X))))))
+(declare-const l (Lst Int))";
+    let context = || {
+        let mut ctx = Context::new();
+        let cs = UntypedAst.parse_script_str(decls).unwrap();
+        cs.type_check(&mut ctx).unwrap();
+        ctx
+    };
+    // the message without the locations the parser adds, e.g. `1:2-1:5`
+    let checked = |src: &str| -> String {
+        let mut ctx = context();
+        let t = UntypedAst.parse_term_str(src).unwrap();
+        let e = t.type_check(&mut ctx).unwrap_err();
+        let is_location = |w: &str| {
+            w.contains(':')
+                && w.chars()
+                    .all(|c| c.is_ascii_digit() || c == ':' || c == '-')
+        };
+        e.split(' ')
+            .map(|w| {
+                let core = w.trim_end_matches('!');
+                if is_location(core) {
+                    &w[core.len()..]
+                } else {
+                    w
+                }
+            })
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace(" !", "!")
+    };
+
+    // not a constructor
+    let mut ctx = context();
+    let l = ctx.typed_symbol("l").unwrap();
+    let mut m = ctx.build_matching(l).unwrap();
+    let built = m.build_arm("snoc", [None]).err().unwrap();
+    assert_eq!(checked("(match l (((snoc x) 0) (_ 1)))"), built);
+
+    // arity
+    let mut ctx = context();
+    let l = ctx.typed_symbol("l").unwrap();
+    let mut m = ctx.build_matching(l).unwrap();
+    let built = m.build_arm("cons", [Some("h")]).err().unwrap();
+    assert_eq!(checked("(match l (((cons h) 0) (_ 1)))"), built);
+    assert!(
+        built.contains("expects 2 argument(s), but 1 are given"),
+        "{built}"
+    );
+
+    // exhaustiveness
+    let mut ctx = context();
+    let l = ctx.typed_symbol("l").unwrap();
+    let zero = ctx.numeral(0u8.into()).unwrap();
+    let mut m = ctx.build_matching(l).unwrap();
+    m.build_arm_nullary("nil").unwrap().typed_arm(zero).unwrap();
+    let built = m.typed_matching().unwrap_err();
+    assert_eq!(checked("(match l ((nil 0)))"), built);
+    assert!(
+        built.contains("arms for constructors cons are needed"),
+        "{built}"
+    );
+
+    // a pattern variable must be a valid symbol, as in the builder
+    let err = checked("(match l ((nil 0) ((cons @h t) 1)))");
+    assert!(err.contains("reserved"), "{err}");
+    let err = checked("(match l ((nil 0) (.x 1)))");
+    assert!(err.contains("reserved"), "{err}");
+    let mut ctx = context();
+    let l = ctx.typed_symbol("l").unwrap();
+    let mut m = ctx.build_matching(l).unwrap();
+    let built = m.build_arm("cons", [Some("@h"), Some("t")]).err().unwrap();
+    assert!(built.contains("reserved"), "{built}");
+
+    // an empty match, which only the builder can produce
+    let mut ctx = context();
+    let l = ctx.typed_symbol("l").unwrap();
+    let m = ctx.build_matching(l).unwrap();
+    let built = m.typed_matching().unwrap_err();
+    assert!(built.contains("at least one arm"), "{built}");
+}

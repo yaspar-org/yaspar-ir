@@ -1,19 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::allocator::{LocalVarAllocator, TermAllocator};
+use crate::allocator::TermAllocator;
+use crate::ast::Theory;
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::Context;
 use crate::ast::ctx::{
     Arena, CheckedApi, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TC, TCEnv,
     TCEnvGen, TCLocal, Term,
 };
-use crate::ast::{SymbolQuote, Theory};
 use crate::containers::LocEnv;
-use crate::raw::instance::{FetchSort, HasArena};
-use crate::raw::tc::{sort_mismatch, tc_determine_datatype_sort_map};
+use crate::raw::instance::HasArena;
+use crate::raw::tc::matching::MatchChecker;
 use crate::traits::{AllocatableString, HasMutRef};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// A builder context for constructing `match` expressions over datatype values.
 ///
@@ -59,11 +59,9 @@ pub struct MatchContext<'a, 'b> {
     context: &'a mut Context,
     tail: LocEnv<'b, Str, Sort>,
     scrutinee: Term,
-    constructors: HashMap<Str, Vec<Sort>>,
-    unseen_constructors: HashSet<Str>,
-    covered: bool,
+    /// The constructors, their coverage, and the sort of the arms.
+    checker: MatchChecker,
     arms: Vec<PatternArm>,
-    arm_sort: Option<Sort>,
 }
 
 /// A builder context for an individual arm within a [`MatchContext`].
@@ -88,19 +86,13 @@ impl<'a, 'b> MatchContext<'a, 'b> {
         scrutinee: Term,
     ) -> TC<Self> {
         context.check_support_theory(Theory::Datatypes)?;
-        let mut env = context.get_tcenv();
-        let constructors = tc_determine_datatype_sort_map(&mut env, &scrutinee, "")?;
-        let unseen_constructors: HashSet<Str> = constructors.keys().cloned().collect();
-
+        let checker = MatchChecker::new(&mut context.get_tcenv(), &scrutinee, "")?;
         Ok(Self {
             context,
             tail,
             scrutinee,
-            constructors,
-            unseen_constructors,
-            covered: false,
+            checker,
             arms: vec![],
-            arm_sort: None,
         })
     }
 
@@ -111,7 +103,7 @@ impl<'a, 'b> MatchContext<'a, 'b> {
 
     /// Get the sort of the scrutinee
     pub fn scrutinee_sort(&mut self) -> Sort {
-        self.scrutinee.get_sort(self.context)
+        self.checker.scrutinee_sort().clone()
     }
 
     /// Get the sorts of a given constructor, if it is one
@@ -120,12 +112,12 @@ impl<'a, 'b> MatchContext<'a, 'b> {
         S: AllocatableString<Arena>,
     {
         let ctor = ctor.allocate(self.context.arena());
-        self.constructors.get(&ctor).map(|x| x.as_slice())
+        self.checker.constructors().get(&ctor).map(|x| x.as_slice())
     }
 
     /// Get all constructors, including the unseen ones
     pub fn get_constructors(&self) -> Vec<Str> {
-        self.constructors.keys().cloned().collect()
+        self.checker.constructors().keys().cloned().collect()
     }
 
     /// Whether a name is a constructor
@@ -139,12 +131,12 @@ impl<'a, 'b> MatchContext<'a, 'b> {
 
     /// Get only the unseen constructors
     pub fn get_unseen_constructors(&self) -> &HashSet<Str> {
-        &self.unseen_constructors
+        self.checker.unseen()
     }
 
     /// Whether the current context is already covered
     pub fn is_covered(&self) -> bool {
-        self.covered
+        self.checker.is_covered()
     }
 
     /// Given a constructor name and a list of variables, return a builder context for the body
@@ -161,64 +153,20 @@ impl<'a, 'b> MatchContext<'a, 'b> {
         S: AllocatableString<Arena>,
     {
         let ctor = c.allocate(self.context.arena());
-        let sorts = match self.constructors.get(&ctor) {
-            None => {
-                let sort = self.scrutinee_sort();
-                return Err(format!(
-                    "TC: given name {}{} is not a constructor of sort {sort}",
-                    ctor.sym_quote(),
-                    c.display_meta_data(),
-                ));
-            }
-            Some(ss) => ss,
-        };
-        let expected_num_args = sorts.len();
-        let mut idx = 0;
-        let mut env = vec![];
-
-        let mut arguments = vec![];
-        let mut existing_vars = HashSet::new();
-        for v in vars {
-            if idx == expected_num_args {
-                return Err(format!(
-                    "TC: constructor {}{} expects {expected_num_args} argument(s) but more are given!",
-                    ctor.sym_quote(),
-                    c.display_meta_data()
-                ));
-            }
-            if let Some(x) = v {
-                let v = x.allocate(self.context.arena());
-                self.context.check_sym_validity(&v)?;
-                if !existing_vars.insert(v.clone()) {
-                    return Err(format!(
-                        "duplicate name in binding: {}{} is already used",
-                        v.sym_quote(),
-                        x.display_meta_data()
-                    ));
-                }
-                let new_id = self.context.new_local();
-                arguments.push(Some((v.clone(), new_id)));
-                env.push(VarBinding(v, new_id, sorts[idx].clone()));
-            } else {
-                arguments.push(None);
-            }
-            idx += 1;
-        }
-        if idx != expected_num_args {
-            return Err(format!(
-                "TC: constructor {}{} expects {expected_num_args} argument(s) but only {idx} are given!",
-                ctor.sym_quote(),
-                c.display_meta_data(),
-            ));
-        }
+        let vars = vars
+            .into_iter()
+            .map(|v| v.map(|x| (x.allocate(self.context.arena()), x.display_meta_data())))
+            .collect();
+        let (pattern, env) = self.checker.ctor_arm(
+            &mut self.context.get_tcenv(),
+            ctor,
+            &c.display_meta_data(),
+            vars,
+        )?;
         Ok(ArmContext {
             parent: self,
             env,
-            pattern: if arguments.is_empty() {
-                Pattern::Ctor(ctor)
-            } else {
-                Pattern::Applied { ctor, arguments }
-            },
+            pattern,
         })
     }
 
@@ -241,31 +189,15 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     where
         S: AllocatableString<Arena>,
     {
-        if let Some(var) = var {
-            let v = var.allocate(self.context.arena());
-            if self.constructors.contains_key(&v) {
-                Err(format!(
-                    "TC: variable {}{} is a constructor; it cannot be used as a wildcard variable for matching a term of sort {}!",
-                    v.sym_quote(),
-                    var.display_meta_data(),
-                    self.scrutinee_sort()
-                ))
-            } else {
-                let id = self.context.new_local();
-                let sort = self.scrutinee_sort();
-                Ok(ArmContext {
-                    parent: self,
-                    env: vec![VarBinding(v.clone(), id, sort)],
-                    pattern: Pattern::Wildcard(Some((v, id))),
-                })
-            }
-        } else {
-            Ok(ArmContext {
-                parent: self,
-                env: vec![],
-                pattern: Pattern::Wildcard(None),
-            })
-        }
+        let var = var.map(|v| (v.allocate(self.context.arena()), v.display_meta_data()));
+        let (pattern, env) =
+            self.checker
+                .wildcard_arm(&mut self.context.get_tcenv(), var, false)?;
+        Ok(ArmContext {
+            parent: self,
+            env,
+            pattern,
+        })
     }
 
     /// A case of `_`
@@ -280,18 +212,8 @@ impl<'a, 'b> MatchContext<'a, 'b> {
     ///
     /// c.f. [Self::is_covered]
     pub fn typed_matching(self) -> TC<Term> {
-        if !self.covered {
-            Err(format!(
-                "TC: arms for constructors {} are needed!",
-                self.unseen_constructors
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        } else {
-            Ok(self.context.matching(self.scrutinee, self.arms))
-        }
+        self.checker.finish("")?;
+        Ok(self.context.matching(self.scrutinee, self.arms))
     }
 }
 
@@ -319,28 +241,9 @@ impl ArmContext<'_, '_, '_> {
     ///
     /// invoking this method will make the parent [MatchContext] available.
     pub fn typed_arm(self, body: Term) -> TC<()> {
-        let sort = body.get_sort(self.parent.context);
-        if let Some(s) = &self.parent.arm_sort {
-            if *s != sort {
-                return sort_mismatch(s, &sort, body, "");
-            }
-        } else {
-            self.parent.arm_sort = Some(sort);
-        }
-
-        match &self.pattern {
-            Pattern::Wildcard(_) => {
-                // in the wildcard case, we are already covered
-                self.parent.covered = true;
-            }
-            Pattern::Ctor(ctor) | Pattern::Applied { ctor, .. } => {
-                self.parent.unseen_constructors.remove(ctor);
-            }
-        }
-
-        if self.parent.unseen_constructors.is_empty() {
-            self.parent.covered = true;
-        }
+        self.parent
+            .checker
+            .add_arm(self.parent.context, &self.pattern, &body, &body, "")?;
         let arm = PatternArm {
             pattern: self.pattern,
             body,

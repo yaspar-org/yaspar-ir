@@ -250,6 +250,65 @@ pub(crate) struct ContextMeta {
     pub(crate) theories: &'static HashSet<Theory>,
 }
 
+/// The checks on a symbol about to be declared, which depend on the logic only.
+impl ContextMeta {
+    pub(crate) fn check_sym_chars(&self, sym: &Str) -> Result<()> {
+        if sym.inner().contains(|c| !valid_symbol_char(c)) {
+            Err(format!(
+                "Symbols can only contain printable chars and white spaces, but not `\\` or `|`: {sym}!"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn check_special_symbols(&self, sym: &Str) -> Result<()> {
+        if SPECIAL_SYMBOLS.contains(sym.as_str()) {
+            Err("Special symbols cannot be declared!".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Symbols beginning with `@` or `.` are reserved for solver-generated names (§3.1). The check is
+    /// on the unquoted name, since `|@x|` and `@x` are the same symbol.
+    pub(crate) fn check_reserved_prefix(&self, sym: &Str) -> Result<()> {
+        if sym.inner().starts_with(['@', '.']) {
+            Err(format!(
+                "Symbols beginning with `@` or `.` are reserved for solvers: {}!",
+                sym.sym_quote()
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn check_bv_sym(&self, sym: &Str) -> Result<()> {
+        if self.theories.contains(&Theory::Bitvectors) && BV_RE.is_match(sym) {
+            Err("Symbols of the form bvX cannot be declared!".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_is_sym(&self, sym: &Str) -> Result<()> {
+        if self.theories.contains(&Theory::Datatypes) && sym.inner() == IS {
+            Err("`is` cannot be used as a symbol!".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check the validity of a given symbol
+    pub(crate) fn check_sym_validity(&self, sym: &Str) -> Result<()> {
+        self.check_sym_chars(sym)?;
+        self.check_reserved_prefix(sym)?;
+        self.check_special_symbols(sym)?;
+        self.check_bv_sym(sym)?;
+        self.check_is_sym(sym)
+    }
+}
+
 /// Global context for the current session
 pub struct Context {
     /// The memory arena for hash-consed allocation.
@@ -292,9 +351,9 @@ impl Context {
 
     /// Check whether a given sort name can be added to the sort table
     pub fn can_add_sort(&self, symbol: &Str) -> Result<()> {
-        self.check_sym_chars(symbol)?;
-        self.check_reserved_prefix(symbol)?;
-        self.check_special_symbols(symbol)?;
+        self.meta.check_sym_chars(symbol)?;
+        self.meta.check_reserved_prefix(symbol)?;
+        self.meta.check_special_symbols(symbol)?;
         self.check_bv(symbol)?;
         if self.stack.contains_sort(symbol) {
             Err(format!("sort {} is already defined!", symbol.sym_quote()))
@@ -354,60 +413,9 @@ impl Context {
         Ok(())
     }
 
-    fn check_sym_chars(&self, sym: &Str) -> Result<()> {
-        if sym.inner().contains(|c| !valid_symbol_char(c)) {
-            Err(format!(
-                "Symbols can only contain printable chars and white spaces, but not `\\` or `|`: {sym}!"
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_special_symbols(&self, sym: &Str) -> Result<()> {
-        if SPECIAL_SYMBOLS.contains(sym.as_str()) {
-            Err("Special symbols cannot be declared!".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Symbols beginning with `@` or `.` are reserved for solver-generated names (§3.1). The check is
-    /// on the unquoted name, since `|@x|` and `@x` are the same symbol.
-    fn check_reserved_prefix(&self, sym: &Str) -> Result<()> {
-        if sym.inner().starts_with(['@', '.']) {
-            Err(format!(
-                "Symbols beginning with `@` or `.` are reserved for solvers: {}!",
-                sym.sym_quote()
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_bv_sym(&self, sym: &Str) -> Result<()> {
-        if self.check_support_theory(Theory::Bitvectors).is_ok() && BV_RE.is_match(sym) {
-            Err("Symbols of the form bvX cannot be declared!".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_is_sym(&self, sym: &Str) -> Result<()> {
-        if self.check_support_theory(Theory::Datatypes).is_ok() && sym.inner() == IS {
-            Err("`is` cannot be used as a symbol!".into())
-        } else {
-            Ok(())
-        }
-    }
-
     /// Check the validity of a given symbol
     pub(crate) fn check_sym_validity(&self, sym: &Str) -> Result<()> {
-        self.check_sym_chars(sym)?;
-        self.check_reserved_prefix(sym)?;
-        self.check_special_symbols(sym)?;
-        self.check_bv_sym(sym)?;
-        self.check_is_sym(sym)
+        self.meta.check_sym_validity(sym)
     }
 
     /// Check whether a symbol is contained in the symbol table
@@ -494,8 +502,8 @@ impl Context {
         S: AllocatableString<Arena>,
     {
         let symbol = symbol.allocate(self.arena());
-        self.check_special_symbols(&symbol)?;
-        self.check_bv_sym(&symbol)?;
+        self.meta.check_special_symbols(&symbol)?;
+        self.meta.check_bv_sym(&symbol)?;
         self.push_symbol(symbol, sig, FunctionMeta::OpaqueDeclared);
         Ok(())
     }
