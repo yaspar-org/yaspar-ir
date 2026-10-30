@@ -2973,3 +2973,28 @@ fn deep_forward_parametric_sort_translation_is_flat() {
         ok
     }));
 }
+
+/// A context of another dialect translates to cvc5 and back like the default one.
+#[test]
+fn test_dialect_round_trip() {
+    use yaspar_ir::ast::{ACommand, DIALECT_ATSLIB, Repr};
+    let mut ctx = Context::<DIALECT_ATSLIB>::new_dialect();
+    let cmds = UntypedAst
+        .parse_script_str("(set-logic ALL)(declare-const x Int)(assert (> x 0))")
+        .unwrap()
+        .type_check(&mut ctx)
+        .unwrap();
+    let ACommand::Assert(t) = cmds[2].repr() else {
+        panic!("not an assertion")
+    };
+    let tm = TermManager::new();
+    let solver = Solver::new(&tm);
+    let mut env = Cvc5Env::new(&tm, &mut ctx);
+    let mut es = Cvc5EnvSolver::new(&mut env, &solver);
+    for cmd in &cmds {
+        cmd.to_cvc5(&mut es).unwrap();
+    }
+    let ct = t.to_cvc5(&mut env).unwrap();
+    let back = ct.conv_from_cvc5(&mut env).unwrap();
+    assert_eq!(&back, t);
+}

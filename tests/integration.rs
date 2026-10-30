@@ -1922,3 +1922,57 @@ fn test_match_errors_agree_with_the_builder() {
     let built = m.typed_matching().unwrap_err();
     assert!(built.contains("at least one arm"), "{built}");
 }
+
+/// A context's dialect reaches every API that works in it: the script type checker, the builder
+/// contexts and global substitution. ATSLIB rejects symbols of 512 characters or more, which
+/// SMT-LIB accepts.
+#[test]
+fn test_dialect_reaches_every_api() {
+    let long = "x".repeat(600);
+    let decl = format!("(set-logic ALL)(declare-const {long} Int)");
+    let bound = format!(
+        "(set-logic ALL)(declare-datatype L ((nil) (cons (hd Int) (tl L))))(declare-const l L)
+         (assert (match l ((nil true) ((cons {long} t) (> {long} 0)))))"
+    );
+
+    // the script type checker, for a declaration and for a pattern variable
+    for script in [&decl, &bound] {
+        let cs = UntypedAst.parse_script_str(script).unwrap();
+        assert!(cs.type_check(&mut Context::new()).is_ok());
+        let mut atslib = Context::<DIALECT_ATSLIB>::new_dialect();
+        assert!(cs.type_check(&mut atslib).is_err(), "{script}");
+    }
+
+    // a builder context, and type checking in it
+    let mut atslib = Context::<DIALECT_ATSLIB>::new_dialect();
+    atslib.ensure_logic();
+    let int = atslib.int_sort();
+    assert!(
+        atslib
+            .build_quantifier_with_domain([(long.as_str(), int.clone())])
+            .is_err()
+    );
+    let mut q = atslib.build_quantifier_with_domain([("x", int)]).unwrap();
+    let x = q.typed_symbol("x").unwrap();
+    let zero = UntypedAst
+        .parse_term_str("0")
+        .unwrap()
+        .type_check(&mut q)
+        .unwrap();
+    let body = q.typed_simp_app(">", [x, zero]).unwrap();
+    let forall = q.typed_forall(body).unwrap();
+    assert_eq!(forall.to_string(), "(forall ((x Int)) (> x 0))");
+
+    // global substitution
+    let script = "(set-logic ALL)(define-fun two () Int 2)(assert (> two 1))";
+    let mut atslib = Context::<DIALECT_ATSLIB>::new_dialect();
+    let cs = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut atslib)
+        .unwrap();
+    let ACommand::Assert(t) = cs[2].repr() else {
+        panic!("not an assertion")
+    };
+    assert_eq!(t.gsubst_all(&mut atslib).to_string(), "(> 2 1)");
+}

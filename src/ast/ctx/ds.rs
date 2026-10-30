@@ -5,6 +5,7 @@ use crate::allocator::CommandAllocator;
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::{Arena, Context, TCEnv};
 use crate::ast::ctx::{Command, Sort, Str, TC};
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::ast::{ScopedSortApi, SymbolQuote};
 use crate::containers::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
@@ -29,15 +30,15 @@ use crate::traits::{AllocatableString, HasMutRef};
 /// let cmd = s_ctx.typed_define_sort(int).unwrap();
 /// assert_eq!(cmd.to_string(), "(define-sort MyInt () Int)");
 /// ```
-pub struct DefSortContext<'a> {
-    context: &'a mut Context,
+pub struct DefSortContext<'a, const D: Dialect = DEFAULT_DIALECT> {
+    context: &'a mut Context<D>,
     name: Str,
     params: Vec<VarBinding<Str, ()>>,
 }
 
-impl<'a> DefSortContext<'a> {
+impl<'a, const D: Dialect> DefSortContext<'a, D> {
     pub(crate) fn new<S>(
-        context: &'a mut Context,
+        context: &'a mut Context<D>,
         name: S,
         params: impl IntoIterator<Item = S>,
     ) -> TC<Self>
@@ -77,15 +78,15 @@ impl<'a> DefSortContext<'a> {
     }
 }
 
-impl HasArena for DefSortContext<'_> {
+impl<const D: Dialect> HasArena for DefSortContext<'_, D> {
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl HasMutRef<Context> for DefSortContext<'_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for DefSortContext<'_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -95,8 +96,8 @@ impl HasMutRef<Context> for DefSortContext<'_> {
     }
 }
 
-impl ScopedSortApi for DefSortContext<'_> {
-    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, ()> {
+impl<const D: Dialect> ScopedSortApi<D> for DefSortContext<'_, D> {
+    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
         self.context
             .get_sort_tcenv()
             .convert_to_new_local(LocEnv::Cons {

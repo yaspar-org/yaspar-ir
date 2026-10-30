@@ -35,8 +35,8 @@ use super::instance::{
 use crate::allocator::*;
 use crate::ast::utils::is_term_bool_alt;
 use crate::ast::{
-    Context, ContextMeta, ContextStack, FetchSort, HasArenaAlt, Monomorphization, SymbolQuote,
-    Theory,
+    Context, ContextMeta, ContextStack, DEFAULT_DIALECT, Dialect, FetchSort, HasArenaAlt,
+    Monomorphization, SymbolQuote, Theory,
 };
 use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::meta::WithMeta;
@@ -74,16 +74,16 @@ pub trait Typecheck<Env> {
 /// and [`ContextStack`] (sorts and symbol table), plus a generic `Local` scope.
 /// The `Local` parameter is [`TCLocal`] during normal type-checking, but can be
 /// any type implementing [`Mapping`] for reuse in helper functions.
-pub struct TCEnvGen<'a, Local> {
+pub struct TCEnvGen<'a, Local, const D: Dialect = DEFAULT_DIALECT> {
     pub(crate) arena: &'a mut Arena,
-    pub(crate) meta: &'a ContextMeta,
+    pub(crate) meta: &'a ContextMeta<D>,
     pub(crate) stack: &'a ContextStack,
     pub(crate) local: Local,
 }
 
-impl<'a, Local> TCEnvGen<'a, Local> {
+impl<'a, Local, const D: Dialect> TCEnvGen<'a, Local, D> {
     /// Create a new environment from a [`Context`] and a local scope.
-    pub(crate) fn new(context: &'a mut Context, local: Local) -> Self {
+    pub(crate) fn new(context: &'a mut Context<D>, local: Local) -> Self {
         Self {
             arena: &mut context.arena,
             meta: &context.meta,
@@ -138,11 +138,11 @@ impl<'a, Local> TCEnvGen<'a, Local> {
 }
 
 #[allow(private_bounds)]
-impl<'a, Local> TCEnvGen<'a, Local>
+impl<'a, Local, const D: Dialect> TCEnvGen<'a, Local, D>
 where
     Local: Mapping,
 {
-    pub(crate) fn with_empty_local<L: Default>(&mut self) -> TCEnvGen<'_, L> {
+    pub(crate) fn with_empty_local<L: Default>(&mut self) -> TCEnvGen<'_, L, D> {
         TCEnvGen {
             arena: self.arena,
             meta: self.meta,
@@ -151,7 +151,7 @@ where
         }
     }
 
-    pub(crate) fn convert_to_empty_local<L: Default>(self) -> TCEnvGen<'a, L> {
+    pub(crate) fn convert_to_empty_local<L: Default>(self) -> TCEnvGen<'a, L, D> {
         TCEnvGen {
             arena: self.arena,
             meta: self.meta,
@@ -165,11 +165,14 @@ where
 ///
 /// This specializes the generic environment with a concrete local scope, providing
 /// the full environment needed for type-checking terms, sorts, and commands.
-pub type TCEnv<'a, 'b, T> = TCEnvGen<'a, TCLocal<'b, T>>;
+pub type TCEnv<'a, 'b, T, const D: Dialect = DEFAULT_DIALECT> = TCEnvGen<'a, TCLocal<'b, T>, D>;
 
-impl<'a, 'b, S> TCEnv<'a, 'b, S> {
+impl<'a, 'b, S, const D: Dialect> TCEnv<'a, 'b, S, D> {
     /// Replace the local scope with a new one built from the given [`LocEnv`].
-    pub(crate) fn convert_to_new_local<'c, T>(self, local: LocEnv<'c, Str, T>) -> TCEnv<'a, 'c, T> {
+    pub(crate) fn convert_to_new_local<'c, T>(
+        self,
+        local: LocEnv<'c, Str, T>,
+    ) -> TCEnv<'a, 'c, T, D> {
         TCEnv {
             arena: self.arena,
             meta: self.meta,
@@ -182,7 +185,7 @@ impl<'a, 'b, S> TCEnv<'a, 'b, S> {
     }
 }
 
-impl<T> HasArenaAlt for TCEnvGen<'_, T> {
+impl<T, const D: Dialect> HasArenaAlt for TCEnvGen<'_, T, D> {
     #[inline]
     fn arena_alt(&mut self) -> &mut Arena {
         self.arena
@@ -219,10 +222,10 @@ where
     }
 }
 
-impl<Str, L> Typecheck<TCEnvGen<'_, L>> for alg::Constant<Str> {
+impl<Str, L, const D: Dialect> Typecheck<TCEnvGen<'_, L, D>> for alg::Constant<Str> {
     type Out = Sort;
 
-    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Sort> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, L, D>) -> TC<Sort> {
         match self {
             alg::Constant::Numeral(_) => {
                 if env.meta.theories.contains(&Theory::Reals) {
@@ -290,7 +293,7 @@ pub(crate) fn check_subst_instantiation(subst: &SortSubst, t: impl Display) -> T
 }
 
 /// Ensure that symbol `s` is NOT bound in the local scope (i.e. it is a global symbol).
-fn check_global_var_locally<L, S>(env: &mut TCEnvGen<L>, s: S) -> TC<Str>
+fn check_global_var_locally<L, S, const D: Dialect>(env: &mut TCEnvGen<L, D>, s: S) -> TC<Str>
 where
     L: Mapping<Key = Str>,
     S: AllocatableString<Arena>,
@@ -306,13 +309,13 @@ where
     }
 }
 
-impl<Str, L> Typecheck<TCEnvGen<'_, L>> for alg::Index<Str>
+impl<Str, L, const D: Dialect> Typecheck<TCEnvGen<'_, L, D>> for alg::Index<Str>
 where
     Str: AllocatableString<Arena>,
 {
     type Out = Index;
 
-    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, L, D>) -> TC<Self::Out> {
         match self {
             alg::Index::Numeral(n) => Ok(Index::Numeral(n.clone())),
             alg::Index::Symbol(s) => Ok(Index::Symbol(s.allocate(env.arena_alt()))),
@@ -321,13 +324,13 @@ where
     }
 }
 
-impl<Str, L> Typecheck<TCEnvGen<'_, L>> for alg::Identifier<Str>
+impl<Str, L, const D: Dialect> Typecheck<TCEnvGen<'_, L, D>> for alg::Identifier<Str>
 where
     Str: AllocatableString<Arena>,
 {
     type Out = Identifier;
 
-    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, L, D>) -> TC<Self::Out> {
         Ok(Identifier {
             symbol: self.symbol.allocate(env.arena_alt()),
             indices: self
@@ -340,8 +343,8 @@ where
 }
 
 /// Type-checking a sort also normalizes it
-pub(crate) fn tc_sort<S, L>(
-    env: &mut TCEnvGen<L>,
+pub(crate) fn tc_sort<S, L, const D: Dialect>(
+    env: &mut TCEnvGen<L, D>,
     id: &alg::Identifier<S>,
     sorts: impl IntoIterator<Item = Sort>,
 ) -> TC<Sort>
@@ -411,7 +414,7 @@ where
     }
 }
 
-impl<St, So, L> Typecheck<TCEnvGen<'_, L>> for So
+impl<St, So, L, const D: Dialect> Typecheck<TCEnvGen<'_, L, D>> for So
 where
     St: AllocatableString<Arena>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>> + Display,
@@ -419,7 +422,7 @@ where
 {
     type Out = Sort;
 
-    fn type_check(&self, env: &mut TCEnvGen<L>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<L, D>) -> TC<Self::Out> {
         tc_sort_rec(self, env)
     }
 }
@@ -430,7 +433,7 @@ where
 /// the recursion below stays out of trait dispatch so a nested sort re-enters this driver rather
 /// than starting a new one.
 #[stack_safe]
-fn tc_sort_rec<St, So, L>(this: &So, env: &mut TCEnvGen<L>) -> TC<Sort>
+fn tc_sort_rec<St, So, L, const D: Dialect>(this: &So, env: &mut TCEnvGen<L, D>) -> TC<Sort>
 where
     St: AllocatableString<Arena>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>> + Display,
@@ -447,13 +450,21 @@ where
 }
 
 /// Build a typed [`Term`] from a [`Constant`], inferring its sort.
-pub(crate) fn typed_constant<L>(env: &mut TCEnvGen<L>, c: Constant) -> TC<Term> {
+pub(crate) fn typed_constant<L, const D: Dialect>(
+    env: &mut TCEnvGen<L, D>,
+    c: Constant,
+) -> TC<Term> {
     let s = c.type_check(env)?;
     Ok(env.arena.constant(c, Some(s)))
 }
 
 /// Build a typed equality term `(= a b)`. Both arguments must have the same sort.
-pub(crate) fn typed_eq<L>(env: &mut TCEnvGen<L>, at: Term, bt: Term, bt_meta: &str) -> TC<Term> {
+pub(crate) fn typed_eq<L, const D: Dialect>(
+    env: &mut TCEnvGen<L, D>,
+    at: Term,
+    bt: Term,
+    bt_meta: &str,
+) -> TC<Term> {
     let sa = at.get_sort(env);
     let sb = bt.get_sort(env);
     if sa == sb {
@@ -464,8 +475,8 @@ pub(crate) fn typed_eq<L>(env: &mut TCEnvGen<L>, at: Term, bt: Term, bt_meta: &s
 }
 
 /// Build a typed `(distinct ...)` term. At least two arguments of the same sort required.
-pub(crate) fn typed_distinct<L>(
-    env: &mut TCEnvGen<L>,
+pub(crate) fn typed_distinct<L, const D: Dialect>(
+    env: &mut TCEnvGen<L, D>,
     ts: Vec<WithMeta<Term, String>>,
 ) -> TC<Term> {
     if ts.len() < 2 {
@@ -484,15 +495,19 @@ pub(crate) fn typed_distinct<L>(
 }
 
 /// Build a typed `(not t)` term. The argument must be `Bool`-sorted.
-pub(crate) fn typed_not<L>(env: &mut TCEnvGen<L>, t: Term, meta: &str) -> TC<Term> {
+pub(crate) fn typed_not<L, const D: Dialect>(
+    env: &mut TCEnvGen<L, D>,
+    t: Term,
+    meta: &str,
+) -> TC<Term> {
     is_term_bool_alt(env, &t, meta)?;
     Ok(env.arena.not(t))
 }
 
 /// This function, given `t` a term of some datatype, determines a map from its constructors to
 /// the sorts of arguments.
-pub(crate) fn tc_determine_datatype_sort_map<L>(
-    env: &mut TCEnvGen<L>,
+pub(crate) fn tc_determine_datatype_sort_map<L, const D: Dialect>(
+    env: &mut TCEnvGen<L, D>,
     t: &Term,
     meta: &str,
 ) -> TC<HashMap<Str, Vec<Sort>>> {
@@ -571,15 +586,16 @@ where
     Ok(())
 }
 
-impl<Str, So, L> Typecheck<TCEnvGen<'_, L>> for alg::QualifiedIdentifier<Str, So>
+impl<Str, So, L, const D: Dialect> Typecheck<TCEnvGen<'_, L, D>>
+    for alg::QualifiedIdentifier<Str, So>
 where
     Str: AllocatableString<Arena>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
     L: Mapping,
 {
     type Out = QualifiedIdentifier;
 
-    fn type_check(&self, env: &mut TCEnvGen<'_, L>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, L, D>) -> TC<Self::Out> {
         let i = self.0.type_check(env)?;
         let s = match &self.1 {
             None => None,
@@ -589,15 +605,15 @@ where
     }
 }
 
-impl<St, So, T> Typecheck<TCEnv<'_, '_, Sort>> for T
+impl<St, So, T, const D: Dialect> Typecheck<TCEnv<'_, '_, Sort, D>> for T
 where
     St: AllocatableString<Arena> + Contains<T = String>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
     T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
 {
     type Out = Term;
 
-    fn type_check(&self, env: &mut TCEnvGen<'_, TCLocal<Sort>>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, TCLocal<Sort>, D>) -> TC<Self::Out> {
         tc_term_rec(self, false, env)
     }
 }
@@ -616,14 +632,14 @@ mod term_rec {
 
     /// `pattern_ok` says whether `this` is the body of a quantifier, the only place where
     /// `:pattern` and `:no-pattern` may annotate a term (§3.6.5).
-    pub(super) fn tc_term_rec<St, So, T>(
+    pub(super) fn tc_term_rec<St, So, T, const D: Dialect>(
         this: &T,
         pattern_ok: bool,
-        env: &mut TCEnv<'_, '_, Sort>,
+        env: &mut TCEnv<'_, '_, Sort, D>,
     ) -> TC<Term>
     where
         St: AllocatableString<Arena> + Contains<T = String>,
-        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
         T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
     {
         match this.inner().repr() {
@@ -698,10 +714,13 @@ mod term_rec {
     }
 
     /// Type-check a list of terms, left to right.
-    fn tc_terms_rec<St, So, T>(ts: &[T], env: &mut TCEnv<'_, '_, Sort>) -> TC<Vec<Term>>
+    fn tc_terms_rec<St, So, T, const D: Dialect>(
+        ts: &[T],
+        env: &mut TCEnv<'_, '_, Sort, D>,
+    ) -> TC<Vec<Term>>
     where
         St: AllocatableString<Arena> + Contains<T = String>,
-        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
         T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
     {
         let mut recs = Vec::with_capacity(ts.len());
@@ -714,13 +733,13 @@ mod term_rec {
     }
 
     /// Type-check the bindings of a `let`, left to right, each under a fresh local id.
-    fn tc_let_bindings_rec<St, So, T>(
+    fn tc_let_bindings_rec<St, So, T, const D: Dialect>(
         vs: &[VarBinding<St, T>],
-        env: &mut TCEnv<'_, '_, Sort>,
+        env: &mut TCEnv<'_, '_, Sort, D>,
     ) -> TC<Vec<VarBinding<Str, Term>>>
     where
         St: AllocatableString<Arena> + Contains<T = String>,
-        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
         T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
     {
         let mut bindings = Vec::with_capacity(vs.len());
@@ -736,16 +755,16 @@ mod term_rec {
 
     /// Type-check the arms of the match expression `this`, each under the scope its pattern binds,
     /// and build the match from them and its type-checked scrutinee.
-    fn tc_match_arms_rec<St, So, T>(
+    fn tc_match_arms_rec<St, So, T, const D: Dialect>(
         this: &T,
         scrutinee: &T,
         cases: &[alg::PatternArm<St, T>],
         scrutinee_rec: Term,
-        env: &mut TCEnv<'_, '_, Sort>,
+        env: &mut TCEnv<'_, '_, Sort, D>,
     ) -> TC<Term>
     where
         St: AllocatableString<Arena> + Contains<T = String>,
-        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
         T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
     {
         let mut checker: MatchChecker =
@@ -772,13 +791,13 @@ mod term_rec {
     }
 
     /// Type-check the attributes of an annotated term, left to right.
-    fn tc_attributes_rec<St, So, T>(
+    fn tc_attributes_rec<St, So, T, const D: Dialect>(
         anns: &[alg::Attribute<St, T>],
-        env: &mut TCEnv<'_, '_, Sort>,
+        env: &mut TCEnv<'_, '_, Sort, D>,
     ) -> TC<Vec<Attribute>>
     where
         St: AllocatableString<Arena> + Contains<T = String>,
-        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+        So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
         T: Contains<T: Repr<T = alg::Term<St, So, T>>> + Display + MetaData,
     {
         let mut anns_rec = Vec::with_capacity(anns.len());
@@ -843,15 +862,15 @@ where
 }
 
 /// Type-check a constant, against its sort annotation if there is one.
-fn tc_constant<St, So, T>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_constant<St, So, T, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     constant: &alg::Constant<St>,
     sort: &Option<So>,
 ) -> TC<Term>
 where
     St: AllocatableString<Arena> + Contains<T = String>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
     T: Display + MetaData,
 {
     let c = constant_conv(constant, env);
@@ -868,15 +887,15 @@ where
 }
 
 /// Type-check a global identifier, with its optional sort annotation.
-fn tc_global<St, So, T>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_global<St, So, T, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     id: &alg::QualifiedIdentifier<St, So>,
     sort: &Option<So>,
 ) -> TC<Term>
 where
     St: AllocatableString<Arena>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
     T: MetaData,
 {
     let qid = id.type_check(env)?;
@@ -888,8 +907,8 @@ where
 }
 
 /// Resolve a local variable against the local scope.
-fn tc_local<St, So, T>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_local<St, So, T, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     id: &alg::Local<St, So>,
 ) -> TC<Term>
@@ -913,8 +932,8 @@ where
 }
 
 /// Type-check a function application, given its type-checked arguments `recs`.
-fn tc_app<St, So, T>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_app<St, So, T, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     id: &alg::QualifiedIdentifier<St, So>,
     ts: &[T],
@@ -923,7 +942,7 @@ fn tc_app<St, So, T>(
 ) -> TC<Term>
 where
     St: AllocatableString<Arena>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
     T: MetaData,
 {
     // 1. first we make sure f is not a local variable.
@@ -952,7 +971,10 @@ where
 }
 
 /// Push the scope of a `let` whose bindings have been type-checked.
-fn tc_let_scope(env: &mut TCEnv<'_, '_, Sort>, bindings: &[VarBinding<Str, Term>]) -> TC<()> {
+fn tc_let_scope<const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
+    bindings: &[VarBinding<Str, Term>],
+) -> TC<()> {
     let sorts = bindings
         .iter()
         .map(|v| VarBinding(v.0.clone(), v.1, v.2.get_sort(env)))
@@ -963,10 +985,13 @@ fn tc_let_scope(env: &mut TCEnv<'_, '_, Sort>, bindings: &[VarBinding<Str, Term>
 }
 
 /// Push the scope of a quantifier.
-fn tc_quantifier_scope<St, So>(env: &mut TCEnv<'_, '_, Sort>, vs: &[VarBinding<St, So>]) -> TC<()>
+fn tc_quantifier_scope<St, So, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
+    vs: &[VarBinding<St, So>],
+) -> TC<()>
 where
     St: AllocatableString<Arena>,
-    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, ()>, Out = Sort>,
+    So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
 {
     if !env.meta.theories.contains(&Theory::Quantifiers) {
         return Err("TC: the current logic does not support quantifiers!".to_string());
@@ -985,8 +1010,8 @@ where
 }
 
 /// Resolve the pattern of a match arm into the pattern and the variables it binds.
-fn tc_arm_scope<St, T>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_arm_scope<St, T, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     checker: &MatchChecker,
     case: &alg::PatternArm<St, T>,
 ) -> TC<ArmScope>
@@ -1021,8 +1046,8 @@ where
 
 /// Build a `distinct`, `and`, `or` or `xor` term, whichever `current` is, from its type-checked
 /// arguments.
-fn tc_nary<St, So, T>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_nary<St, So, T, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     ts: &[T],
     ts_rec: Vec<Term>,
@@ -1039,8 +1064,8 @@ where
     }
 }
 
-fn tc_distinct<T: MetaData>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_distinct<T: MetaData, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     ts: &[T],
     ts_rec: Vec<Term>,
 ) -> TC<Term> {
@@ -1053,8 +1078,8 @@ fn tc_distinct<T: MetaData>(
     )
 }
 
-fn tc_and<T: MetaData>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_and<T: MetaData, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     ts: &[T],
     ts_rec: Vec<Term>,
@@ -1075,8 +1100,8 @@ fn tc_and<T: MetaData>(
     Ok(env.arena.and(ts_rec))
 }
 
-fn tc_or<T: MetaData>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_or<T: MetaData, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     ts: &[T],
     ts_rec: Vec<Term>,
@@ -1097,8 +1122,8 @@ fn tc_or<T: MetaData>(
     Ok(env.arena.or(ts_rec))
 }
 
-fn tc_xor<T: MetaData>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_xor<T: MetaData, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     ts: &[T],
     ts_rec: Vec<Term>,
@@ -1120,8 +1145,8 @@ fn tc_xor<T: MetaData>(
 }
 
 /// Build an implication from its type-checked premises and conclusion.
-fn tc_implies<T: MetaData>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_implies<T: MetaData, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     current: &T,
     ts: &[T],
     t: &T,
@@ -1146,8 +1171,8 @@ fn tc_implies<T: MetaData>(
 }
 
 /// Build an `ite` term from its type-checked condition and branches.
-fn tc_ite<T: Display + MetaData>(
-    env: &mut TCEnv<'_, '_, Sort>,
+fn tc_ite<T: Display + MetaData, const D: Dialect>(
+    env: &mut TCEnv<'_, '_, Sort, D>,
     b: &T,
     e: &T,
     b_rec: Term,
@@ -1164,14 +1189,14 @@ fn tc_ite<T: Display + MetaData>(
     }
 }
 
-impl<Str, T> Typecheck<TCEnv<'_, '_, Sort>> for alg::Attribute<Str, T>
+impl<Str, T, const D: Dialect> Typecheck<TCEnv<'_, '_, Sort, D>> for alg::Attribute<Str, T>
 where
     Str: Contains<T = String>,
-    T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort>, Out = Term>,
+    T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort, D>, Out = Term>,
 {
     type Out = Attribute;
 
-    fn type_check(&self, env: &mut TCEnvGen<'_, TCLocal<Sort>>) -> TC<Self::Out> {
+    fn type_check(&self, env: &mut TCEnvGen<'_, TCLocal<Sort>, D>) -> TC<Self::Out> {
         match self {
             alg::Attribute::Keyword(kw) => Ok(Attribute::Keyword(kw.clone())),
             alg::Attribute::Constant(kw, c) => {

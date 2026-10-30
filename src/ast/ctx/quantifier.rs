@@ -6,6 +6,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, Result, Sort, Str, TCEnv, Term};
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::ast::utils::is_term_bool;
 use crate::ast::{Attribute, MatchContext, Theory};
 use crate::containers::LocEnv;
@@ -43,10 +44,12 @@ use crate::traits::{AllocatableString, HasMutRef};
 /// let term = q.typed_forall(body).unwrap();
 /// assert_eq!(term.to_string(), "(forall ((x Int)) (> x 0))");
 /// ```
-pub struct QuantifierContext<'a, 'b>(pub(crate) LocalContext<'a, 'b>);
+pub struct QuantifierContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT>(
+    pub(crate) LocalContext<'a, 'b, D>,
+);
 
-impl<'a, 'b> QuantifierContext<'a, 'b> {
-    pub(crate) fn new(context: &'a mut Context, tail: LocEnv<'b, Str, Sort>) -> TC<Self> {
+impl<'a, 'b, const D: Dialect> QuantifierContext<'a, 'b, D> {
+    pub(crate) fn new(context: &'a mut Context<D>, tail: LocEnv<'b, Str, Sort>) -> TC<Self> {
         context.check_support_theory(Theory::Quantifiers)?;
         Ok(Self(LocalContext::new(context, tail)))
     }
@@ -125,16 +128,16 @@ impl<'a, 'b> QuantifierContext<'a, 'b> {
     }
 }
 
-impl HasArena for QuantifierContext<'_, '_> {
+impl<const D: Dialect> HasArena for QuantifierContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.0.arena()
     }
 }
 
-impl HasMutRef<Context> for QuantifierContext<'_, '_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for QuantifierContext<'_, '_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -144,16 +147,16 @@ impl HasMutRef<Context> for QuantifierContext<'_, '_> {
     }
 }
 
-impl CheckedApi for QuantifierContext<'_, '_> {
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
+impl<const D: Dialect> CheckedApi<D> for QuantifierContext<'_, '_, D> {
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         self.0.get_tcenv()
     }
 
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>> {
         self.0.build_quantifier()
     }
 
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>,
@@ -161,7 +164,7 @@ impl CheckedApi for QuantifierContext<'_, '_> {
         self.0.build_let(bindings)
     }
 
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>> {
         self.0.build_matching(scrutinee)
     }
 }

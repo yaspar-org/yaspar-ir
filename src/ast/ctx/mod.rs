@@ -22,6 +22,7 @@
 
 mod bindings;
 mod checked;
+mod dialect;
 mod ds;
 mod dt;
 mod fun;
@@ -53,6 +54,8 @@ use std::fmt::{Debug, Formatter};
 use crate::ast::cnf::{CNFCache, CNFEnv};
 #[cfg(feature = "cnf")]
 pub use crate::ast::cnf::{CNFConversion, partition_nnfs};
+use crate::ast::ctx::dialect::ATSLIB_SYMBOL_LIMIT;
+pub use crate::ast::ctx::dialect::{DEFAULT_DIALECT, DIALECT_ATSLIB, DIALECT_SMTLIB, Dialect};
 use crate::statics::{AND, BITVEC, BV_RE, DISTINCT, EQ, IMPLIES, IS, ITE, NOT, OR, XOR};
 use crate::traits::AllocatableString;
 pub use crate::traits::Contains;
@@ -243,7 +246,7 @@ impl FunctionMeta {
 ///
 /// This is separated from [`ContextFrame`] so that it can be borrowed independently
 /// of the mutable declaration state.
-pub(crate) struct ContextMeta {
+pub(crate) struct ContextMeta<const D: Dialect = DEFAULT_DIALECT> {
     /// The name of the active logic (e.g. `"QF_LIA"`, `"ALL"`), or `None` if unset.
     pub(crate) logic: Option<String>,
     /// The set of theories enabled by the current logic (e.g. `Ints`, `Reals`, `Datatypes`).
@@ -251,7 +254,7 @@ pub(crate) struct ContextMeta {
 }
 
 /// The checks on a symbol about to be declared, which depend on the logic only.
-impl ContextMeta {
+impl<const D: Dialect> ContextMeta<D> {
     pub(crate) fn check_sym_chars(&self, sym: &Str) -> Result<()> {
         if sym.inner().contains(|c| !valid_symbol_char(c)) {
             Err(format!(
@@ -299,8 +302,17 @@ impl ContextMeta {
         }
     }
 
+    fn check_symbol_length(&self, sym: &Str) -> Result<()> {
+        if D == DIALECT_ATSLIB && sym.len() >= ATSLIB_SYMBOL_LIMIT {
+            Err(format!("Symbol length {} is too long: {sym}", sym.len()))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Check the validity of a given symbol
     pub(crate) fn check_sym_validity(&self, sym: &Str) -> Result<()> {
+        self.check_symbol_length(sym)?;
         self.check_sym_chars(sym)?;
         self.check_reserved_prefix(sym)?;
         self.check_special_symbols(sym)?;
@@ -310,11 +322,11 @@ impl ContextMeta {
 }
 
 /// Global context for the current session
-pub struct Context {
+pub struct Context<const D: Dialect = DEFAULT_DIALECT> {
     /// The memory arena for hash-consed allocation.
     pub(crate) arena: Arena,
     /// Logic metadata (logic name and enabled theories).
-    pub(crate) meta: ContextMeta,
+    pub(crate) meta: ContextMeta<D>,
     /// The mutable declaration state: sorts and symbols, one frame per assertion level.
     ///
     /// This is separated from [`ContextMeta`] so that the arena can be mutably borrowed
@@ -327,7 +339,7 @@ pub struct Context {
 
 pub(crate) type Result<T> = std::result::Result<T, String>;
 
-impl Context {
+impl<const D: Dialect> Context<D> {
     /// Return the name of the logic; need to make sure the logic is set
     pub fn get_logic(&self) -> &str {
         self.meta.logic.as_ref().unwrap()
@@ -596,7 +608,7 @@ impl Context {
         &'a mut self,
         solver: &'b mut Solver,
         asserts: &Vec<Term>,
-    ) -> impl ImplicantIterator<Vec<Term>> + use<'a, 'b, Solver> {
+    ) -> impl ImplicantIterator<Vec<Term>> + use<'a, 'b, Solver, D> {
         let formula = asserts.cnf(&mut *self);
         solver.insert(&formula);
         let nnfs = asserts.nnf(&mut *self);
@@ -812,29 +824,29 @@ impl Default for Context {
     }
 }
 
-impl Debug for Context {
+impl<const D: Dialect> Debug for Context<D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Context")
     }
 }
 
-impl HasArena for Context {
+impl<const D: Dialect> HasArena for Context<D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         &mut self.arena
     }
 }
 
-impl CheckedApi for Context {
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
+impl<const D: Dialect> CheckedApi<D> for Context<D> {
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen::new(self, Default::default())
     }
 
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>> {
         QuantifierContext::new(self, LocEnv::Nil)
     }
 
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>,
@@ -842,17 +854,17 @@ impl CheckedApi for Context {
         LetContext::new_with_bindings(self, LocEnv::Nil, bindings)
     }
 
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>> {
         MatchContext::new(self, LocEnv::Nil, scrutinee)
     }
 }
 
 #[cfg(feature = "cnf")]
-impl<T> CNFConversion<&mut Context> for T
+impl<T, const D: Dialect> CNFConversion<&mut Context<D>> for T
 where
     T: for<'a, 'b> CNFConversion<&'b mut CNFEnv<'a>>,
 {
-    fn cnf(&self, env: &mut Context) -> Formula {
+    fn cnf(&self, env: &mut Context<D>) -> Formula {
         let mut env = CNFEnv {
             arena: &mut env.arena,
             cache: &mut env.caches.cnf_cache,
@@ -860,7 +872,7 @@ where
         self.cnf(&mut env)
     }
 
-    fn cnf_tseitin(&self, env: &mut Context) -> Formula {
+    fn cnf_tseitin(&self, env: &mut Context<D>) -> Formula {
         let mut env = CNFEnv {
             arena: &mut env.arena,
             cache: &mut env.caches.cnf_cache,
@@ -868,7 +880,7 @@ where
         self.cnf_tseitin(&mut env)
     }
 
-    fn nnf(&self, env: &mut Context) -> Self {
+    fn nnf(&self, env: &mut Context<D>) -> Self {
         let mut env = CNFEnv {
             arena: &mut env.arena,
             cache: &mut env.caches.cnf_cache,

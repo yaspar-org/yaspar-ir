@@ -11,6 +11,7 @@ use crate::ast::alg::BvLenExpr;
 use crate::ast::cnf::CNFCache;
 #[cfg(feature = "cache")]
 use crate::ast::ctx::Caches;
+use crate::ast::ctx::dialect::Dialect;
 use crate::ast::ctx::{Arena, BvInSort, BvOutSort, EMP_SET, Sig, SigIndex, SortDef, Str, Theory};
 use crate::ast::ctx::{Command, Context, ContextFrame, ContextMeta, ContextStack, LOGICS};
 use crate::statics::*;
@@ -34,12 +35,21 @@ fn builtins(name: Str, sigs: impl IntoIterator<Item = Sig>) -> (Str, Vec<(Sig, F
 }
 
 impl Context {
+    /// Create a new context to manipulate SMT
+    ///
+    /// The context is in the default dialect; see [`Context::new_dialect`] for the others.
+    pub fn new() -> Self {
+        Self::new_dialect()
+    }
+}
+
+impl<const D: Dialect> Context<D> {
     fn default_sorts(arena: &mut Arena) -> HashMap<Str, SortDef> {
         let bool = arena.allocate_symbol(BOOL);
         HashMap::from([(bool, SortDef::Opaque(0))])
     }
 
-    fn default_meta() -> ContextMeta {
+    fn default_meta() -> ContextMeta<D> {
         ContextMeta {
             logic: None,
             theories: &EMP_SET,
@@ -63,8 +73,10 @@ impl Context {
         }
     }
 
-    /// Create a new context to manipulate SMT
-    pub fn new() -> Self {
+    /// Create a new context to manipulate SMT in dialect `D`, e.g.
+    /// `Context::<DIALECT_ATSLIB>::new_dialect()`. [`Context::new`] creates one in the default
+    /// dialect.
+    pub fn new_dialect() -> Self {
         let mut arena = Arena::new();
         let stack = Self::default_stack(&mut arena);
         Self {

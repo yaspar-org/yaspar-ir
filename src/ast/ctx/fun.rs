@@ -10,6 +10,7 @@ use crate::ast::ctx::{
     Arena, CheckedApi, Context, FetchSort, SymbolQuote, TCEnv, TCEnvGen, TCLocal,
 };
 use crate::ast::ctx::{Command, FunctionDef, Sort, Str, TC, Term};
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::containers::{LocEnv, sanitize_bindings};
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, HasMutRef};
@@ -40,16 +41,16 @@ use std::collections::HashSet;
 /// let cmd = f.typed_define_fun(body).unwrap();
 /// assert_eq!(cmd.to_string(), "(define-fun double ((x Int)) Int (+ x x))");
 /// ```
-pub struct FunctionContext<'a> {
-    context: &'a mut Context,
+pub struct FunctionContext<'a, const D: Dialect = DEFAULT_DIALECT> {
+    context: &'a mut Context<D>,
     name: Str,
     inputs: Vec<VarBinding<Str, Sort>>,
     output: Option<Sort>,
 }
 
-impl<'a> FunctionContext<'a> {
+impl<'a, const D: Dialect> FunctionContext<'a, D> {
     pub(crate) fn new<T, S>(
-        context: &'a mut Context,
+        context: &'a mut Context<D>,
         name: S,
         inputs: T,
         output: Option<Sort>,
@@ -108,16 +109,16 @@ impl<'a> FunctionContext<'a> {
     }
 }
 
-impl HasArena for FunctionContext<'_> {
+impl<const D: Dialect> HasArena for FunctionContext<'_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl HasMutRef<Context> for FunctionContext<'_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for FunctionContext<'_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -127,8 +128,8 @@ impl HasMutRef<Context> for FunctionContext<'_> {
     }
 }
 
-impl CheckedApi for FunctionContext<'_> {
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
+impl<const D: Dialect> CheckedApi<D> for FunctionContext<'_, D> {
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen {
             arena: &mut self.context.arena,
             meta: &self.context.meta,
@@ -143,7 +144,7 @@ impl CheckedApi for FunctionContext<'_> {
         }
     }
 
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>> {
         QuantifierContext::new(
             self.context,
             LocEnv::Cons {
@@ -153,7 +154,7 @@ impl CheckedApi for FunctionContext<'_> {
         )
     }
 
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>,
@@ -168,7 +169,7 @@ impl CheckedApi for FunctionContext<'_> {
         )
     }
 
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>> {
         MatchContext::new(
             self.context,
             LocEnv::Cons {
