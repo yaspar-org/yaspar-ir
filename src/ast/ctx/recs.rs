@@ -7,6 +7,7 @@ use crate::allocator::{CommandAllocator, LocalVarAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::checked::CheckedApi;
 use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::ast::{FetchSort, LetContext, MatchContext, QuantifierContext, SymbolQuote, Term};
 use crate::containers::{LocEnv, sanitize_bindings};
 use crate::traits::{AllocatableString, HasMutRef};
@@ -55,8 +56,8 @@ struct RecFunsDefs {
 ///
 /// If the context is dropped without calling `typed_define_funs_rec`, the temporarily inserted
 /// signatures are removed from the global context (the operation is transactional).
-pub struct RecFunsContext<'a> {
-    context: &'a mut Context,
+pub struct RecFunsContext<'a, const D: Dialect = DEFAULT_DIALECT> {
+    context: &'a mut Context<D>,
     defs: Option<RecFunsDefs>,
     undefined_funs: HashSet<Str>,
 }
@@ -67,8 +68,8 @@ pub struct RecFunsContext<'a> {
 /// all sibling recursive functions are callable. Finalize with
 /// [`typed_function`](Self::typed_function), which validates the body sort against the declared
 /// output sort.
-pub struct EachRecFunContext<'b> {
-    context: &'b mut Context,
+pub struct EachRecFunContext<'b, const D: Dialect = DEFAULT_DIALECT> {
+    context: &'b mut Context<D>,
     current: Str,
     inputs: &'b Vec<VarBinding<Str, Sort>>,
     output: &'b Sort,
@@ -76,8 +77,8 @@ pub struct EachRecFunContext<'b> {
     undefined_funs: &'b mut HashSet<Str>,
 }
 
-impl<'a> RecFunsContext<'a> {
-    pub(crate) fn new<T, S>(context: &'a mut Context, funs: T) -> TC<Self>
+impl<'a, const D: Dialect> RecFunsContext<'a, D> {
+    pub(crate) fn new<T, S>(context: &'a mut Context<D>, funs: T) -> TC<Self>
     where
         T: IntoIterator<Item = RecFunc<S, Sort>>,
         S: AllocatableString<Arena>,
@@ -193,7 +194,7 @@ impl<'a> RecFunsContext<'a> {
     }
 
     /// Return a builder context for the body of the function
-    pub fn build_function<S>(&mut self, name: S) -> TC<EachRecFunContext<'_>>
+    pub fn build_function<S>(&mut self, name: S) -> TC<EachRecFunContext<'_, D>>
     where
         S: AllocatableString<Arena>,
     {
@@ -201,22 +202,22 @@ impl<'a> RecFunsContext<'a> {
     }
 }
 
-impl Drop for RecFunsContext<'_> {
+impl<const D: Dialect> Drop for RecFunsContext<'_, D> {
     fn drop(&mut self) {
         self.remove_sigs();
     }
 }
 
-impl HasArena for RecFunsContext<'_> {
+impl<const D: Dialect> HasArena for RecFunsContext<'_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl HasMutRef<Context> for RecFunsContext<'_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for RecFunsContext<'_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -226,8 +227,8 @@ impl HasMutRef<Context> for RecFunsContext<'_> {
     }
 }
 
-impl<'b> EachRecFunContext<'b> {
-    fn new<'a, S>(parent: &'b mut RecFunsContext<'a>, name: S) -> TC<Self>
+impl<'b, const D: Dialect> EachRecFunContext<'b, D> {
+    fn new<'a, S>(parent: &'b mut RecFunsContext<'a, D>, name: S) -> TC<Self>
     where
         S: AllocatableString<Arena>,
     {
@@ -280,16 +281,16 @@ impl<'b> EachRecFunContext<'b> {
     }
 }
 
-impl HasArena for EachRecFunContext<'_> {
+impl<const D: Dialect> HasArena for EachRecFunContext<'_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl HasMutRef<Context> for EachRecFunContext<'_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for EachRecFunContext<'_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -299,15 +300,15 @@ impl HasMutRef<Context> for EachRecFunContext<'_> {
     }
 }
 
-impl CheckedApi for EachRecFunContext<'_> {
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
+impl<const D: Dialect> CheckedApi<D> for EachRecFunContext<'_, D> {
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         self.context.get_tcenv().convert_to_new_local(LocEnv::Cons {
             car: self.inputs,
             cdr: &LocEnv::Nil,
         })
     }
 
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>> {
         QuantifierContext::new(
             self.context,
             LocEnv::Cons {
@@ -317,7 +318,7 @@ impl CheckedApi for EachRecFunContext<'_> {
         )
     }
 
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>,
@@ -332,7 +333,7 @@ impl CheckedApi for EachRecFunContext<'_> {
         )
     }
 
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>> {
         MatchContext::new(
             self.context,
             LocEnv::Cons {

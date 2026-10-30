@@ -33,6 +33,7 @@ cvc5 = ["cvc5-1.4.x"]
 cvc5-dep = ["cvc5-dep-1.4.x"]
 cvc5-dynamic = ["cvc5-dynamic-1.4.x"]
 finite-set = []
+atslib = ["finite-set"]
 cache = []
 none = []
 # Parse the non-standard `:no-pattern` attribute; forwards to `yaspar/no-pattern`.

@@ -15,6 +15,7 @@
 
 use super::{TC, TCEnvGen, sort_mismatch, tc_determine_datatype_sort_map};
 use crate::allocator::LocalVarAllocator;
+use crate::ast::Dialect;
 use crate::ast::{SymbolQuote, Theory};
 use crate::containers::sanitize_bindings;
 use crate::raw::alg::VarBinding;
@@ -40,7 +41,11 @@ pub(crate) type ArmScope = (Pattern, Vec<VarBinding<Str, Sort>>);
 
 impl MatchChecker {
     /// Start checking a `match` on `scrutinee`, which must be of a datatype sort.
-    pub(crate) fn new<L>(env: &mut TCEnvGen<'_, L>, scrutinee: &Term, meta: &str) -> TC<Self> {
+    pub(crate) fn new<L, const D: Dialect>(
+        env: &mut TCEnvGen<'_, L, D>,
+        scrutinee: &Term,
+        meta: &str,
+    ) -> TC<Self> {
         if !env.meta.theories.contains(&Theory::Datatypes) {
             return Err("TC: current logic does not support the theory of datatypes!".into());
         }
@@ -73,9 +78,9 @@ impl MatchChecker {
     /// Resolve the pattern `(ctor x₁ … xₙ)`, or `ctor` alone when `vars` is empty. A `None` among
     /// `vars` is a `_` that binds nothing. `meta` locates `ctor`, and each variable comes with what
     /// locates it.
-    pub(crate) fn ctor_arm<L>(
+    pub(crate) fn ctor_arm<L, const D: Dialect>(
         &self,
-        env: &mut TCEnvGen<'_, L>,
+        env: &mut TCEnvGen<'_, L, D>,
         ctor: Str,
         meta: &str,
         vars: Vec<Option<(Str, String)>>,
@@ -115,9 +120,9 @@ impl MatchChecker {
     /// The concrete syntax cannot tell a variable from a nullary constructor, so with
     /// `ctor_if_nullary` a `var` naming one is that constructor's pattern instead. Without it,
     /// naming any constructor is an error.
-    pub(crate) fn wildcard_arm<L>(
+    pub(crate) fn wildcard_arm<L, const D: Dialect>(
         &self,
-        env: &mut TCEnvGen<'_, L>,
+        env: &mut TCEnvGen<'_, L, D>,
         var: Option<(Str, String)>,
         ctor_if_nullary: bool,
     ) -> TC<ArmScope> {

@@ -6,6 +6,7 @@ use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::ctx::{
     Arena, CheckedApi, Context, LetContext, QuantifierContext, Result, Sort, Str, Term,
 };
+use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::ast::{MatchContext, SymbolQuote};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
@@ -16,14 +17,14 @@ use std::collections::HashSet;
 /// A structure that captures local sort bindings.
 ///
 /// It is not meant to be exposed publicly.
-pub(crate) struct LocalContext<'a, 'b> {
-    pub(crate) context: &'a mut Context,
+pub(crate) struct LocalContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT> {
+    pub(crate) context: &'a mut Context<D>,
     pub(crate) env: Vec<VarBinding<Str, Sort>>,
     pub(crate) tail: LocEnv<'b, Str, Sort>,
 }
 
-impl<'a, 'b> LocalContext<'a, 'b> {
-    pub(crate) fn new(context: &'a mut Context, tail: LocEnv<'b, Str, Sort>) -> Self {
+impl<'a, 'b, const D: Dialect> LocalContext<'a, 'b, D> {
+    pub(crate) fn new(context: &'a mut Context<D>, tail: LocEnv<'b, Str, Sort>) -> Self {
         Self {
             context,
             env: vec![],
@@ -98,16 +99,16 @@ impl<'a, 'b> LocalContext<'a, 'b> {
     }
 }
 
-impl HasArena for LocalContext<'_, '_> {
+impl<const D: Dialect> HasArena for LocalContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl HasMutRef<Context> for LocalContext<'_, '_> {
+impl<const D: Dialect> HasMutRef<Context<D>> for LocalContext<'_, '_, D> {
     type RefMut<'a>
-        = &'a mut Context
+        = &'a mut Context<D>
     where
         Self: 'a;
 
@@ -117,8 +118,8 @@ impl HasMutRef<Context> for LocalContext<'_, '_> {
     }
 }
 
-impl CheckedApi for LocalContext<'_, '_> {
-    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort> {
+impl<const D: Dialect> CheckedApi<D> for LocalContext<'_, '_, D> {
+    fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen {
             arena: &mut self.context.arena,
             meta: &self.context.meta,
@@ -133,7 +134,7 @@ impl CheckedApi for LocalContext<'_, '_> {
         }
     }
 
-    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_>> {
+    fn build_quantifier(&mut self) -> TC<QuantifierContext<'_, '_, D>> {
         QuantifierContext::new(
             self.context,
             LocEnv::Cons {
@@ -143,7 +144,7 @@ impl CheckedApi for LocalContext<'_, '_> {
         )
     }
 
-    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_>>
+    fn build_let<T, S>(&mut self, bindings: T) -> TC<LetContext<'_, '_, D>>
     where
         T: IntoIterator<Item = (S, Term)>,
         S: AllocatableString<Arena>,
@@ -158,7 +159,7 @@ impl CheckedApi for LocalContext<'_, '_> {
         )
     }
 
-    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_>> {
+    fn build_matching(&mut self, scrutinee: Term) -> TC<MatchContext<'_, '_, D>> {
         MatchContext::new(
             self.context,
             LocEnv::Cons {

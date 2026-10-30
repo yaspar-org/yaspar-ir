@@ -30,6 +30,7 @@ use crate::ast::{
     ATerm, Arena, Attribute, Context, FetchSort, FunctionDef, FunctionMetaDefined, HasArena,
     Monomorphization, PatternArm, Sort, Str, Substitution, Term,
 };
+use crate::ast::{DEFAULT_DIALECT, Dialect};
 use crate::raw::alg::rec::Bottom;
 use crate::raw::tc::unif::{empty_subst, instantiate_subst};
 use crate::traits::{AllocatableString, HasMutRef, Repr};
@@ -40,7 +41,7 @@ use yaspar_macros::stack_safe;
 /// Expand global names with their definitions in `Self`.
 ///
 /// This trait implements substitutions by expanding the bodies of names during substitutions.
-pub trait GlobalSubst<E> {
+pub trait GlobalSubst<E, const D: Dialect = DEFAULT_DIALECT> {
     /// The type produced by the substitution.
     type Out;
 
@@ -63,9 +64,9 @@ pub trait GlobalSubst<E> {
     fn gsubst_all(&self, env: &mut E) -> Self::Out;
 }
 
-impl<Ctx> GlobalSubst<Ctx> for [Term]
+impl<Ctx, const D: Dialect> GlobalSubst<Ctx, D> for [Term]
 where
-    Ctx: HasMutRef<Context>,
+    Ctx: HasMutRef<Context<D>>,
 {
     type Out = Vec<Term>;
 
@@ -119,9 +120,9 @@ where
     }
 }
 
-impl<Ctx> GlobalSubst<Ctx> for Term
+impl<Ctx, const D: Dialect> GlobalSubst<Ctx, D> for Term
 where
-    Ctx: HasMutRef<Context>,
+    Ctx: HasMutRef<Context<D>>,
 {
     type Out = Term;
 
@@ -163,9 +164,9 @@ struct GlobalDef {
 ///
 /// Expands global definitions (from `define-fun` and friends) by inlining their bodies, applying
 /// monomorphization for a parametric definition.
-pub struct GlobalSubstituter<'a> {
+pub struct GlobalSubstituter<'a, const D: Dialect = DEFAULT_DIALECT> {
     /// Where terms are built, and where definitions are looked up.
-    arena: &'a mut Context,
+    arena: &'a mut Context<D>,
     /// The names to expand.
     global_names: &'a HashSet<Str>,
     /// The definitions expanded so far, shared across scopes.
@@ -174,7 +175,7 @@ pub struct GlobalSubstituter<'a> {
     unfolding: Vec<GlobalDef>,
 }
 
-impl<'a> GlobalSubstituter<'a> {
+impl<'a, const D: Dialect> GlobalSubstituter<'a, D> {
     /// Create a new global substituter.
     ///
     /// - `ctx`: the context holding global definitions.
@@ -182,7 +183,7 @@ impl<'a> GlobalSubstituter<'a> {
     /// - `block`: names to block from expansion (e.g. to prevent infinite recursion).
     /// - `global_def_cache`: shared cache for resolved function definitions.
     pub fn create(
-        ctx: &'a mut Context,
+        ctx: &'a mut Context<D>,
         global_names: &'a HashSet<Str>,
         block: &'a HashSet<Str>,
         global_def_cache: &'a mut HashMap<Str, FunctionDef>,
@@ -273,9 +274,9 @@ impl<'a> GlobalSubstituter<'a> {
 /// The substituter used to be a `Memoize` wrapper around an inner recursor; the memo now lives in
 /// the substituter itself, so both names say the same thing.
 #[deprecated(note = "the memo lives in the substituter now, so use `GlobalSubstituter` directly")]
-pub type GlobalSubstituterInner<'a> = GlobalSubstituter<'a>;
+pub type GlobalSubstituterInner<'a, const D: Dialect = DEFAULT_DIALECT> = GlobalSubstituter<'a, D>;
 
-impl HasArena for GlobalSubstituter<'_> {
+impl<const D: Dialect> HasArena for GlobalSubstituter<'_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.arena.arena()
@@ -295,7 +296,7 @@ mod descent {
     ///
     /// A sub-term is reached through the node it sits in, so what travels in a frame is a reference
     /// into the arena rather than anything the driver owns.
-    pub fn gsubst_term<'a>(t: &Term, env: &mut GlobalSubstituter<'a>) -> Term {
+    pub fn gsubst_term<'a, const D: Dialect>(t: &Term, env: &mut GlobalSubstituter<'a, D>) -> Term {
         if let Some(r) = env.memoized(t) {
             return r;
         }
@@ -425,7 +426,10 @@ mod descent {
     }
 
     /// Expand the global definitions in each of `ts`.
-    pub fn gsubst_all_of<'a>(ts: &[Term], env: &mut GlobalSubstituter<'a>) -> Vec<Term> {
+    pub fn gsubst_all_of<'a, const D: Dialect>(
+        ts: &[Term],
+        env: &mut GlobalSubstituter<'a, D>,
+    ) -> Vec<Term> {
         let count: usize = ts.len();
         let mut recs: Vec<Term> = Vec::with_capacity(count);
         let mut i = 0usize;
@@ -441,7 +445,7 @@ mod descent {
     ///
     /// Returns whether it does. The body is expanded under a scope that blocks the definition's
     /// recursive dependencies, which is what stops a recursive definition from unfolding forever.
-    pub fn expand_def<'a>(sym: Str, env: &mut GlobalSubstituter<'a>) -> bool {
+    pub fn expand_def<'a, const D: Dialect>(sym: Str, env: &mut GlobalSubstituter<'a, D>) -> bool {
         if env.global_def_cache.contains_key(&sym) {
             return true;
         }
@@ -469,7 +473,11 @@ mod descent {
 /// Inline a nullary definition, i.e. what `sym` stands for at the given sort.
 ///
 /// A parametric definition is monomorphized first, which is why the use site's sort is needed.
-fn expand_global(sym: &Str, sort: Sort, env: &mut GlobalSubstituter<'_>) -> Term {
+fn expand_global<const D: Dialect>(
+    sym: &Str,
+    sort: Sort,
+    env: &mut GlobalSubstituter<'_, D>,
+) -> Term {
     let def = env
         .global_def_cache
         .get(sym)
@@ -486,7 +494,12 @@ fn expand_global(sym: &Str, sort: Sort, env: &mut GlobalSubstituter<'_>) -> Term
 }
 
 /// Inline an application of a definition to `recs`, i.e. substitute them for its variables.
-fn expand_app(sym: &Str, recs: Vec<Term>, sort: Sort, env: &mut GlobalSubstituter<'_>) -> Term {
+fn expand_app<const D: Dialect>(
+    sym: &Str,
+    recs: Vec<Term>,
+    sort: Sort,
+    env: &mut GlobalSubstituter<'_, D>,
+) -> Term {
     let def = env
         .global_def_cache
         .get(sym)
