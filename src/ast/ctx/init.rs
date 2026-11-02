@@ -11,7 +11,7 @@ use crate::ast::alg::BvLenExpr;
 use crate::ast::cnf::CNFCache;
 #[cfg(feature = "cache")]
 use crate::ast::ctx::Caches;
-use crate::ast::ctx::dialect::Dialect;
+use crate::ast::ctx::dialect::{ATSLIB_LOGIC, DIALECT_ATSLIB, Dialect};
 use crate::ast::ctx::{Arena, BvInSort, BvOutSort, EMP_SET, Sig, SigIndex, SortDef, Str, Theory};
 use crate::ast::ctx::{Command, Context, ContextFrame, ContextMeta, ContextStack, LOGICS};
 use crate::statics::*;
@@ -44,6 +44,17 @@ impl Context {
 }
 
 impl<const D: Dialect> Context<D> {
+    /// The signature to install for an operator that ATSLIB leaves out: the one `sig` builds, or
+    /// [`Sig::Rejected`] in [`DIALECT_ATSLIB`], which keeps the name reserved but rejects every use.
+    /// `sig` is only called when it is needed.
+    fn unless_atslib(sig: impl FnOnce() -> Sig) -> Sig {
+        if D == DIALECT_ATSLIB {
+            Sig::Rejected
+        } else {
+            sig()
+        }
+    }
+
     fn default_sorts(arena: &mut Arena) -> HashMap<Str, SortDef> {
         let bool = arena.allocate_symbol(BOOL);
         HashMap::from([(bool, SortDef::Opaque(0))])
@@ -321,7 +332,9 @@ impl<const D: Dialect> Context<D> {
         let default_symbol_table = HashMap::from([
             builtin(
                 char,
-                Sig::ParFunc(vec![SigIndex::Hexadecimal], vec![], vec![], string.clone()),
+                Self::unless_atslib(|| {
+                    Sig::ParFunc(vec![SigIndex::Hexadecimal], vec![], vec![], string.clone())
+                }),
             ),
             builtin(str_pp, str_binary_sig.clone()),
             builtin(str_len, str_unary_sig),
@@ -361,9 +374,15 @@ impl<const D: Dialect> Context<D> {
                 ),
             ),
             builtin(str_replace, str_ternary_sig.clone()),
-            builtin(str_replace_all, str_ternary_sig.clone()),
-            builtin(str_replace_re, replace_sig.clone()),
-            builtin(str_replace_re_all, replace_sig.clone()),
+            builtin(
+                str_replace_all,
+                Self::unless_atslib(|| str_ternary_sig.clone()),
+            ),
+            builtin(str_replace_re, Self::unless_atslib(|| replace_sig.clone())),
+            builtin(
+                str_replace_re_all,
+                Self::unless_atslib(|| replace_sig.clone()),
+            ),
             builtin(re_comp, Sig::func(vec![reglan.clone()], reglan.clone())),
             builtin(re_diff, re_binary_sig.clone()),
             builtin(re_p, re_unary_sig.clone()),
@@ -390,9 +409,15 @@ impl<const D: Dialect> Context<D> {
                     reglan.clone(),
                 ),
             ),
-            builtin(str_is_digit, str_unary_pred.clone()),
-            builtin(str_to_code, Sig::func(vec![string.clone()], int.clone())),
-            builtin(str_from_code, Sig::func(vec![int.clone()], string.clone())),
+            builtin(str_is_digit, Self::unless_atslib(|| str_unary_pred.clone())),
+            builtin(
+                str_to_code,
+                Self::unless_atslib(|| Sig::func(vec![string.clone()], int.clone())),
+            ),
+            builtin(
+                str_from_code,
+                Self::unless_atslib(|| Sig::func(vec![int.clone()], string.clone())),
+            ),
             builtin(str_to_int, Sig::func(vec![string.clone()], int.clone())),
             builtin(str_from_int, Sig::func(vec![int.clone()], string.clone())),
         ]);
@@ -584,7 +609,7 @@ impl<const D: Dialect> Context<D> {
             builtin(bvor, opt2_sig_lassoc.clone()),
             builtin(bvadd, opt2_sig_lassoc.clone()),
             builtin(bvmul, opt2_sig_lassoc.clone()),
-            builtin(bvxor, opt2_sig_lassoc.clone()),
+            builtin(bvxor, Self::unless_atslib(|| opt2_sig_lassoc.clone())),
             builtin(bvudiv, opt2_sig.clone()),
             builtin(bvurem, opt2_sig.clone()),
             builtin(bvshl, opt2_sig.clone()),
@@ -595,41 +620,45 @@ impl<const D: Dialect> Context<D> {
             builtin(bvsaddo, bin_pred_sig.clone()),
             builtin(bvumulo, bin_pred_sig.clone()),
             builtin(bvsmulo, bin_pred_sig.clone()),
-            builtin(bvnand, opt2_sig.clone()),
-            builtin(bvnor, opt2_sig.clone()),
-            builtin(bvxnor, opt2_sig.clone()),
+            builtin(bvnand, Self::unless_atslib(|| opt2_sig.clone())),
+            builtin(bvnor, Self::unless_atslib(|| opt2_sig.clone())),
+            builtin(bvxnor, Self::unless_atslib(|| opt2_sig.clone())),
             builtin(
                 bvcomp,
-                Sig::BvFunc(
-                    0,
-                    1,
-                    false,
-                    vec![BvInSort::BitVec(0), BvInSort::BitVec(0)],
-                    BvOutSort::Sort(bv1),
-                ),
+                Self::unless_atslib(|| {
+                    Sig::BvFunc(
+                        0,
+                        1,
+                        false,
+                        vec![BvInSort::BitVec(0), BvInSort::BitVec(0)],
+                        BvOutSort::Sort(bv1),
+                    )
+                }),
             ),
             builtin(bvsub, opt2_sig.clone()),
             builtin(bvsdiv, opt2_sig.clone()),
             builtin(bvsrem, opt2_sig.clone()),
             builtin(bvsmod, opt2_sig.clone()),
-            builtin(bvashr, opt2_sig.clone()),
-            builtin(bvusubo, bin_pred_sig.clone()),
+            builtin(bvashr, Self::unless_atslib(|| opt2_sig.clone())),
+            builtin(bvusubo, Self::unless_atslib(|| bin_pred_sig.clone())),
             builtin(bvssubo, bin_pred_sig.clone()),
-            builtin(bvsdivo, bin_pred_sig.clone()),
+            builtin(bvsdivo, Self::unless_atslib(|| bin_pred_sig.clone())),
             builtin(
                 repeat,
-                Sig::BvFunc(
-                    1,
-                    1,
-                    false,
-                    vec![BvInSort::BitVec(1)],
-                    BvOutSort::BitVec(BvLenExpr::var(0) * BvLenExpr::var(1)),
-                ),
+                Self::unless_atslib(|| {
+                    Sig::BvFunc(
+                        1,
+                        1,
+                        false,
+                        vec![BvInSort::BitVec(1)],
+                        BvOutSort::BitVec(BvLenExpr::var(0) * BvLenExpr::var(1)),
+                    )
+                }),
             ),
             builtin(zero_extend, extend_sig.clone()),
-            builtin(sign_extend, extend_sig.clone()),
-            builtin(rotate_left, rotate_sig.clone()),
-            builtin(rotate_right, rotate_sig.clone()),
+            builtin(sign_extend, Self::unless_atslib(|| extend_sig.clone())),
+            builtin(rotate_left, Self::unless_atslib(|| rotate_sig.clone())),
+            builtin(rotate_right, Self::unless_atslib(|| rotate_sig.clone())),
             builtin(bvule, bin_pred_sig.clone()),
             builtin(bvugt, bin_pred_sig.clone()),
             builtin(bvuge, bin_pred_sig.clone()),
@@ -648,11 +677,11 @@ impl<const D: Dialect> Context<D> {
             let more_symbols = HashMap::from([
                 builtin(ubv_to_int, to_int_sig.clone()),
                 builtin(sbv_to_int, to_int_sig.clone()),
-                builtin(bv2int, to_int_sig.clone()),
-                builtin(bv2nat, to_int_sig.clone()),
+                builtin(bv2int, Self::unless_atslib(|| to_int_sig.clone())),
+                builtin(bv2nat, Self::unless_atslib(|| to_int_sig.clone())),
                 builtin(int_to_bv, to_bv_sig.clone()),
-                builtin(nat2bv, to_bv_sig.clone()),
-                builtin(int2bv, to_bv_sig.clone()),
+                builtin(nat2bv, Self::unless_atslib(|| to_bv_sig.clone())),
+                builtin(int2bv, Self::unless_atslib(|| to_bv_sig.clone())),
             ]);
 
             self.touch_symbol_table();
@@ -755,6 +784,9 @@ impl<const D: Dialect> Context<D> {
     /// set the current theory; error if current theory has been set
     pub fn set_ctx_logic(&mut self, s: &str) -> Result<&mut Self, String> {
         match &self.meta.logic {
+            None if D == DIALECT_ATSLIB && s != ATSLIB_LOGIC => Err(format!(
+                "Logic {s} is not supported; ATSLIB only supports {ATSLIB_LOGIC}"
+            )),
             None => match LOGICS.get(s) {
                 None => Err(format!("Theory {} not defined", s)),
                 Some(ts) => {

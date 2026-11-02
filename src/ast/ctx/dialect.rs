@@ -8,9 +8,10 @@
 //! dialect's rules are fixed when the context is created, and checked without any cost at run time.
 //! Every such parameter defaults to [`DEFAULT_DIALECT`].
 //!
-//! Create a context of another dialect with
+//! Create a context of a given dialect with
 //! [`Context::new_dialect`](super::Context::new_dialect), e.g.
-//! `Context::<DIALECT_ATSLIB>::new_dialect()`.
+//! `Context::<DIALECT_ATSLIB>::new_dialect()`; [`Context::new`](super::Context::new) creates one in
+//! the default dialect.
 
 /// A dialect, used as a const parameter.
 ///
@@ -24,11 +25,17 @@ pub const DIALECT_SMTLIB: Dialect = 0;
 /// The ATSLIB dialect.
 pub const DIALECT_ATSLIB: Dialect = 1;
 
-/// The dialect of a context that does not name one.
+/// The dialect of a context that does not name one: [`DIALECT_SMTLIB`], or [`DIALECT_ATSLIB`] with
+/// the `atslib` feature.
 #[cfg(not(feature = "atslib"))]
 pub const DEFAULT_DIALECT: Dialect = DIALECT_SMTLIB;
+/// The dialect of a context that does not name one: [`DIALECT_SMTLIB`], or [`DIALECT_ATSLIB`] with
+/// the `atslib` feature.
 #[cfg(feature = "atslib")]
 pub const DEFAULT_DIALECT: Dialect = DIALECT_ATSLIB;
 
 /// In [`DIALECT_ATSLIB`], a declared or bound symbol must be shorter than this many bytes.
 pub const ATSLIB_SYMBOL_LIMIT: usize = 512;
+
+/// The only logic [`DIALECT_ATSLIB`] accepts.
+pub(crate) const ATSLIB_LOGIC: &str = "ALL";
