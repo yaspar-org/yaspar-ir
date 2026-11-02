@@ -1982,7 +1982,8 @@ fn test_dialect_reaches_every_api() {
     // the script type checker, for a declaration and for a pattern variable
     for script in [&decl, &bound] {
         let cs = UntypedAst.parse_script_str(script).unwrap();
-        assert!(cs.type_check(&mut Context::new()).is_ok());
+        let mut smtlib = Context::<SmtLib>::new_dialect();
+        assert!(cs.type_check(&mut smtlib).is_ok(), "{script}");
         let mut atslib = Context::<AtsLib>::new_dialect();
         assert!(cs.type_check(&mut atslib).is_err(), "{script}");
     }
@@ -2019,4 +2020,103 @@ fn test_dialect_reaches_every_api() {
         panic!("not an assertion")
     };
     assert_eq!(t.gsubst_all(&mut atslib).to_string(), "(> 2 1)");
+}
+
+/// ATSLIB only supports the logic `ALL`.
+#[test]
+fn test_atslib_logic_is_all() {
+    for (logic, ok) in [("ALL", true), ("QF_BV", false), ("QF_LIA", false)] {
+        let script = format!("(set-logic {logic})");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        let mut atslib = Context::<AtsLib>::new_dialect();
+        assert_eq!(cs.type_check(&mut atslib).is_ok(), ok, "{logic}");
+        // SMT-LIB accepts them all
+        let mut smtlib = Context::<SmtLib>::new_dialect();
+        assert!(cs.type_check(&mut smtlib).is_ok(), "{logic}");
+    }
+    let mut atslib = Context::<AtsLib>::new_dialect();
+    atslib.ensure_logic();
+    assert_eq!(atslib.get_logic(), "ALL");
+}
+
+/// ATSLIB leaves some operators out of its theories, and keeps their names reserved; issue #181.
+#[test]
+fn test_atslib_unsupported_operators() {
+    let check = |dialect_is_atslib: bool, script: &str| {
+        let cs = UntypedAst.parse_script_str(script).unwrap();
+        if dialect_is_atslib {
+            cs.type_check(&mut Context::<AtsLib>::new_dialect())
+        } else {
+            cs.type_check(&mut Context::<SmtLib>::new_dialect())
+        }
+        .map(|_| ())
+    };
+    let decls = "(set-logic ALL)(declare-const b (_ BitVec 4))(declare-const s String)";
+
+    // the example of the issue
+    let used = format!("{decls}(assert (= (bvxor b b) #x0))");
+    let err = check(true, &used).unwrap_err();
+    assert!(err.contains("rejected/unsupported"), "{err}");
+    assert!(check(false, &used).is_ok());
+    let declared = "(set-logic ALL)(declare-fun bvxor () Bool)";
+    let err = check(true, declared).unwrap_err();
+    assert!(err.contains("already defined"), "{err}");
+
+    // every unsupported operator is installed as rejected, and its name reserved
+    for name in [
+        "char",
+        "str.replace_all",
+        "str.replace_re",
+        "str.replace_re_all",
+        "str.from_code",
+        "str.to_code",
+        "str.is_digit",
+        "bv2nat",
+        "bv2int",
+        "nat2bv",
+        "int2bv",
+        "bvnand",
+        "bvnor",
+        "bvxor",
+        "bvxnor",
+        "bvcomp",
+        "bvashr",
+        "bvusubo",
+        "bvsdivo",
+        "repeat",
+        "sign_extend",
+        "rotate_left",
+        "rotate_right",
+    ] {
+        let mut atslib = Context::<AtsLib>::new_dialect();
+        atslib.ensure_logic();
+        let err = atslib.typed_symbol(name).unwrap_err();
+        assert!(err.contains("rejected/unsupported"), "{name}: {err}");
+        let sym = atslib.allocate_symbol(name);
+        let err = atslib.can_add_symbol(&sym).unwrap_err();
+        assert!(err.contains("already defined"), "{name}: {err}");
+        // SMT-LIB supports it
+        let mut smtlib = Context::<SmtLib>::new_dialect();
+        smtlib.ensure_logic();
+        let r = smtlib.typed_symbol(name);
+        assert!(
+            !r.as_ref().is_err_and(|e| e.contains("rejected")),
+            "{name} is rejected in SMT-LIB: {r:?}"
+        );
+    }
+    let indexed = format!("{decls}(assert (= (_ char #x41) s))");
+    let err = check(true, &indexed).unwrap_err();
+    assert!(err.contains("rejected/unsupported"), "{err}");
+    assert!(check(false, &indexed).is_ok());
+
+    // the operators ATSLIB keeps still work
+    let kept = format!(
+        "{decls}(assert (= (bvand b b) (bvor b b)))(assert (= (str.replace s s s) s))\
+         (assert (= ((_ zero_extend 4) b) #x00))"
+    );
+    assert_eq!(check(true, &kept), Ok(()));
+
+    // in SMT-LIB the names are not reserved outside their theory
+    let elsewhere = "(set-logic QF_LIA)(declare-fun bvxor () Bool)";
+    assert_eq!(check(false, elsewhere), Ok(()));
 }
