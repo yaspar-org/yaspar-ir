@@ -7,6 +7,7 @@ use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, Result, Sort, Str, TCEnv, Term};
 use crate::ast::ctx::{DefaultDialect, Dialect};
+use crate::ast::ctx::{HasDialect, TermContext};
 use crate::ast::utils::is_term_bool;
 use crate::ast::{Attribute, MatchContext, Theory};
 use crate::containers::LocEnv;
@@ -146,6 +147,12 @@ impl<D: Dialect> HasMutRef<Context<D>> for QuantifierContext<'_, '_, D> {
         self.0.context
     }
 }
+
+impl<D: Dialect> HasDialect for QuantifierContext<'_, '_, D> {
+    type D = D;
+}
+
+impl<D: Dialect> TermContext for QuantifierContext<'_, '_, D> {}
 
 impl<D: Dialect> CheckedApi<D> for QuantifierContext<'_, '_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {

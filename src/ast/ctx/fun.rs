@@ -11,6 +11,7 @@ use crate::ast::ctx::{
 };
 use crate::ast::ctx::{Command, FunctionDef, Sort, Str, TC, Term};
 use crate::ast::ctx::{DefaultDialect, Dialect};
+use crate::ast::ctx::{HasDialect, TermContext};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, HasMutRef};
@@ -127,6 +128,12 @@ impl<D: Dialect> HasMutRef<Context<D>> for FunctionContext<'_, D> {
         self.context
     }
 }
+
+impl<D: Dialect> HasDialect for FunctionContext<'_, D> {
+    type D = D;
+}
+
+impl<D: Dialect> TermContext for FunctionContext<'_, D> {}
 
 impl<D: Dialect> CheckedApi<D> for FunctionContext<'_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {

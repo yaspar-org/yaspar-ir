@@ -10,6 +10,7 @@ use crate::ast::ctx::{
     TCEnvGen, TCLocal, Term,
 };
 use crate::ast::ctx::{DefaultDialect, Dialect};
+use crate::ast::ctx::{HasDialect, TermContext};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::matching::MatchChecker;
@@ -271,6 +272,12 @@ impl<D: Dialect> HasMutRef<Context<D>> for ArmContext<'_, '_, '_, D> {
         self.parent.context
     }
 }
+
+impl<D: Dialect> HasDialect for ArmContext<'_, '_, '_, D> {
+    type D = D;
+}
+
+impl<D: Dialect> TermContext for ArmContext<'_, '_, '_, D> {}
 
 impl<D: Dialect> CheckedApi<D> for ArmContext<'_, '_, '_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {

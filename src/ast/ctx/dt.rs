@@ -6,13 +6,13 @@ use crate::allocator::{
     TermAllocator,
 };
 use crate::ast::alg::{SigIndex, VarBinding};
+use crate::ast::ctx::HasDialect;
 use crate::ast::ctx::checked::ScopedSortApi;
-use crate::ast::ctx::checked::SortTcEnv;
 use crate::ast::ctx::{
     Arena, Command, ConstructorDec, Context, DatatypeDec, DatatypeDef, Sig, Sort, Str, TC, TCEnv,
     Theory,
 };
-use crate::ast::ctx::{AtsLib, DefaultDialect, Dialect, SmtLib};
+use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::ast::{
     DatatypeFunction, FunctionDef, FunctionMeta, FunctionMetaDefined, Identifier, Index, Local,
     SymbolQuote, Typecheck, alg,
@@ -422,9 +422,13 @@ impl<D: Dialect> HasMutRef<Context<D>> for DtDeclContext<'_, '_, D> {
     }
 }
 
-impl<D: Dialect> SortTcEnv<D> for DtDeclContext<'_, '_, D> {
+impl<D: Dialect> HasDialect for DtDeclContext<'_, '_, D> {
+    type D = D;
+}
+
+impl<D: Dialect> ScopedSortApi<D> for DtDeclContext<'_, '_, D> {
     #[inline]
-    fn sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
+    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
         self.parent
             .context
             .get_sort_tcenv()
@@ -434,23 +438,6 @@ impl<D: Dialect> SortTcEnv<D> for DtDeclContext<'_, '_, D> {
             })
     }
 }
-
-/// One impl per dialect, rather than one generic over `D`: a generic impl would overlap the
-/// blanket impl over [`CheckedApi`](crate::ast::CheckedApi), since another crate could implement
-/// `CheckedApi<D>` for this context with a `D` of its own; with the dialect named, only this crate
-/// could. Generic code uses [`SortTcEnv`] instead.
-macro_rules! impl_scoped_sort_api {
-    ($($d:ty),*) => {$(
-        impl ScopedSortApi<$d> for DtDeclContext<'_, '_, $d> {
-            #[inline]
-            fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), $d> {
-                self.sort_tcenv()
-            }
-        }
-    )*};
-}
-
-impl_scoped_sort_api!(SmtLib, AtsLib);
 
 /// Check whether a given sort is well-formed in a data type definition
 ///
