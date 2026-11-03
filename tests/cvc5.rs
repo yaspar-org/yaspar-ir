@@ -2977,8 +2977,8 @@ fn deep_forward_parametric_sort_translation_is_flat() {
 /// A context of another dialect translates to cvc5 and back like the default one.
 #[test]
 fn test_dialect_round_trip() {
-    use yaspar_ir::ast::{ACommand, DIALECT_ATSLIB, Repr};
-    let mut ctx = Context::<DIALECT_ATSLIB>::new_dialect();
+    use yaspar_ir::ast::{ACommand, AtsLib, Repr};
+    let mut ctx = Context::<AtsLib>::new_dialect();
     let cmds = UntypedAst
         .parse_script_str("(set-logic ALL)(declare-const x Int)(assert (> x 0))")
         .unwrap()

@@ -7,11 +7,12 @@ use crate::allocator::{
 };
 use crate::ast::alg::{SigIndex, VarBinding};
 use crate::ast::ctx::checked::ScopedSortApi;
+use crate::ast::ctx::checked::SortTcEnv;
 use crate::ast::ctx::{
     Arena, Command, ConstructorDec, Context, DatatypeDec, DatatypeDef, Sig, Sort, Str, TC, TCEnv,
     Theory,
 };
-use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
+use crate::ast::ctx::{AtsLib, DefaultDialect, Dialect, SmtLib};
 use crate::ast::{
     DatatypeFunction, FunctionDef, FunctionMeta, FunctionMetaDefined, Identifier, Index, Local,
     SymbolQuote, Typecheck, alg,
@@ -45,7 +46,7 @@ struct DatatypeDefs {
 /// the global context (the operation is transactional).
 ///
 /// For simple enums without fields, use [`Context::typed_enum`] as a shorthand.
-pub struct DatatypeContext<'a, const D: Dialect = DEFAULT_DIALECT> {
+pub struct DatatypeContext<'a, D: Dialect = DefaultDialect> {
     context: &'a mut Context<D>,
     /// Invariant: almost always Some; it is only None when we confirm we have managed to build
     /// datatypes properly
@@ -61,7 +62,7 @@ pub struct DatatypeContext<'a, const D: Dialect = DEFAULT_DIALECT> {
 /// [`build_datatype_constructor`](Self::build_datatype_constructor) or
 /// [`build_datatype_constructor_nullary`](Self::build_datatype_constructor_nullary), then
 /// finalize with [`typed_datatype`](Self::typed_datatype).
-pub struct DtDeclContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT> {
+pub struct DtDeclContext<'a, 'b, D: Dialect = DefaultDialect> {
     parent: &'b mut DatatypeContext<'a, D>,
     params: Vec<VarBinding<Str, ()>>,
     current: Str,
@@ -83,7 +84,7 @@ impl DatatypeDefs {
     }
 }
 
-impl<'a, const D: Dialect> DatatypeContext<'a, D> {
+impl<'a, D: Dialect> DatatypeContext<'a, D> {
     pub(crate) fn new<T, P, S>(context: &'a mut Context<D>, dt_names_and_sorts: T) -> TC<Self>
     where
         T: IntoIterator<Item = (S, P)>,
@@ -213,20 +214,20 @@ impl<'a, const D: Dialect> DatatypeContext<'a, D> {
 }
 
 // if the datatype creation is not successful, we should clean up the [Context]
-impl<const D: Dialect> Drop for DatatypeContext<'_, D> {
+impl<D: Dialect> Drop for DatatypeContext<'_, D> {
     fn drop(&mut self) {
         self.remove_sorts();
     }
 }
 
-impl<const D: Dialect> HasArena for DatatypeContext<'_, D> {
+impl<D: Dialect> HasArena for DatatypeContext<'_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for DatatypeContext<'_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for DatatypeContext<'_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -238,7 +239,7 @@ impl<const D: Dialect> HasMutRef<Context<D>> for DatatypeContext<'_, D> {
     }
 }
 
-impl<'a, 'b, const D: Dialect> DtDeclContext<'a, 'b, D> {
+impl<'a, 'b, D: Dialect> DtDeclContext<'a, 'b, D> {
     fn new<S>(parent: &'b mut DatatypeContext<'a, D>, s: S) -> TC<Self>
     where
         S: AllocatableString<Arena>,
@@ -402,14 +403,14 @@ impl<'a, 'b, const D: Dialect> DtDeclContext<'a, 'b, D> {
     }
 }
 
-impl<const D: Dialect> HasArena for DtDeclContext<'_, '_, D> {
+impl<D: Dialect> HasArena for DtDeclContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.parent.context.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for DtDeclContext<'_, '_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for DtDeclContext<'_, '_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -421,9 +422,9 @@ impl<const D: Dialect> HasMutRef<Context<D>> for DtDeclContext<'_, '_, D> {
     }
 }
 
-impl<const D: Dialect> ScopedSortApi<D> for DtDeclContext<'_, '_, D> {
+impl<D: Dialect> SortTcEnv<D> for DtDeclContext<'_, '_, D> {
     #[inline]
-    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
+    fn sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
         self.parent
             .context
             .get_sort_tcenv()
@@ -434,6 +435,23 @@ impl<const D: Dialect> ScopedSortApi<D> for DtDeclContext<'_, '_, D> {
     }
 }
 
+/// One impl per dialect, rather than one generic over `D`: a generic impl would overlap the
+/// blanket impl over [`CheckedApi`](crate::ast::CheckedApi), since another crate could implement
+/// `CheckedApi<D>` for this context with a `D` of its own; with the dialect named, only this crate
+/// could. Generic code uses [`SortTcEnv`] instead.
+macro_rules! impl_scoped_sort_api {
+    ($($d:ty),*) => {$(
+        impl ScopedSortApi<$d> for DtDeclContext<'_, '_, $d> {
+            #[inline]
+            fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), $d> {
+                self.sort_tcenv()
+            }
+        }
+    )*};
+}
+
+impl_scoped_sort_api!(SmtLib, AtsLib);
+
 /// Check whether a given sort is well-formed in a data type definition
 ///
 /// Well-formedness condition requires that sorts in `names` can only appear as `top` symbols.
@@ -441,7 +459,7 @@ impl<const D: Dialect> ScopedSortApi<D> for DtDeclContext<'_, '_, D> {
 /// * names: the names of the datatypes being defined.
 /// * top: whether the given sort is a top symbol
 #[stack_safe]
-pub(crate) fn wf_sort<const D: Dialect>(
+pub(crate) fn wf_sort<D: Dialect>(
     names: &[Str],
     sort: &Sort,
     env: &mut TCEnv<'_, '_, (), D>,
@@ -512,7 +530,7 @@ pub(crate) fn check_dt_emptiness<D: Borrow<DatatypeDef>>(def_map: &HashMap<Str, 
 /// Assuming correct datatypes, extend the symbol table
 ///
 /// Sorts have been inserted, so we only insert symbols
-pub(crate) fn extend_symbols_about_datatypes<const D: Dialect>(
+pub(crate) fn extend_symbols_about_datatypes<D: Dialect>(
     defs: &[DatatypeDef],
     env: &mut Context<D>,
 ) {

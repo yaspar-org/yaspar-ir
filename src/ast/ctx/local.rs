@@ -6,7 +6,7 @@ use crate::ast::alg::{LocalId, VarBinding};
 use crate::ast::ctx::{
     Arena, CheckedApi, Context, LetContext, QuantifierContext, Result, Sort, Str, Term,
 };
-use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
+use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::ast::{MatchContext, SymbolQuote};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
@@ -17,13 +17,13 @@ use std::collections::HashSet;
 /// A structure that captures local sort bindings.
 ///
 /// It is not meant to be exposed publicly.
-pub(crate) struct LocalContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT> {
+pub(crate) struct LocalContext<'a, 'b, D: Dialect = DefaultDialect> {
     pub(crate) context: &'a mut Context<D>,
     pub(crate) env: Vec<VarBinding<Str, Sort>>,
     pub(crate) tail: LocEnv<'b, Str, Sort>,
 }
 
-impl<'a, 'b, const D: Dialect> LocalContext<'a, 'b, D> {
+impl<'a, 'b, D: Dialect> LocalContext<'a, 'b, D> {
     pub(crate) fn new(context: &'a mut Context<D>, tail: LocEnv<'b, Str, Sort>) -> Self {
         Self {
             context,
@@ -99,14 +99,14 @@ impl<'a, 'b, const D: Dialect> LocalContext<'a, 'b, D> {
     }
 }
 
-impl<const D: Dialect> HasArena for LocalContext<'_, '_, D> {
+impl<D: Dialect> HasArena for LocalContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for LocalContext<'_, '_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for LocalContext<'_, '_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -118,7 +118,7 @@ impl<const D: Dialect> HasMutRef<Context<D>> for LocalContext<'_, '_, D> {
     }
 }
 
-impl<const D: Dialect> CheckedApi<D> for LocalContext<'_, '_, D> {
+impl<D: Dialect> CheckedApi<D> for LocalContext<'_, '_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen {
             arena: &mut self.context.arena,

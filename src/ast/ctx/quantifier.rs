@@ -6,7 +6,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, Result, Sort, Str, TCEnv, Term};
-use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
+use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::ast::utils::is_term_bool;
 use crate::ast::{Attribute, MatchContext, Theory};
 use crate::containers::LocEnv;
@@ -44,11 +44,11 @@ use crate::traits::{AllocatableString, HasMutRef};
 /// let term = q.typed_forall(body).unwrap();
 /// assert_eq!(term.to_string(), "(forall ((x Int)) (> x 0))");
 /// ```
-pub struct QuantifierContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT>(
+pub struct QuantifierContext<'a, 'b, D: Dialect = DefaultDialect>(
     pub(crate) LocalContext<'a, 'b, D>,
 );
 
-impl<'a, 'b, const D: Dialect> QuantifierContext<'a, 'b, D> {
+impl<'a, 'b, D: Dialect> QuantifierContext<'a, 'b, D> {
     pub(crate) fn new(context: &'a mut Context<D>, tail: LocEnv<'b, Str, Sort>) -> TC<Self> {
         context.check_support_theory(Theory::Quantifiers)?;
         Ok(Self(LocalContext::new(context, tail)))
@@ -128,14 +128,14 @@ impl<'a, 'b, const D: Dialect> QuantifierContext<'a, 'b, D> {
     }
 }
 
-impl<const D: Dialect> HasArena for QuantifierContext<'_, '_, D> {
+impl<D: Dialect> HasArena for QuantifierContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.0.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for QuantifierContext<'_, '_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for QuantifierContext<'_, '_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -147,7 +147,7 @@ impl<const D: Dialect> HasMutRef<Context<D>> for QuantifierContext<'_, '_, D> {
     }
 }
 
-impl<const D: Dialect> CheckedApi<D> for QuantifierContext<'_, '_, D> {
+impl<D: Dialect> CheckedApi<D> for QuantifierContext<'_, '_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         self.0.get_tcenv()
     }

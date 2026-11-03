@@ -9,7 +9,7 @@ use crate::ast::ctx::{
     Arena, CheckedApi, LetContext, Pattern, PatternArm, QuantifierContext, Sort, Str, TC, TCEnv,
     TCEnvGen, TCLocal, Term,
 };
-use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
+use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::matching::MatchChecker;
@@ -56,7 +56,7 @@ use std::collections::HashSet;
 /// let term = m.typed_matching().unwrap();
 /// assert_eq!(term.to_string(), "(match l ((nil 0) ((cons h t) h)))");
 /// ```
-pub struct MatchContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT> {
+pub struct MatchContext<'a, 'b, D: Dialect = DefaultDialect> {
     context: &'a mut Context<D>,
     tail: LocEnv<'b, Str, Sort>,
     scrutinee: Term,
@@ -74,20 +74,20 @@ pub struct MatchContext<'a, 'b, const D: Dialect = DEFAULT_DIALECT> {
 /// context. Build the arm body using any [`CheckedApi`] method, then finalize with
 /// [`typed_arm`](Self::typed_arm), which validates that the body sort matches other arms and
 /// returns control to the parent [`MatchContext`].
-pub struct ArmContext<'a, 'b, 'c, const D: Dialect = DEFAULT_DIALECT> {
+pub struct ArmContext<'a, 'b, 'c, D: Dialect = DefaultDialect> {
     parent: &'c mut MatchContext<'a, 'b, D>,
     env: Vec<VarBinding<Str, Sort>>,
     pattern: Pattern,
 }
 
-impl<'a, 'b, const D: Dialect> MatchContext<'a, 'b, D> {
+impl<'a, 'b, D: Dialect> MatchContext<'a, 'b, D> {
     pub(crate) fn new(
         context: &'a mut Context<D>,
         tail: LocEnv<'b, Str, Sort>,
         scrutinee: Term,
     ) -> TC<Self> {
         context.check_support_theory(Theory::Datatypes)?;
-        let checker = MatchChecker::new(&mut context.get_tcenv(), &scrutinee, "")?;
+        let checker = D::start_match(&mut context.get_tcenv(), &scrutinee, "")?;
         Ok(Self {
             context,
             tail,
@@ -218,14 +218,14 @@ impl<'a, 'b, const D: Dialect> MatchContext<'a, 'b, D> {
     }
 }
 
-impl<const D: Dialect> HasArena for MatchContext<'_, '_, D> {
+impl<D: Dialect> HasArena for MatchContext<'_, '_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for MatchContext<'_, '_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for MatchContext<'_, '_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -237,7 +237,7 @@ impl<const D: Dialect> HasMutRef<Context<D>> for MatchContext<'_, '_, D> {
     }
 }
 
-impl<const D: Dialect> ArmContext<'_, '_, '_, D> {
+impl<D: Dialect> ArmContext<'_, '_, '_, D> {
     /// finalize the arm by giving a body
     ///
     /// invoking this method will make the parent [MatchContext] available.
@@ -254,13 +254,13 @@ impl<const D: Dialect> ArmContext<'_, '_, '_, D> {
     }
 }
 
-impl<const D: Dialect> HasArena for ArmContext<'_, '_, '_, D> {
+impl<D: Dialect> HasArena for ArmContext<'_, '_, '_, D> {
     fn arena(&mut self) -> &mut Arena {
         self.parent.context.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for ArmContext<'_, '_, '_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for ArmContext<'_, '_, '_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -272,7 +272,7 @@ impl<const D: Dialect> HasMutRef<Context<D>> for ArmContext<'_, '_, '_, D> {
     }
 }
 
-impl<const D: Dialect> CheckedApi<D> for ArmContext<'_, '_, '_, D> {
+impl<D: Dialect> CheckedApi<D> for ArmContext<'_, '_, '_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen {
             arena: &mut self.parent.context.arena,

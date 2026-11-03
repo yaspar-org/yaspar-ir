@@ -15,7 +15,7 @@
 
 use super::{TC, TCEnvGen, sort_mismatch, tc_determine_datatype_sort_map};
 use crate::allocator::LocalVarAllocator;
-use crate::ast::Dialect;
+use crate::ast::{Dialect, IsSmtLib};
 use crate::ast::{SymbolQuote, Theory};
 use crate::containers::sanitize_bindings;
 use crate::raw::alg::VarBinding;
@@ -24,7 +24,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 
 /// What a `match` over one scrutinee has seen so far.
-pub(crate) struct MatchChecker {
+/// `pub` only so [`Dialect::start_match`](crate::ast::Dialect::start_match) can name it; `raw` is private, so it stays internal.
+pub struct MatchChecker {
     scrutinee_sort: Sort,
     /// Each constructor of the scrutinee's sort, with the sorts of its arguments.
     constructors: HashMap<Str, Vec<Sort>>,
@@ -41,7 +42,10 @@ pub(crate) type ArmScope = (Pattern, Vec<VarBinding<Str, Sort>>);
 
 impl MatchChecker {
     /// Start checking a `match` on `scrutinee`, which must be of a datatype sort.
-    pub(crate) fn new<L, const D: Dialect>(
+    ///
+    /// Only SMT-LIB has `match` terms: code generic over the dialect goes through the dialect's
+    /// `start_match` instead, which rejects a `match` in the other dialects.
+    pub(crate) fn new<L, D: IsSmtLib>(
         env: &mut TCEnvGen<'_, L, D>,
         scrutinee: &Term,
         meta: &str,
@@ -78,7 +82,7 @@ impl MatchChecker {
     /// Resolve the pattern `(ctor x₁ … xₙ)`, or `ctor` alone when `vars` is empty. A `None` among
     /// `vars` is a `_` that binds nothing. `meta` locates `ctor`, and each variable comes with what
     /// locates it.
-    pub(crate) fn ctor_arm<L, const D: Dialect>(
+    pub(crate) fn ctor_arm<L, D: Dialect>(
         &self,
         env: &mut TCEnvGen<'_, L, D>,
         ctor: Str,
@@ -120,7 +124,7 @@ impl MatchChecker {
     /// The concrete syntax cannot tell a variable from a nullary constructor, so with
     /// `ctor_if_nullary` a `var` naming one is that constructor's pattern instead. Without it,
     /// naming any constructor is an error.
-    pub(crate) fn wildcard_arm<L, const D: Dialect>(
+    pub(crate) fn wildcard_arm<L, D: Dialect>(
         &self,
         env: &mut TCEnvGen<'_, L, D>,
         var: Option<(Str, String)>,

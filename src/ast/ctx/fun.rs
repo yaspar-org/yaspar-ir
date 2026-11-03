@@ -10,7 +10,7 @@ use crate::ast::ctx::{
     Arena, CheckedApi, Context, FetchSort, SymbolQuote, TCEnv, TCEnvGen, TCLocal,
 };
 use crate::ast::ctx::{Command, FunctionDef, Sort, Str, TC, Term};
-use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
+use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::traits::{AllocatableString, HasMutRef};
@@ -41,14 +41,14 @@ use std::collections::HashSet;
 /// let cmd = f.typed_define_fun(body).unwrap();
 /// assert_eq!(cmd.to_string(), "(define-fun double ((x Int)) Int (+ x x))");
 /// ```
-pub struct FunctionContext<'a, const D: Dialect = DEFAULT_DIALECT> {
+pub struct FunctionContext<'a, D: Dialect = DefaultDialect> {
     context: &'a mut Context<D>,
     name: Str,
     inputs: Vec<VarBinding<Str, Sort>>,
     output: Option<Sort>,
 }
 
-impl<'a, const D: Dialect> FunctionContext<'a, D> {
+impl<'a, D: Dialect> FunctionContext<'a, D> {
     pub(crate) fn new<T, S>(
         context: &'a mut Context<D>,
         name: S,
@@ -109,14 +109,14 @@ impl<'a, const D: Dialect> FunctionContext<'a, D> {
     }
 }
 
-impl<const D: Dialect> HasArena for FunctionContext<'_, D> {
+impl<D: Dialect> HasArena for FunctionContext<'_, D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for FunctionContext<'_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for FunctionContext<'_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -128,7 +128,7 @@ impl<const D: Dialect> HasMutRef<Context<D>> for FunctionContext<'_, D> {
     }
 }
 
-impl<const D: Dialect> CheckedApi<D> for FunctionContext<'_, D> {
+impl<D: Dialect> CheckedApi<D> for FunctionContext<'_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen {
             arena: &mut self.context.arena,

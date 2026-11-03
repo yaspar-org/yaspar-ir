@@ -48,6 +48,7 @@ pub mod subst;
 
 pub use crate::allocator::*;
 
+use crate::ast::ctx::SortTcEnv;
 pub use crate::ast::ctx::*;
 #[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::ImplicantEnv;
@@ -90,22 +91,25 @@ pub trait TypedTermRecursor: TermRecursor<Str, Sort, Term> {}
 ///
 /// One impl per context type, rather than one blanket over [`CheckedApi`] and [`ScopedSortApi`]:
 /// a blanket would have to name the dialect only in its bounds, which Rust does not allow.
+///
+/// Sorts go through `SortTcEnv` rather than [`ScopedSortApi`]: the sort-only contexts implement
+/// [`ScopedSortApi`] once per dialect, which code generic over the dialect cannot rely on.
 macro_rules! typecheck_sorts_in {
     ($($ctx:ty),* $(,)?) => {$(
-        impl<const D: Dialect> Typecheck<$ctx> for u::Sort {
+        impl<D: Dialect> Typecheck<$ctx> for u::Sort {
             type Out = Sort;
 
             fn type_check(&self, env: &mut $ctx) -> TC<Self::Out> {
-                let mut env = ScopedSortApi::<D>::get_sort_tcenv(env);
+                let mut env = SortTcEnv::<D>::sort_tcenv(env);
                 self.type_check(&mut env)
             }
         }
 
-        impl<const D: Dialect> Typecheck<$ctx> for Sort {
+        impl<D: Dialect> Typecheck<$ctx> for Sort {
             type Out = Sort;
 
             fn type_check(&self, env: &mut $ctx) -> TC<Self::Out> {
-                let mut env = ScopedSortApi::<D>::get_sort_tcenv(env);
+                let mut env = SortTcEnv::<D>::sort_tcenv(env);
                 self.type_check(&mut env)
             }
         }
@@ -116,7 +120,7 @@ macro_rules! typecheck_sorts_in {
 /// so terms can be type-checked in it.
 macro_rules! typecheck_terms_in {
     ($($ctx:ty),* $(,)?) => {$(
-        impl<T, O, const D: Dialect> Typecheck<$ctx> for T
+        impl<T, O, D: Dialect> Typecheck<$ctx> for T
         where
             T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort, D>, Out = O>,
             O: 'static,
@@ -151,7 +155,7 @@ typecheck_terms_in!(
     EachRecFunContext<'_, D>,
 );
 
-impl<T, O, const D: Dialect> Typecheck<Context<D>> for Vec<T>
+impl<T, O, D: Dialect> Typecheck<Context<D>> for Vec<T>
 where
     O: 'static,
     T: Typecheck<Context<D>, Out = O>,
@@ -163,7 +167,7 @@ where
     }
 }
 
-fn type_check_command<const D: Dialect>(command: &u::Command, env: &mut Context<D>) -> TC<Command> {
+fn type_check_command<D: Dialect>(command: &u::Command, env: &mut Context<D>) -> TC<Command> {
     match command.repr() {
         ACommand::Assert(t) => {
             env.ensure_logic();
@@ -323,7 +327,7 @@ fn type_check_command<const D: Dialect>(command: &u::Command, env: &mut Context<
     }
 }
 
-impl<const D: Dialect> Typecheck<Context<D>> for u::Command {
+impl<D: Dialect> Typecheck<Context<D>> for u::Command {
     type Out = Command;
 
     fn type_check(&self, env: &mut Context<D>) -> TC<Self::Out> {
@@ -336,7 +340,7 @@ impl<const D: Dialect> Typecheck<Context<D>> for u::Command {
 }
 
 #[cfg(feature = "implicant-generation")]
-impl<Solver, const D: Dialect> FindImplicant<&mut Context<D>, Solver> for Vec<Term>
+impl<Solver, D: Dialect> FindImplicant<&mut Context<D>, Solver> for Vec<Term>
 where
     Solver: SatSolver,
 {

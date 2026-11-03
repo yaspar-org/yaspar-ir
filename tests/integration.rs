@@ -1983,12 +1983,12 @@ fn test_dialect_reaches_every_api() {
     for script in [&decl, &bound] {
         let cs = UntypedAst.parse_script_str(script).unwrap();
         assert!(cs.type_check(&mut Context::new()).is_ok());
-        let mut atslib = Context::<DIALECT_ATSLIB>::new_dialect();
+        let mut atslib = Context::<AtsLib>::new_dialect();
         assert!(cs.type_check(&mut atslib).is_err(), "{script}");
     }
 
     // a builder context, and type checking in it
-    let mut atslib = Context::<DIALECT_ATSLIB>::new_dialect();
+    let mut atslib = Context::<AtsLib>::new_dialect();
     atslib.ensure_logic();
     let int = atslib.int_sort();
     assert!(
@@ -2009,7 +2009,7 @@ fn test_dialect_reaches_every_api() {
 
     // global substitution
     let script = "(set-logic ALL)(define-fun two () Int 2)(assert (> two 1))";
-    let mut atslib = Context::<DIALECT_ATSLIB>::new_dialect();
+    let mut atslib = Context::<AtsLib>::new_dialect();
     let cs = UntypedAst
         .parse_script_str(script)
         .unwrap()

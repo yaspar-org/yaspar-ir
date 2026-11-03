@@ -55,10 +55,12 @@ use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::ds::DefSortContext;
 use crate::ast::ctx::dt::DatatypeContext;
 use crate::ast::ctx::fun::FunctionContext;
+use crate::ast::ctx::matching::ArmContext;
 use crate::ast::ctx::matching::MatchContext;
 use crate::ast::ctx::quantifier::QuantifierContext;
+use crate::ast::ctx::recs::EachRecFunContext;
 use crate::ast::ctx::recs::RecFunsContext;
-use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
+use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::ast::fv::is_closed;
 use crate::ast::utils::{is_quantifier_free, is_term_bool, is_term_bool_alt};
 use crate::ast::{
@@ -115,7 +117,7 @@ use yaspar_macros::stack_safe;
 ///   [`build_let`](Self::build_let), [`build_matching`](Self::build_matching)
 ///
 /// See also [`ScopedSortApi`] for sort construction.
-pub trait CheckedApi<const D: Dialect = DEFAULT_DIALECT>: HasArena {
+pub trait CheckedApi<D: Dialect = DefaultDialect>: HasArena {
     /// Obtain a type-checking environment
     ///
     /// This is used internally to implement other functions
@@ -430,7 +432,7 @@ where
 /// - [`wf_bv_sort(len)`](Self::wf_bv_sort) — bitvector sort `(_ BitVec len)`. Validates length > 0 and within bounds.
 ///
 /// See also [`CheckedApi`] for term construction.
-pub trait ScopedSortApi<const D: Dialect = DEFAULT_DIALECT>: HasArena {
+pub trait ScopedSortApi<D: Dialect = DefaultDialect>: HasArena {
     /// Obtain a type-checking environment
     ///
     /// This is used internally to implement other functions
@@ -471,7 +473,7 @@ pub trait ScopedSortApi<const D: Dialect = DEFAULT_DIALECT>: HasArena {
     }
 }
 
-impl<X, const D: Dialect> ScopedSortApi<D> for X
+impl<X, D: Dialect> ScopedSortApi<D> for X
 where
     X: StrAllocator<Str = Str> + TermAllocator<Str, Sort, Term> + CheckedApi<D>,
 {
@@ -480,7 +482,38 @@ where
     }
 }
 
-impl<const D: Dialect> Context<D> {
+/// The environment for checking sorts in a builder context, in any dialect.
+///
+/// It is [`ScopedSortApi::get_sort_tcenv`], for code generic over the dialect: the sort-only
+/// contexts ([`DefSortContext`] and [`DtDeclContext`]) implement [`ScopedSortApi`] once per dialect,
+/// because a generic impl would overlap the blanket impl above, so `ScopedSortApi<D>` cannot be
+/// relied on for them when `D` is generic. Every context implements this trait for every `D`.
+pub(crate) trait SortTcEnv<D: Dialect> {
+    fn sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D>;
+}
+
+/// The contexts that implement [`CheckedApi`], whose sort environment is that of the blanket impl.
+macro_rules! sort_tcenv_via_checked_api {
+    ($($ctx:ty),* $(,)?) => {$(
+        impl<D: Dialect> SortTcEnv<D> for $ctx {
+            #[inline]
+            fn sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
+                ScopedSortApi::<D>::get_sort_tcenv(self)
+            }
+        }
+    )*};
+}
+
+sort_tcenv_via_checked_api!(
+    Context<D>,
+    QuantifierContext<'_, '_, D>,
+    LetContext<'_, '_, D>,
+    ArmContext<'_, '_, '_, D>,
+    FunctionContext<'_, D>,
+    EachRecFunContext<'_, D>,
+);
+
+impl<D: Dialect> Context<D> {
     /// Create a context for building `define-fun` with a given output sort
     ///
     /// c.f. [Self::build_fun]
