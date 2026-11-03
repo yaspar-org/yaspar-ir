@@ -84,7 +84,7 @@ fn check_sig_indices(
 }
 
 /// Type-check a quantifier that we know is of the form `(_ bvX n)`.
-fn handle_special_identifiers_of_bv<Str, So, L, const D: Dialect>(
+fn handle_special_identifiers_of_bv<Str, So, L, D: Dialect>(
     qid: &alg::QualifiedIdentifier<Str, So>,
     cap: Captures,
     env: &mut TCEnvGen<L, D>,
@@ -145,7 +145,7 @@ where
 /// Type-check a qualified identifier (possibly with sort ascription) and return a typed term.
 ///
 /// Handles local variables, global constants, polymorphic symbols, and bitvector literals.
-pub(crate) fn typed_qualified_identifier<L, const D: Dialect>(
+pub(crate) fn typed_qualified_identifier<L, D: Dialect>(
     env: &mut TCEnvGen<L, D>,
     qid: QualifiedIdentifier,
     sort: Option<Sort>,
@@ -162,7 +162,7 @@ where
 ///
 /// A local variable or a bitvector literal has no symbol-table entry, so its signature is
 /// synthesized as a nullary signature of its sort.
-pub(crate) fn typed_qualified_identifier_sig<L, const D: Dialect>(
+pub(crate) fn typed_qualified_identifier_sig<L, D: Dialect>(
     env: &mut TCEnvGen<L, D>,
     qid: QualifiedIdentifier,
     sort: Option<Sort>,
@@ -297,7 +297,7 @@ where
 ///
 /// Return `Right(nt)` where `nt` is the potentially new term for the argument, or `Left(s)` if
 /// `t` should be rejected, where `s` is the actual sort.
-fn type_check_func_arg_with_implicit_coercion<L, const D: Dialect>(
+fn type_check_func_arg_with_implicit_coercion<L, D: Dialect>(
     env: &mut TCEnvGen<L, D>,
     t: &Term,
     expected: &Sort,
@@ -377,7 +377,7 @@ fn bv_len_apply<T: HasArenaAlt>(env: &mut T, out: &BvOutSort, params: &[UBig]) -
 }
 
 /// Type-check a bitvector function argument, unifying its length with the expected parameter.
-fn type_check_bv_func_arg_with_implicit_coercion<L, const D: Dialect>(
+fn type_check_bv_func_arg_with_implicit_coercion<L, D: Dialect>(
     env: &mut TCEnvGen<L, D>,
     t: &Term,
     expected: &BvInSort,
@@ -413,7 +413,7 @@ where
 ///
 /// Dispatches on the signature variant (`VarLenFunc`, `ParFunc`, `BvFunc`, etc.),
 /// validates argument sorts, performs sort unification, and returns the typed application term.
-fn type_check_with_func_sig<L, const D: Dialect>(
+fn type_check_with_func_sig<L, D: Dialect>(
     t: impl Display,
     env: &mut TCEnvGen<L, D>,
     f: WithMeta<&QualifiedIdentifier, &str>,
@@ -788,7 +788,7 @@ fn check_bv_sig_indices(
 /// Looks up the function's signature(s) in the symbol table and tries each one
 /// (for overloaded functions) until one succeeds. Delegates to [`type_check_with_func_sig`]
 /// for the actual per-signature checking.
-pub(crate) fn typed_app<L, const D: Dialect>(
+pub(crate) fn typed_app<L, D: Dialect>(
     env: &mut TCEnvGen<L, D>,
     f: QualifiedIdentifier,
     args: Vec<WithMeta<Term, String>>,
@@ -804,7 +804,7 @@ where
 
 /// Same as [`typed_app`], but also return the declared signature the application was checked
 /// against, which for an overloaded symbol is the candidate that accepted the arguments.
-pub(crate) fn typed_app_sig<'a, L, const D: Dialect>(
+pub(crate) fn typed_app_sig<'a, L, D: Dialect>(
     env: &mut TCEnvGen<'a, L, D>,
     f: QualifiedIdentifier,
     args: Vec<WithMeta<Term, String>>,

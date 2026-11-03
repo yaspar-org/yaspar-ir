@@ -43,19 +43,20 @@ pub use crate::raw::alg::{
 };
 pub use crate::raw::instance::*;
 use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};
+pub(crate) use checked::SortTcEnv;
 pub use checked::{CheckedApi, ScopedSortApi};
 use lazy_static::lazy_static;
 #[cfg(feature = "cache")]
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 
 #[cfg(feature = "cnf")]
 use crate::ast::cnf::{CNFCache, CNFEnv};
 #[cfg(feature = "cnf")]
 pub use crate::ast::cnf::{CNFConversion, partition_nnfs};
-use crate::ast::ctx::dialect::ATSLIB_SYMBOL_LIMIT;
-pub use crate::ast::ctx::dialect::{DEFAULT_DIALECT, DIALECT_ATSLIB, DIALECT_SMTLIB, Dialect};
+pub use crate::ast::ctx::dialect::{AtsLib, DefaultDialect, Dialect, IsAtsLib, IsSmtLib, SmtLib};
 use crate::statics::{AND, BITVEC, BV_RE, DISTINCT, EQ, IMPLIES, IS, ITE, NOT, OR, XOR};
 use crate::traits::AllocatableString;
 pub use crate::traits::Contains;
@@ -246,15 +247,17 @@ impl FunctionMeta {
 ///
 /// This is separated from [`ContextFrame`] so that it can be borrowed independently
 /// of the mutable declaration state.
-pub(crate) struct ContextMeta<const D: Dialect = DEFAULT_DIALECT> {
+pub(crate) struct ContextMeta<D: Dialect = DefaultDialect> {
     /// The name of the active logic (e.g. `"QF_LIA"`, `"ALL"`), or `None` if unset.
     pub(crate) logic: Option<String>,
     /// The set of theories enabled by the current logic (e.g. `Ints`, `Reals`, `Datatypes`).
     pub(crate) theories: &'static HashSet<Theory>,
+    /// The dialect, which is only a type: nothing of it is stored.
+    pub(crate) dialect: PhantomData<D>,
 }
 
 /// The checks on a symbol about to be declared, which depend on the logic only.
-impl<const D: Dialect> ContextMeta<D> {
+impl<D: Dialect> ContextMeta<D> {
     pub(crate) fn check_sym_chars(&self, sym: &Str) -> Result<()> {
         if sym.inner().contains(|c| !valid_symbol_char(c)) {
             Err(format!(
@@ -303,7 +306,7 @@ impl<const D: Dialect> ContextMeta<D> {
     }
 
     fn check_symbol_length(&self, sym: &Str) -> Result<()> {
-        if D == DIALECT_ATSLIB && sym.len() >= ATSLIB_SYMBOL_LIMIT {
+        if D::SYMBOL_LIMIT.is_some_and(|limit| sym.len() >= limit) {
             Err(format!("Symbol length {} is too long: {sym}", sym.len()))
         } else {
             Ok(())
@@ -355,7 +358,7 @@ impl<const D: Dialect> ContextMeta<D> {
 }
 
 /// Global context for the current session
-pub struct Context<const D: Dialect = DEFAULT_DIALECT> {
+pub struct Context<D: Dialect = DefaultDialect> {
     /// The memory arena for hash-consed allocation.
     pub(crate) arena: Arena,
     /// Logic metadata (logic name and enabled theories).
@@ -372,7 +375,7 @@ pub struct Context<const D: Dialect = DEFAULT_DIALECT> {
 
 pub(crate) type Result<T> = std::result::Result<T, String>;
 
-impl<const D: Dialect> Context<D> {
+impl<D: Dialect> Context<D> {
     /// Return the name of the logic; need to make sure the logic is set
     pub fn get_logic(&self) -> &str {
         self.meta.logic.as_ref().unwrap()
@@ -846,20 +849,20 @@ impl Default for Context {
     }
 }
 
-impl<const D: Dialect> Debug for Context<D> {
+impl<D: Dialect> Debug for Context<D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Context")
     }
 }
 
-impl<const D: Dialect> HasArena for Context<D> {
+impl<D: Dialect> HasArena for Context<D> {
     #[inline]
     fn arena(&mut self) -> &mut Arena {
         &mut self.arena
     }
 }
 
-impl<const D: Dialect> CheckedApi<D> for Context<D> {
+impl<D: Dialect> CheckedApi<D> for Context<D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {
         TCEnvGen::new(self, Default::default())
     }
@@ -882,7 +885,7 @@ impl<const D: Dialect> CheckedApi<D> for Context<D> {
 }
 
 #[cfg(feature = "cnf")]
-impl<T, const D: Dialect> CNFConversion<&mut Context<D>> for T
+impl<T, D: Dialect> CNFConversion<&mut Context<D>> for T
 where
     T: for<'a, 'b> CNFConversion<&'b mut CNFEnv<'a>>,
 {

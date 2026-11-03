@@ -18,6 +18,7 @@ use crate::statics::*;
 use crate::traits::Repr;
 use dashu::integer::UBig;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 #[inline]
 fn builtin(name: Str, sig: Sig) -> (Str, Vec<(Sig, FunctionMeta)>) {
@@ -43,7 +44,7 @@ impl Context {
     }
 }
 
-impl<const D: Dialect> Context<D> {
+impl<D: Dialect> Context<D> {
     fn default_sorts(arena: &mut Arena) -> HashMap<Str, SortDef> {
         let bool = arena.allocate_symbol(BOOL);
         HashMap::from([(bool, SortDef::Opaque(0))])
@@ -53,6 +54,7 @@ impl<const D: Dialect> Context<D> {
         ContextMeta {
             logic: None,
             theories: &EMP_SET,
+            dialect: PhantomData,
         }
     }
 
@@ -74,7 +76,7 @@ impl<const D: Dialect> Context<D> {
     }
 
     /// Create a new context to manipulate SMT in dialect `D`, e.g.
-    /// `Context::<DIALECT_ATSLIB>::new_dialect()`. [`Context::new`] creates one in the default
+    /// `Context::<AtsLib>::new_dialect()`. [`Context::new`] creates one in the default
     /// dialect.
     pub fn new_dialect() -> Self {
         let mut arena = Arena::new();

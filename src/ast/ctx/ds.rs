@@ -3,9 +3,10 @@
 
 use crate::allocator::CommandAllocator;
 use crate::ast::alg::VarBinding;
+use crate::ast::ctx::checked::SortTcEnv;
 use crate::ast::ctx::{Arena, Context, TCEnv};
+use crate::ast::ctx::{AtsLib, DefaultDialect, Dialect, SmtLib};
 use crate::ast::ctx::{Command, Sort, Str, TC};
-use crate::ast::ctx::{DEFAULT_DIALECT, Dialect};
 use crate::ast::{ScopedSortApi, SymbolQuote};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
@@ -30,13 +31,13 @@ use crate::traits::{AllocatableString, HasMutRef};
 /// let cmd = s_ctx.typed_define_sort(int).unwrap();
 /// assert_eq!(cmd.to_string(), "(define-sort MyInt () Int)");
 /// ```
-pub struct DefSortContext<'a, const D: Dialect = DEFAULT_DIALECT> {
+pub struct DefSortContext<'a, D: Dialect = DefaultDialect> {
     context: &'a mut Context<D>,
     name: Str,
     params: Vec<VarBinding<Str, ()>>,
 }
 
-impl<'a, const D: Dialect> DefSortContext<'a, D> {
+impl<'a, D: Dialect> DefSortContext<'a, D> {
     pub(crate) fn new<S>(
         context: &'a mut Context<D>,
         name: S,
@@ -78,13 +79,13 @@ impl<'a, const D: Dialect> DefSortContext<'a, D> {
     }
 }
 
-impl<const D: Dialect> HasArena for DefSortContext<'_, D> {
+impl<D: Dialect> HasArena for DefSortContext<'_, D> {
     fn arena(&mut self) -> &mut Arena {
         self.context.arena()
     }
 }
 
-impl<const D: Dialect> HasMutRef<Context<D>> for DefSortContext<'_, D> {
+impl<D: Dialect> HasMutRef<Context<D>> for DefSortContext<'_, D> {
     type RefMut<'a>
         = &'a mut Context<D>
     where
@@ -96,8 +97,9 @@ impl<const D: Dialect> HasMutRef<Context<D>> for DefSortContext<'_, D> {
     }
 }
 
-impl<const D: Dialect> ScopedSortApi<D> for DefSortContext<'_, D> {
-    fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
+impl<D: Dialect> SortTcEnv<D> for DefSortContext<'_, D> {
+    #[inline]
+    fn sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
         self.context
             .get_sort_tcenv()
             .convert_to_new_local(LocEnv::Cons {
@@ -106,3 +108,20 @@ impl<const D: Dialect> ScopedSortApi<D> for DefSortContext<'_, D> {
             })
     }
 }
+
+/// One impl per dialect, rather than one generic over `D`: a generic impl would overlap the
+/// blanket impl over [`CheckedApi`](crate::ast::CheckedApi), since another crate could implement
+/// `CheckedApi<D>` for this context with a `D` of its own; with the dialect named, only this crate
+/// could. Generic code uses [`SortTcEnv`] instead.
+macro_rules! impl_scoped_sort_api {
+    ($($d:ty),*) => {$(
+        impl ScopedSortApi<$d> for DefSortContext<'_, $d> {
+            #[inline]
+            fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), $d> {
+                self.sort_tcenv()
+            }
+        }
+    )*};
+}
+
+impl_scoped_sort_api!(SmtLib, AtsLib);

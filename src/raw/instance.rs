@@ -357,7 +357,7 @@ where
     }
 }
 
-impl<const D: Dialect> CommandAllocator<Str, Sort, Term, Command> for Context<D> {
+impl<D: Dialect> CommandAllocator<Str, Sort, Term, Command> for Context<D> {
     fn allocate_command(&mut self, c: ACommand<Str, Sort, Term>) -> Command {
         self.arena().allocate_command(c)
     }
