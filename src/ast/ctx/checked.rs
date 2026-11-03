@@ -55,10 +55,8 @@ use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::ds::DefSortContext;
 use crate::ast::ctx::dt::DatatypeContext;
 use crate::ast::ctx::fun::FunctionContext;
-use crate::ast::ctx::matching::ArmContext;
 use crate::ast::ctx::matching::MatchContext;
 use crate::ast::ctx::quantifier::QuantifierContext;
-use crate::ast::ctx::recs::EachRecFunContext;
 use crate::ast::ctx::recs::RecFunsContext;
 use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::ast::fv::is_closed;
@@ -473,45 +471,30 @@ pub trait ScopedSortApi<D: Dialect = DefaultDialect>: HasArena {
     }
 }
 
+/// The blanket impl covers the contexts for terms, which are marked `TermContext`.
+///
+/// The marker keeps it apart from the impls for the sort-only contexts ([`DefSortContext`] and
+/// [`DtDeclContext`](crate::ast::DtDeclContext)), which are generic over the dialect too: without it, the impls would overlap,
+/// as another crate could implement `CheckedApi<D>` for a sort-only context with a `D` of its own.
+/// The marker has no type parameters, so no other crate can implement it for one.
 impl<X, D: Dialect> ScopedSortApi<D> for X
 where
-    X: StrAllocator<Str = Str> + TermAllocator<Str, Sort, Term> + CheckedApi<D>,
+    X: StrAllocator<Str = Str> + TermAllocator<Str, Sort, Term> + CheckedApi<D> + TermContext,
 {
     fn get_sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
         self.get_tcenv().convert_to_empty_local()
     }
 }
 
-/// The environment for checking sorts in a builder context, in any dialect.
-///
-/// It is [`ScopedSortApi::get_sort_tcenv`], for code generic over the dialect: the sort-only
-/// contexts ([`DefSortContext`] and [`DtDeclContext`]) implement [`ScopedSortApi`] once per dialect,
-/// because a generic impl would overlap the blanket impl above, so `ScopedSortApi<D>` cannot be
-/// relied on for them when `D` is generic. Every context implements this trait for every `D`.
-pub(crate) trait SortTcEnv<D: Dialect> {
-    fn sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D>;
+mod term_context {
+    /// A builder context for terms: one that implements [`CheckedApi`](super::CheckedApi).
+    ///
+    /// Public in a private module, so that the public blanket impl of
+    /// [`ScopedSortApi`](super::ScopedSortApi) can name it, while no other crate can implement it.
+    pub trait TermContext {}
 }
 
-/// The contexts that implement [`CheckedApi`], whose sort environment is that of the blanket impl.
-macro_rules! sort_tcenv_via_checked_api {
-    ($($ctx:ty),* $(,)?) => {$(
-        impl<D: Dialect> SortTcEnv<D> for $ctx {
-            #[inline]
-            fn sort_tcenv(&mut self) -> TCEnv<'_, '_, (), D> {
-                ScopedSortApi::<D>::get_sort_tcenv(self)
-            }
-        }
-    )*};
-}
-
-sort_tcenv_via_checked_api!(
-    Context<D>,
-    QuantifierContext<'_, '_, D>,
-    LetContext<'_, '_, D>,
-    ArmContext<'_, '_, '_, D>,
-    FunctionContext<'_, D>,
-    EachRecFunContext<'_, D>,
-);
+pub(crate) use term_context::TermContext;
 
 impl<D: Dialect> Context<D> {
     /// Create a context for building `define-fun` with a given output sort

@@ -43,8 +43,9 @@ pub use crate::raw::alg::{
 };
 pub use crate::raw::instance::*;
 use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};
-pub(crate) use checked::SortTcEnv;
+pub(crate) use checked::TermContext;
 pub use checked::{CheckedApi, ScopedSortApi};
+pub(crate) use dialect::HasDialect;
 use lazy_static::lazy_static;
 #[cfg(feature = "cache")]
 use std::cell::RefCell;
@@ -861,6 +862,12 @@ impl<D: Dialect> HasArena for Context<D> {
         &mut self.arena
     }
 }
+
+impl<D: Dialect> HasDialect for Context<D> {
+    type D = D;
+}
+
+impl<D: Dialect> TermContext for Context<D> {}
 
 impl<D: Dialect> CheckedApi<D> for Context<D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {

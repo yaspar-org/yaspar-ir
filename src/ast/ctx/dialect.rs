@@ -105,4 +105,16 @@ mod sealed {
     impl Sealed for super::SmtLib {}
 
     impl Sealed for super::AtsLib {}
+
+    /// A builder context, which works in the dialect `D`.
+    ///
+    /// Public in a private module, like `Sealed`, so that public blanket impls can name it while no
+    /// other crate can implement it. Blanket impls over the builder contexts, e.g. of `Typecheck`,
+    /// get the dialect from here: a dialect that only appears in their bounds, as in
+    /// `C: ScopedSortApi<D>`, would be unconstrained.
+    pub trait HasDialect {
+        type D: super::Dialect;
+    }
 }
+
+pub(crate) use sealed::HasDialect;

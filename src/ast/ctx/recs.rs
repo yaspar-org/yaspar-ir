@@ -8,6 +8,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::checked::CheckedApi;
 use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
 use crate::ast::ctx::{DefaultDialect, Dialect};
+use crate::ast::ctx::{HasDialect, TermContext};
 use crate::ast::{FetchSort, LetContext, MatchContext, QuantifierContext, SymbolQuote, Term};
 use crate::containers::LocEnv;
 use crate::traits::{AllocatableString, HasMutRef};
@@ -299,6 +300,12 @@ impl<D: Dialect> HasMutRef<Context<D>> for EachRecFunContext<'_, D> {
         self.context
     }
 }
+
+impl<D: Dialect> HasDialect for EachRecFunContext<'_, D> {
+    type D = D;
+}
+
+impl<D: Dialect> TermContext for EachRecFunContext<'_, D> {}
 
 impl<D: Dialect> CheckedApi<D> for EachRecFunContext<'_, D> {
     fn get_tcenv(&mut self) -> TCEnv<'_, '_, Sort, D> {

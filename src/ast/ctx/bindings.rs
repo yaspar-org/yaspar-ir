@@ -6,6 +6,7 @@ use crate::ast::alg::VarBinding;
 use crate::ast::ctx::local::LocalContext;
 use crate::ast::ctx::{Arena, CheckedApi, Context, FetchSort, Result, TCEnv};
 use crate::ast::ctx::{DefaultDialect, Dialect};
+use crate::ast::ctx::{HasDialect, TermContext};
 use crate::ast::ctx::{Sort, Str, Term};
 use crate::ast::{MatchContext, QuantifierContext, TC};
 use crate::containers::LocEnv;
@@ -125,6 +126,12 @@ impl<D: Dialect> HasMutRef<Context<D>> for LetContext<'_, '_, D> {
         self.inner.context
     }
 }
+
+impl<D: Dialect> HasDialect for LetContext<'_, '_, D> {
+    type D = D;
+}
+
+impl<D: Dialect> TermContext for LetContext<'_, '_, D> {}
 
 impl<D: Dialect> CheckedApi<D> for LetContext<'_, '_, D> {
     #[inline]

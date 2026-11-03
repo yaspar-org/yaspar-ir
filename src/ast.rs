@@ -48,7 +48,7 @@ pub mod subst;
 
 pub use crate::allocator::*;
 
-use crate::ast::ctx::SortTcEnv;
+use crate::ast::ctx::HasDialect;
 pub use crate::ast::ctx::*;
 #[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::ImplicantEnv;
@@ -87,73 +87,46 @@ pub fn list_of_logics() -> &'static [&'static str] {
 /// Convenience alias: a [`TermRecursor`] specialized to the typed AST
 pub trait TypedTermRecursor: TermRecursor<Str, Sort, Term> {}
 
-/// Sorts and terms type-check in every builder context, in the dialect of its [`Context`].
-///
-/// One impl per context type, rather than one blanket over [`CheckedApi`] and [`ScopedSortApi`]:
-/// a blanket would have to name the dialect only in its bounds, which Rust does not allow.
-///
-/// Sorts go through `SortTcEnv` rather than [`ScopedSortApi`]: the sort-only contexts implement
-/// [`ScopedSortApi`] once per dialect, which code generic over the dialect cannot rely on.
-macro_rules! typecheck_sorts_in {
-    ($($ctx:ty),* $(,)?) => {$(
-        impl<D: Dialect> Typecheck<$ctx> for u::Sort {
-            type Out = Sort;
+/// Sorts type-check in every builder context, in the dialect of its [`Context`].
+impl<C> Typecheck<C> for u::Sort
+where
+    C: HasDialect + ScopedSortApi<C::D>,
+{
+    type Out = Sort;
 
-            fn type_check(&self, env: &mut $ctx) -> TC<Self::Out> {
-                let mut env = SortTcEnv::<D>::sort_tcenv(env);
-                self.type_check(&mut env)
-            }
-        }
+    fn type_check(&self, env: &mut C) -> TC<Self::Out> {
+        let mut env = env.get_sort_tcenv();
+        self.type_check(&mut env)
+    }
+}
 
-        impl<D: Dialect> Typecheck<$ctx> for Sort {
-            type Out = Sort;
+impl<C> Typecheck<C> for Sort
+where
+    C: HasDialect + ScopedSortApi<C::D>,
+{
+    type Out = Sort;
 
-            fn type_check(&self, env: &mut $ctx) -> TC<Self::Out> {
-                let mut env = SortTcEnv::<D>::sort_tcenv(env);
-                self.type_check(&mut env)
-            }
-        }
-    )*};
+    fn type_check(&self, env: &mut C) -> TC<Self::Out> {
+        let mut env = env.get_sort_tcenv();
+        self.type_check(&mut env)
+    }
 }
 
 /// If a context implements [CheckedApi], then it provides a type-checking environment [TCEnv],
 /// so terms can be type-checked in it.
-macro_rules! typecheck_terms_in {
-    ($($ctx:ty),* $(,)?) => {$(
-        impl<T, O, D: Dialect> Typecheck<$ctx> for T
-        where
-            T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort, D>, Out = O>,
-            O: 'static,
-        {
-            type Out = O;
+impl<C, T, O> Typecheck<C> for T
+where
+    C: HasDialect + StrAllocator<Str = Str> + CheckedApi<C::D>,
+    T: for<'a, 'b> Typecheck<TCEnv<'a, 'b, Sort, C::D>, Out = O>,
+    O: 'static,
+{
+    type Out = O;
 
-            fn type_check(&self, env: &mut $ctx) -> TC<Self::Out> {
-                let mut env = CheckedApi::<D>::get_tcenv(env);
-                self.type_check(&mut env)
-            }
-        }
-    )*};
+    fn type_check(&self, env: &mut C) -> TC<Self::Out> {
+        let mut env = env.get_tcenv();
+        self.type_check(&mut env)
+    }
 }
-
-typecheck_sorts_in!(
-    Context<D>,
-    QuantifierContext<'_, '_, D>,
-    LetContext<'_, '_, D>,
-    ArmContext<'_, '_, '_, D>,
-    FunctionContext<'_, D>,
-    EachRecFunContext<'_, D>,
-    DefSortContext<'_, D>,
-    DtDeclContext<'_, '_, D>,
-);
-
-typecheck_terms_in!(
-    Context<D>,
-    QuantifierContext<'_, '_, D>,
-    LetContext<'_, '_, D>,
-    ArmContext<'_, '_, '_, D>,
-    FunctionContext<'_, D>,
-    EachRecFunContext<'_, D>,
-);
 
 impl<T, O, D: Dialect> Typecheck<Context<D>> for Vec<T>
 where
