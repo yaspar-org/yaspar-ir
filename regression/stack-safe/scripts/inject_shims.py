@@ -132,29 +132,14 @@ FILE_SHIMS = {
         wf_sort(&[], s, &mut env, true)
     }
 """),
-    # a method: `use` cannot alias it, so each side is written out
-    "src/ast/ctx/checked.rs": """
-#[doc(hidden)]
-#[allow(dead_code, clippy::all)]
-pub(crate) mod __ssbench {
-    pub(crate) mod stacksafe {
-        use super::super::*;
-        pub(crate) fn scan(ctx: &mut crate::ast::Context, t: &Term) -> (bool, HashMap<Str, Term>) {
-            let mut acc = HashMap::new();
-            let ok = ctx.scan_named(t, &mut acc).is_ok();
-            (ok, acc)
-        }
+    "src/ast/ctx/named.rs": shim(["find_named_rec"], """
+    /// `find_named`: the label `no_named` reports, if any.
+    pub(crate) fn find(t: &Term) -> Option<Str> {
+        let mut finder = NamedFinder::default();
+        find_named_rec(t, &mut finder);
+        finder.found
     }
-    pub(crate) mod native {
-        use super::super::*;
-        pub(crate) fn scan(ctx: &mut crate::ast::Context, t: &Term) -> (bool, HashMap<Str, Term>) {
-            let mut acc = HashMap::new();
-            let ok = ctx.scan_named_orig(t, &mut acc).is_ok();
-            (ok, acc)
-        }
-    }
-}
-""",
+"""),
     "src/ast/letintro.rs": shim(["rename_locals", "binders_used", "printed", "layer", "wrap"], """
     /// The DAG of `t`, in post-order: each node and its children.
     pub(crate) fn dag_of(t: &Term) -> Vec<(Term, Vec<Term>)> {
@@ -318,10 +303,10 @@ pub(crate) mod __ssbench {
 REEXPORTS = {
     "src/ast/ctx/mod.rs": [
         "#[doc(hidden)] pub(crate) use dt::__ssbench as __ssbench_dt;",
-        "#[doc(hidden)] pub(crate) use checked::__ssbench as __ssbench_checked;",
+        "#[doc(hidden)] pub(crate) use named::__ssbench as __ssbench_named;",
     ],
     "src/ast.rs": [
-        "#[doc(hidden)] pub(crate) use ctx::{__ssbench_checked, __ssbench_dt};",
+        "#[doc(hidden)] pub(crate) use ctx::{__ssbench_dt, __ssbench_named};",
     ],
     "src/lib.rs": [
         "#[doc(hidden)] pub mod __ssbench;",
@@ -337,7 +322,7 @@ ROOT_SHIM = '''// Copyright Amazon.com, Inc. or its affiliates. All Rights Reser
 #![allow(missing_docs, private_interfaces, unnameable_types, clippy::all)]
 
 use crate::ast::{Context, Sort, SortSubst, Str, Term};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// State a call leaves behind (a memo cache, fresh-variable bookkeeping) that is not part of its
 /// answer, kept only so that dropping it happens outside the timed region.
@@ -372,8 +357,8 @@ macro_rules! side {
             pub fn wf_sort(ctx: &mut Context, s: &Sort) -> bool {
                 crate::ast::__ssbench_dt::$side::wf_sort_top(ctx, s)
             }
-            pub fn scan_named(ctx: &mut Context, t: &Term) -> (bool, HashMap<Str, Term>) {
-                crate::ast::__ssbench_checked::$side::scan(ctx, t)
+            pub fn find_named(t: &Term) -> Option<Str> {
+                crate::ast::__ssbench_named::$side::find(t)
             }
             pub fn letintro_dag(t: &Term) -> Vec<(Term, Vec<Term>)> {
                 crate::ast::letintro::__ssbench::$side::dag_of(t)

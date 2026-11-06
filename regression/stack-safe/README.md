@@ -54,15 +54,15 @@ Options, all set through the environment:
 The appended modules are needed because Rust privacy leaves the harness no other way in. Most
 covered functions, and therefore their `_orig` copies, are private to their module, and several
 take crate-private types (`CNFEnv`, `AEqCtx`, `PrintSpace`, …). Only code inside that module can
-call them. `ast::ctx` is itself private, hence the extra hop `ast::__ssbench_checked` /
-`ast::__ssbench_dt`.
+call them. `ast::ctx` is itself private, hence the extra hop `ast::__ssbench_dt` /
+`ast::__ssbench_named`.
 
 Each entry point is written once and compiled twice:
 
 - in `__ssbench::stacksafe`, the covered names are the rewritten functions;
 - in `__ssbench::native`, each is aliased to its `_orig` (`use f_orig as f`);
-- `Context::scan_named` is a method, which a `use` can't alias, so its native side calls
-  `scan_named_orig` directly.
+- a method, which a `use` can't alias (`Dag::visit` in `letintro.rs`), is called as
+  `visit_orig` on the native side.
 
 Where yaspar-ir has a public entry point, `stacksafe` calls that public API instead:
 

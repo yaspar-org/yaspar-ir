@@ -6,6 +6,7 @@
 use crate::allocator::{CommandAllocator, LocalVarAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::checked::CheckedApi;
+use crate::ast::ctx::named::no_named;
 use crate::ast::ctx::{Arena, Command, Context, FunctionDef, HasArena, Sig, Sort, Str, TC, TCEnv};
 use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::ast::ctx::{HasDialect, TermContext};
@@ -258,6 +259,7 @@ impl<'b, D: Dialect> EachRecFunContext<'b, D> {
 
     /// Create the function with the given body
     pub fn typed_function(mut self, body: Term) -> TC<()> {
+        no_named(&body)?;
         let sort = body.get_sort(&mut self);
         if sort != *self.output {
             return Err(format!(

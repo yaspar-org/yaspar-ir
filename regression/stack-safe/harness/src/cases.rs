@@ -219,12 +219,49 @@ fn datatypes(r: &mut Registry, d: &[usize], h: &[usize], w: &[usize]) {
     }
 }
 
-// ── ctx/checked.rs: a tail recursion ────────────────────────────────────────────
+// ── ctx/named.rs: a search that stops at the first label ─────────────────────────
 
 fn named(r: &mut Registry, d: &[usize]) {
-    // whether it succeeded, and every name with the term it names
-    pair!(r, "checked.scan_named", "named_chain", d, with_ctx(named_chain),
-        |(c, t), side| side::scan_named(c, t), eq);
+    // a label at the top is found at once, so the deep cases put it at the bottom, or have none
+    // and walk the whole term
+    let shapes: [(&'static str, fn(usize) -> Tm); 6] = [
+        ("named_chain", |n| {
+            let mut c = ctx();
+            let t = named_chain(&mut c, n);
+            (c, t)
+        }),
+        ("not_chain_named_leaf", |n| {
+            let mut c = ctx();
+            let p = bvar(&mut c, "p");
+            let a = c.allocate_symbol("a");
+            let leaf = c.annotated(p, vec![Attribute::Named(a)]);
+            let t = not_chain(&mut c, n, leaf);
+            (c, t)
+        }),
+        ("alt_chain", |n| {
+            let mut c = ctx();
+            let t = alt_chain(&mut c, n, false);
+            (c, t)
+        }),
+        ("pattern_chain", |n| {
+            let mut c = ctx();
+            let t = pattern_chain(&mut c, n);
+            (c, t)
+        }),
+        ("let_chain", |n| {
+            let (mut c, _) = script("(set-logic ALL)(declare-const x Int)");
+            let t = term(&mut c, &let_chain_src(n));
+            (c, t)
+        }),
+        ("match_chain", |n| {
+            let (mut c, _) = script(&format!("(set-logic ALL){LIST_DT}(declare-const l L)"));
+            let t = term(&mut c, &match_chain_src(n));
+            (c, t)
+        }),
+    ];
+    for (shape, build) in shapes {
+        pair!(r, "named.find_named", shape, d, build, |(_, t), side| side::find_named(t), eq);
+    }
 }
 
 // ── letintro.rs ──────────────────────────────────────────────────────────────────

@@ -56,6 +56,7 @@ use crate::ast::ctx::ds::DefSortContext;
 use crate::ast::ctx::dt::DatatypeContext;
 use crate::ast::ctx::fun::FunctionContext;
 use crate::ast::ctx::matching::MatchContext;
+use crate::ast::ctx::named::{no_named, top_labels};
 use crate::ast::ctx::quantifier::QuantifierContext;
 use crate::ast::ctx::recs::RecFunsContext;
 use crate::ast::ctx::{DefaultDialect, Dialect};
@@ -78,7 +79,6 @@ use crate::traits::{AllocatableString, Repr};
 use dashu::integer::{IBig, Sign, UBig};
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
-use yaspar_macros::stack_safe;
 
 /// The trait that represents checked APIs to construct terms.
 ///
@@ -574,26 +574,22 @@ impl<D: Dialect> Context<D> {
         dt_ctx.typed_declare_datatypes()
     }
 
-    /// Handle top-level named annotations in assertions
-    #[stack_safe]
+    /// Collect the named annotations of an assertion, each with the term it names.
+    ///
+    /// They may only form a chain at the top of the assertion, one per annotation (c.f.
+    /// [`top_labels`]), and their names must be fresh.
     fn scan_named(&mut self, t: &Term, acc: &mut HashMap<Str, Term>) -> TC<()> {
-        if let ATerm::Annotated(t, annos) = t.repr() {
-            for anno in annos {
-                if let Attribute::Named(name) = anno {
-                    if self.can_add_symbol(name).is_ok() && !acc.contains_key(name) {
-                        acc.insert(name.clone(), t.clone());
-                    } else {
-                        return Err(format!(
-                            "TC: named annotation {} cannot be added to the symbol table!",
-                            name.sym_quote()
-                        ));
-                    }
-                }
+        for (name, t) in top_labels(t)? {
+            if self.can_add_symbol(&name).is_ok() && !acc.contains_key(&name) {
+                acc.insert(name, t);
+            } else {
+                return Err(format!(
+                    "TC: named annotation {} cannot be added to the symbol table!",
+                    name.sym_quote()
+                ));
             }
-            self.scan_named(t, acc)
-        } else {
-            Ok(())
         }
+        Ok(())
     }
 
     /// Checked API for building an assertion [`Command`]
@@ -687,6 +683,7 @@ impl<D: Dialect> Context<D> {
         let mut ts = vec![];
         for assumption in assumptions {
             is_term_bool(self, &assumption)?;
+            no_named(&assumption)?;
             if !is_closed(&assumption) {
                 return Err(format!(
                     "TC: assumption {assumption} is expected to be a closed term!"
@@ -705,6 +702,7 @@ impl<D: Dialect> Context<D> {
         S: AllocatableString<Arena>,
     {
         let name = name.allocate(self.arena());
+        no_named(&body)?;
         let sort = body.get_sort(self);
         let def = FunctionDef {
             name: name.clone(),
@@ -725,6 +723,7 @@ impl<D: Dialect> Context<D> {
         S: AllocatableString<Arena>,
     {
         let name = name.allocate(self.arena());
+        no_named(&body)?;
         let sort = body.get_sort(self);
         if sort != s {
             return Err(format!(
@@ -750,6 +749,7 @@ impl<D: Dialect> Context<D> {
             return Err("get-value should contain at least one term!".into());
         }
         ts.iter().try_for_each(is_quantifier_free)?;
+        ts.iter().try_for_each(no_named)?;
         Ok(self.get_value(ts))
     }
 }
