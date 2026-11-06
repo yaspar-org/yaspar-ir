@@ -3,9 +3,8 @@
 
 //! Where `:named` labels may occur (#162).
 //!
-//! A label `(! t :named f)` defines `f` as `t` (SMT-LIB 2.7, §4.1.6). By decision of the
-//! specification (`Term.assertOk` and `Term.termOk` in `SmtLibSpec`), labels are `assert`'s alone,
-//! and only at its top: an asserted term may be a chain of annotations, each carrying exactly one
+//! A label `(! t :named f)` defines `f` as `t` (SMT-LIB 2.7, §4.1.6). By decision, labels are
+//! `assert`'s alone, and only at its top: an asserted term may be a chain of annotations, each carrying exactly one
 //! attribute, a `:named`, as in `(! (! φ :named a) :named b)`, over a term with no label in it.
 //! The terms of every other command have no label at all. The sort of a labelled term is not
 //! restricted.
