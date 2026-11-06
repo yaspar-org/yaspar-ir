@@ -1203,20 +1203,17 @@ fn test_named_annotations() {
             .is_err()
     );
 
-    // two named also works
-    UntypedAst
-        .parse_script_str(
-            "
+    // two named in one annotation are rejected
+    assert!(
+        UntypedAst
+            .parse_script_str(
+                "
         (assert (! (< x y) :named bar :named baz))",
-        )
-        .unwrap()
-        .type_check(&mut context)
-        .unwrap();
-
-    let t = context.typed_symbol("bar").unwrap();
-    assert!(t.get_sort(&mut context).is_bool());
-    let t = context.typed_symbol("baz").unwrap();
-    assert!(t.get_sort(&mut context).is_bool());
+            )
+            .unwrap()
+            .type_check(&mut context)
+            .is_err()
+    );
 
     // nested also works
     UntypedAst
@@ -1233,16 +1230,17 @@ fn test_named_annotations() {
     let t = context.typed_symbol("baz1").unwrap();
     assert!(t.get_sort(&mut context).is_bool());
 
-    // not top level :named has no effect
-    UntypedAst
-        .parse_script_str(
-            "
+    // not top level :named is rejected
+    assert!(
+        UntypedAst
+            .parse_script_str(
+                "
         (assert (distinct (! x :named xxx) y))",
-        )
-        .unwrap()
-        .type_check(&mut context)
-        .unwrap();
-
+            )
+            .unwrap()
+            .type_check(&mut context)
+            .is_err()
+    );
     assert!(context.typed_symbol("xxx").is_err());
 }
 
@@ -2119,4 +2117,100 @@ fn test_atslib_unsupported_operators() {
     // in SMT-LIB the names are not reserved outside their theory
     let elsewhere = "(set-logic QF_LIA)(declare-fun bvxor () Bool)";
     assert_eq!(check(false, elsewhere), Ok(()));
+}
+
+/// `:named` labels follow the specification's decision (#162): in `assert` only, as a chain at the
+/// top with one `:named` per annotation; in no other command; of any sort; with fresh names.
+#[test]
+fn test_named_annotations_only_at_top_of_assert() {
+    fn check(body: &str) -> TC<Vec<Command>> {
+        let script = format!(
+            "(set-logic ALL) (declare-const p Bool) (declare-const q Bool) (declare-const x Int) \
+             {body}"
+        );
+        UntypedAst
+            .parse_script_str(&script)
+            .unwrap()
+            .type_check(&mut Context::new())
+    }
+
+    // accepted, and the names are defined for the commands that follow
+    for body in [
+        "(assert (! p :named a)) (assert a)",
+        "(assert (! (! (and p q) :named a) :named b)) (assert (and a b))",
+        "(assert (! (! (! (or p q) :named a) :named b) :named c)) (assert (and a b c))",
+        "(assert (! (forall ((w Int)) (> w x)) :named a)) (assert a)",
+        // other annotations below the chain
+        "(assert (! (forall ((w Int)) (! (> w x) :pattern ((+ w 1)))) :named a))",
+    ] {
+        assert!(check(body).is_ok(), "{body}: {:?}", check(body));
+    }
+
+    // rejected: a label below the top of an assertion
+    for body in [
+        "(assert (and (! p :named a) true))",
+        "(assert (distinct (! x :named a) 0))",
+        "(assert (! (and (! p :named a) q) :named b))",
+        "(assert (not (! (! p :named a) :named b)))",
+        "(assert (forall ((w Int)) (! (> w 0) :named a)))",
+        "(assert (let ((y p)) (! y :named a)))",
+        "(assert (! (! p :named a) :foo))",
+        "(assert (forall ((w Int)) (! (> w x) :pattern ((! (+ w 1) :named a)))))",
+    ] {
+        let err = check(body).unwrap_err();
+        assert!(err.contains("only allowed at the top"), "{body}: {err}");
+    }
+
+    // rejected: a label sharing its annotation with another attribute
+    for body in [
+        "(assert (! p :named a :named b))",
+        "(assert (! p :foo :named a))",
+        "(assert (! (! p :named a :named b) :named c))",
+    ] {
+        let err = check(body).unwrap_err();
+        assert!(err.contains("only attribute"), "{body}: {err}");
+    }
+
+    // rejected: a label in any other command
+    for body in [
+        "(define-fun f () Bool (! p :named a))",
+        "(define-fun g ((y Int)) Bool (> (! x :named a) y))",
+        "(define-fun-rec h ((y Int)) Int (! y :named a))",
+        "(define-funs-rec ((h1 ((y Int)) Int) (h2 ((y Int)) Int)) (y (! (h1 y) :named a)))",
+        "(define-const c Int (! x :named a))",
+        "(check-sat-assuming ((! p :named a)))",
+        "(get-value ((! x :named a)))",
+    ] {
+        let err = check(body).unwrap_err();
+        assert!(err.contains("only allowed at the top"), "{body}: {err}");
+    }
+
+    // rejected: a name that is not fresh
+    for body in [
+        "(assert (! p :named q))",
+        "(assert (! (! p :named a) :named a))",
+        "(assert (! p :named a)) (assert (! q :named a))",
+    ] {
+        let err = check(body).unwrap_err();
+        assert!(err.contains("cannot be added"), "{body}: {err}");
+    }
+}
+
+/// Each label of a chain names the term it annotates, labels below it included.
+#[test]
+fn test_named_annotation_chain_defines_each_label() {
+    let mut context = Context::new();
+    let script = "(set-logic ALL) (declare-const x Int) (assert (! (! (> x 1) :named n) :named m))";
+    UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+    let n = context.typed_symbol("n").unwrap();
+    assert_eq!(n.gsubst_all(&mut context).to_string(), "(> x 1)");
+    let m = context.typed_symbol("m").unwrap();
+    assert_eq!(
+        m.gsubst_all(&mut context).to_string(),
+        "(! (> x 1) :named n)"
+    );
 }

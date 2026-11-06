@@ -5,6 +5,7 @@ use crate::allocator::{CommandAllocator, LocalVarAllocator};
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::matching::MatchContext;
+use crate::ast::ctx::named::no_named;
 use crate::ast::ctx::quantifier::QuantifierContext;
 use crate::ast::ctx::{
     Arena, CheckedApi, Context, FetchSort, SymbolQuote, TCEnv, TCEnvGen, TCLocal,
@@ -88,6 +89,7 @@ impl<'a, D: Dialect> FunctionContext<'a, D> {
 
     /// Create the function with the given body
     pub fn typed_define_fun(self, body: Term) -> TC<Command> {
+        no_named(&body)?;
         let sort = body.get_sort(self.context);
         if let Some(s) = self.output.as_ref()
             && sort != *s

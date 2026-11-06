@@ -29,6 +29,7 @@ mod fun;
 mod init;
 mod local;
 mod matching;
+mod named;
 mod quantifier;
 mod recs;
 mod stack;
