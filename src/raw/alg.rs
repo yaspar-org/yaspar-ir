@@ -44,7 +44,8 @@ pub enum Constant<Str> {
     /// numerals are non-negative
     Numeral(UBig),
     Decimal(DBig),
-    /// escape "" has been handled
+    /// escape "" has been handled; in a term of a dialect that reads `\u{…}` escapes (ATSLIB),
+    /// they are decoded too, so this holds the characters the literal denotes
     String(Str),
     /// #b
     Binary(Vec<u8>, usize),
