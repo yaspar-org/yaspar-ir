@@ -2120,7 +2120,7 @@ fn test_atslib_unsupported_operators() {
     assert_eq!(check(false, elsewhere), Ok(()));
 }
 
-/// `:named` labels follow the specification's decision (#162): in `assert` only, as a chain at the
+/// `:named` labels follow the decision (#162): in `assert` only, as a chain at the
 /// top with one `:named` per annotation; in no other command; of any sort; with fresh names.
 #[test]
 fn test_named_annotations_only_at_top_of_assert() {
@@ -2304,4 +2304,92 @@ fn test_unary_variadic_operators_checked_api() {
         .unwrap();
     assert!(context.typed_simp_app("concat", [b.clone()]).is_err());
     assert!(context.typed_simp_app("concat", [b.clone(), b]).is_ok());
+}
+
+/// The string constant of the assertion `(assert (= s <literal>))` after type checking.
+fn asserted_string<D: Dialect>(context: &mut Context<D>, literal: &str) -> String {
+    let script = format!("(set-logic ALL) (declare-const s String) (assert (= s \"{literal}\"))");
+    let cs = UntypedAst
+        .parse_script_str(&script)
+        .unwrap()
+        .type_check(context)
+        .unwrap();
+    let ACommand::Assert(t) = cs[2].repr() else {
+        panic!("not an assertion")
+    };
+    let ATerm::Eq(_, c) = t.repr() else {
+        panic!("not an equation")
+    };
+    let ATerm::Constant(Constant::String(s), _) = c.repr() else {
+        panic!("not a string")
+    };
+    s.inner().clone()
+}
+
+/// ATSLIB decodes `\u{…}` in the string literals of terms, and nothing else (#175); SMT-LIB keeps
+/// them as written.
+#[test]
+fn test_string_unicode_escapes() {
+    for (literal, atslib) in [
+        (r"\u{48}I", "HI"),
+        (r"\u{3bb}x", "λx"),
+        (r"\u{1F600}", "😀"),
+        (r"\u{5c}u{41}", r"\u{41}"),
+        (r"\u{22}\u{22}", r#""""#),
+        // kept as written
+        (r"\u0041", r"\u0041"),
+        (r"\u33yy", r"\u33yy"),
+        (r"\u{2CA", r"\u{2CA"),
+        (r"\u{30000}", r"\u{30000}"),
+        (r"\u{d800}", r"\u{d800}"),
+        (r"\n", r"\n"),
+    ] {
+        let mut ats = Context::<AtsLib>::new_dialect();
+        assert_eq!(asserted_string(&mut ats, literal), atslib, "{literal}");
+        let mut smt = Context::<SmtLib>::new_dialect();
+        assert_eq!(asserted_string(&mut smt, literal), literal, "{literal}");
+    }
+}
+
+/// The decoded literal is one character, as `str.len` sees it.
+#[test]
+fn test_string_unicode_escape_is_one_character() {
+    let mut ats = Context::<AtsLib>::new_dialect();
+    let script = r#"(set-logic ALL) (assert (= (str.len "\u{48}") 1)) (assert (= "\u{48}I" "HI"))"#;
+    let cs = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut ats)
+        .unwrap();
+    assert_eq!(cs[1].to_string(), r#"(assert (= (str.len "H") 1))"#);
+    assert_eq!(cs[2].to_string(), r#"(assert (= "HI" "HI"))"#);
+}
+
+/// Strings outside terms keep their escapes: those of `echo` and of attributes.
+#[test]
+fn test_string_unicode_escapes_only_in_terms() {
+    let mut ats = Context::<AtsLib>::new_dialect();
+    let script = r#"(set-logic ALL) (echo "\u{48}") (set-info :source "\u{48}")
+        (declare-const p Bool) (assert (! p :note "\u{48}"))"#;
+    let cs = UntypedAst
+        .parse_script_str(script)
+        .unwrap()
+        .type_check(&mut ats)
+        .unwrap();
+    assert_eq!(cs[1].to_string(), r#"(echo "\u{48}")"#);
+    assert_eq!(cs[2].to_string(), r#"(set-info :source "\u{48}")"#);
+    assert_eq!(cs[4].to_string(), r#"(assert (! p :note "\u{48}"))"#);
+}
+
+/// The checked API: `typed_escaped_string` decodes, for ATSLIB only; `typed_constant` takes the
+/// characters themselves.
+#[test]
+fn test_typed_escaped_string() {
+    let mut ats = Context::<AtsLib>::new_dialect();
+    ats.set_ctx_logic("ALL").unwrap();
+    let t = ats.typed_escaped_string(r"\u{48}IA").unwrap();
+    assert_eq!(t.to_string(), r#""HIA""#);
+    let raw = ats.allocate_str(r"\u{48}");
+    let t = ats.typed_constant(Constant::String(raw)).unwrap();
+    assert_eq!(t.to_string(), r#""\u{48}""#);
 }
