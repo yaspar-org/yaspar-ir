@@ -827,7 +827,8 @@ The crate gates optional functionality behind the following Cargo features:
 | `cvc5-parser` | Additionally enables the cvc5 `parser`. Takes effect only alongside `cvc5` or `cvc5-dynamic`. Alias of `cvc5-parser-1.4.x`. |
 | `cvc5-1.3.x`, `cvc5-dynamic-1.3.x`, `cvc5-parser-1.3.x` | The same for cvc5 1.3.x, through cvc5-rs 0.5, with the `cvc5` module's API as it was before cvc5 1.4.x support. |
 | `finite-set` | Theory of finite sets (`Set` sort and `set.*` operators) and the logics that include it. |
-| `all` | Convenience feature enabling `cnf`, `implicant-generation`, and `finite-set`. |
+| `const-array` | The non-standard constant arrays of z3 and cvc5, `((as const (Array X Y)) v)`, which ArraysEx does not have. |
+| `all` | Convenience feature enabling `cnf`, `implicant-generation`, `finite-set`, `no-pattern`, and `const-array`. |
 
 `cvc5` and `cvc5-dynamic` are mutually exclusive ways of linking the same cvc5 support — enable exactly one. The
 cvc5 1.3.x and 1.4.x features are mutually exclusive too, since both link a cvc5 library; enabling both is a compile

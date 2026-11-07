@@ -62,6 +62,8 @@
 //!   matching cvc5 release.
 //! - `finite-set` — enables the theory of finite sets (`Set` sort and `set.*` operators) and the
 //!   logics that include it.
+//! - `const-array` — enables the non-standard constant arrays of z3 and cvc5,
+//!   `((as const (Array X Y)) v)`, which ArraysEx does not have.
 //!
 //! # Modules
 //!
