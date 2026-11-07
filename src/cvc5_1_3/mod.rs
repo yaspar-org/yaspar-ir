@@ -1125,6 +1125,7 @@ mod cterm_cycle {
                 return Ok(fenv.ctx.ref_mut().matching(scrutinee, arms));
             }
             // ── Const array ──────────────────────────────────────────
+            #[cfg(feature = "const-array")]
             Kind::ConstArray => {
                 let value = conv_cterm(&ct.const_array_base(), fenv)?;
                 let arr_sort = conv_csort(&ct.sort(), fenv)?;
@@ -1132,6 +1133,12 @@ mod cterm_cycle {
                 let sym = rf.allocate_symbol(CONST);
                 let qid = QualifiedIdentifier::simple_sorted(sym, arr_sort.clone());
                 return Ok(rf.app(qid, vec![value], Some(arr_sort)));
+            }
+            #[cfg(not(feature = "const-array"))]
+            Kind::ConstArray => {
+                return Err(format!(
+                    "cvc5 constant array {ct} is not supported without the `const-array` feature"
+                ));
             }
 
             // ── Uninterpreted sort value (from models) ──────────────
@@ -2191,7 +2198,8 @@ where
     }
 }
 
-/// Test whether a cvc5 term is a constant
+/// Test whether a cvc5 term is a constant, as the base value of a constant array must be
+#[cfg(feature = "const-array")]
 fn is_const(t: &CTerm) -> bool {
     is_const_of(t.clone())
 }
@@ -2199,6 +2207,7 @@ fn is_const(t: &CTerm) -> bool {
 /// The body of [`is_const`], which owns the child it descends into rather than borrowing one built
 /// at the call site. The arguments are walked by an explicit loop rather than `all`, since the macro
 /// cannot see a call inside a closure.
+#[cfg(feature = "const-array")]
 #[stack_safe]
 fn is_const_of(t: CTerm) -> bool {
     // Built-in value types
@@ -2412,6 +2421,8 @@ impl<'tm, Ctx, D: Dialect> Cvc5Env<'tm, Ctx, D> {
         Ok(self.tm.mk_term(kind, &[bvl, cbody]).into())
     }
 
+    // only the const-array branch below mutates `cargs`
+    #[cfg_attr(not(feature = "const-array"), allow(unused_mut))]
     fn translate_app(
         &mut self,
         qid: &QualifiedIdentifier,
@@ -2427,6 +2438,7 @@ impl<'tm, Ctx, D: Dialect> Cvc5Env<'tm, Ctx, D> {
             return Ok(self.tm.mk_term(Kind::Neg, &cargs).into());
         }
         // Handle const array: ((as const (Array X Y)) v) → ConstArray
+        #[cfg(feature = "const-array")]
         if let Some(IdentifierKind::Const) = kind
             && cargs.len() == 1
         {
