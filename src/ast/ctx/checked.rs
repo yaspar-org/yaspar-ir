@@ -363,13 +363,18 @@ pub trait CheckedApi<D: Dialect = DefaultDialect>: HasArena {
         typed_not(&mut self.get_tcenv(), t, "")
     }
 
-    /// Checked API for building `(=> p1 p2 ... concl)`. All arguments must be `Bool`-sorted [`Term`]s.
+    /// Checked API for building `(=> p1 p2 ... concl)`. All arguments must be `Bool`-sorted [`Term`]s,
+    /// and there must be at least one premise: like every `:right-assoc` symbol, `=>` takes two
+    /// arguments at least.
     fn typed_implies<T>(&mut self, premises: T, concl: Term) -> TC<Term>
     where
         T: IntoIterator<Item = Term>,
     {
         let mut env = self.get_tcenv();
         let premises = check_all_bool_terms(premises, &mut env)?;
+        if premises.is_empty() {
+            return Err("TC: '=>' requires at least two arguments!".into());
+        }
         is_term_bool_alt(&mut env, &concl, "")?;
         Ok(env.arena_alt().implies(premises, concl))
     }
