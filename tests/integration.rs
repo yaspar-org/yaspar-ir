@@ -835,13 +835,14 @@ fn test_bv8() {
     let bool = context.bool_sort();
     let int = context.int_sort();
 
-    // concat is special
-    let t = UntypedAst
-        .parse_term_str("(concat foo)")
-        .unwrap()
-        .type_check(&mut context)
-        .unwrap();
-    assert_eq!(t.get_sort(&mut context), bv20);
+    // concat is special: it accumulates the lengths, and takes two arguments at least
+    assert!(
+        UntypedAst
+            .parse_term_str("(concat foo)")
+            .unwrap()
+            .type_check(&mut context)
+            .is_err()
+    );
 
     let t = UntypedAst
         .parse_term_str("(concat foo bar)")
@@ -2213,4 +2214,94 @@ fn test_named_annotation_chain_defines_each_label() {
         m.gsubst_all(&mut context).to_string(),
         "(! (> x 1) :named n)"
     );
+}
+
+/// Of the variadic operators, only `and` and `or` take a single argument (#168); every other
+/// `:left-assoc`, `:right-assoc`, `:chainable` and `:pairwise` operator takes two at least.
+#[test]
+fn test_unary_variadic_operators() {
+    let decls = "(set-logic ALL)(declare-const p Bool)(declare-const x Int)(declare-const r Real)\
+        (declare-const b (_ BitVec 4))(declare-const s String)(declare-const re RegLan)";
+    let check = |atslib: bool, t: &str| {
+        let script = format!("{decls}(assert {t})");
+        let cs = UntypedAst
+            .parse_script_str(&script)
+            .map_err(|e| format!("{e:?}"))?;
+        if atslib {
+            cs.type_check(&mut Context::<AtsLib>::new_dialect())
+        } else {
+            cs.type_check(&mut Context::<SmtLib>::new_dialect())
+        }
+        .map(|_| ())
+    };
+    for atslib in [false, true] {
+        // accepted: `(and p)` and `(or p)` are `p`; `-` is also negation
+        for t in ["(and p)", "(or p)", "(= (- x) x)", "(= (- r) r)"] {
+            assert!(check(atslib, t).is_ok(), "{t}: {:?}", check(atslib, t));
+        }
+        for t in [
+            "(xor p)",
+            "(=> p)",
+            "(= p)",
+            "(distinct p)",
+            "(= (+ x) x)",
+            "(= (* x) x)",
+            "(= (div x) x)",
+            "(= (/ r) r)",
+            "(< x)",
+            "(<= r)",
+            "(> x)",
+            "(>= r)",
+            "(= (bvand b) b)",
+            "(= (bvor b) b)",
+            "(= (bvadd b) b)",
+            "(= (bvmul b) b)",
+            "(= (concat b) b)",
+            "(= (str.++ s) s)",
+            "(str.< s)",
+            "(str.<= s)",
+            "(str.in_re s (re.++ re))",
+            "(str.in_re s (re.union re))",
+            "(str.in_re s (re.inter re))",
+            "(str.in_re s (re.diff re))",
+        ] {
+            assert!(
+                check(atslib, t).is_err(),
+                "{t} is accepted (atslib: {atslib})"
+            );
+        }
+        // two arguments are fine
+        assert!(check(atslib, "(= (concat b b) #x00)").is_ok());
+    }
+}
+
+/// The checked API agrees: `and` and `or` from one argument up, `=>` and `concat` from two.
+#[test]
+fn test_unary_variadic_operators_checked_api() {
+    let mut context = Context::new();
+    context.ensure_logic();
+    let p = context.typed_constant(Constant::Bool(true)).unwrap();
+    assert_eq!(
+        context.typed_and([p.clone()]).unwrap().to_string(),
+        "(and true)"
+    );
+    assert_eq!(
+        context.typed_or([p.clone()]).unwrap().to_string(),
+        "(or true)"
+    );
+    assert!(context.typed_xor([p.clone()]).is_err());
+    assert!(context.typed_distinct([p.clone()]).is_err());
+    assert!(context.typed_implies([], p.clone()).is_err());
+    assert_eq!(
+        context
+            .typed_implies([p.clone()], p.clone())
+            .unwrap()
+            .to_string(),
+        "(=> true true)"
+    );
+    let b = context
+        .typed_constant(Constant::Hexadecimal(vec![0], 1))
+        .unwrap();
+    assert!(context.typed_simp_app("concat", [b.clone()]).is_err());
+    assert!(context.typed_simp_app("concat", [b.clone(), b]).is_ok());
 }

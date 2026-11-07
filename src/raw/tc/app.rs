@@ -671,10 +671,11 @@ where
             // 3.0 overloaded functions don't take indices
             check_empty_index(f, app_string)?;
 
-            // 3.1 make sure all arguments have sort BitVec
-            if args.is_empty() {
+            // 3.1 make sure all arguments have sort BitVec; `concat` is binary, and like every
+            // `:left-assoc` symbol takes two arguments at least
+            if args.len() < 2 {
                 return Err(format!(
-                    "TC: function '{}'{f_meta} expects at least 1 argument(s)!",
+                    "TC: function '{}'{f_meta} expects at least 2 argument(s)!",
                     f.id_str().sym_quote(),
                 ));
             }
