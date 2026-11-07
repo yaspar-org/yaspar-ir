@@ -443,16 +443,14 @@ impl<D: Dialect> Context<D> {
         let sort_x = self.simple_sort("X");
         let sort_y = self.simple_sort("Y");
         let array_xy = self.array_sort(sort_x.clone(), sort_y.clone());
+        #[cfg(feature = "const-array")]
+        let vars_const = vars.clone();
 
-        let const_ = self.allocate_symbol(CONST);
         let select = self.allocate_symbol(SELECT);
         let store = self.allocate_symbol(STORE);
 
-        let default_symbol_table = HashMap::from([
-            builtin(
-                const_,
-                Sig::ParFunc(vec![], vars.clone(), vec![sort_y.clone()], array_xy.clone()),
-            ),
+        #[allow(unused_mut)]
+        let mut default_symbol_table = HashMap::from([
             builtin(
                 select,
                 Sig::ParFunc(
@@ -467,11 +465,22 @@ impl<D: Dialect> Context<D> {
                 Sig::ParFunc(
                     vec![],
                     vars,
-                    vec![array_xy.clone(), sort_x, sort_y],
-                    array_xy,
+                    vec![array_xy.clone(), sort_x, sort_y.clone()],
+                    array_xy.clone(),
                 ),
             ),
         ]);
+        // `((as const (Array X Y)) v)`, the array mapping every index to `v`: z3's and cvc5's, but
+        // not ArraysEx's, so only with the `const-array` feature
+        #[cfg(feature = "const-array")]
+        {
+            let const_ = self.allocate_symbol(CONST);
+            let (k, v) = builtin(
+                const_,
+                Sig::ParFunc(vec![], vars_const, vec![sort_y], array_xy),
+            );
+            default_symbol_table.insert(k, v);
+        }
         self.touch_symbol_table();
         self.stack
             .builtins_mut()

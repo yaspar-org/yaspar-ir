@@ -14,7 +14,7 @@ exclude = ["tests/resources", "tests/regression.rs", ".github", "regression"]
 
 [features]
 default = ["none"]
-all = ["cnf", "cache", "implicant-generation", "finite-set", "no-pattern"]
+all = ["cnf", "cache", "implicant-generation", "finite-set", "no-pattern", "const-array"]
 cnf = ["dep:sat-interface", "cache"]
 implicant-generation = ["cnf"]
 # cvc5 1.3.x through cvc5-rs 0.5 (the `cvc5` dependency)
@@ -33,6 +33,8 @@ cvc5 = ["cvc5-1.4.x"]
 cvc5-dep = ["cvc5-dep-1.4.x"]
 cvc5-dynamic = ["cvc5-dynamic-1.4.x"]
 finite-set = []
+# The non-standard constant arrays of z3 and cvc5, `((as const (Array X Y)) v)`: not in ArraysEx.
+const-array = []
 atslib = ["finite-set"]
 cache = []
 none = []
