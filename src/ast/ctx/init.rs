@@ -822,3 +822,56 @@ impl<D: Dialect> Context<D> {
         }
     }
 }
+
+#[cfg(test)]
+mod arity {
+    use crate::ast::ctx::{ALL_LOGICS, AtsLib, Context, Dialect, Sig, SmtLib};
+    use crate::traits::Contains;
+
+    /// The fewest arguments a variadic signature admits, if it is variadic.
+    fn variadic_minimum(sig: &Sig) -> Option<usize> {
+        match sig {
+            Sig::VarLenFunc(_, n, _) | Sig::BvVarLenFunc(_, _, n, _) => Some(*n),
+            // checked in `typed_app_sig`, which asks for two arguments at least
+            Sig::BvConcat => Some(2),
+            Sig::ParFunc(..) | Sig::BvFunc(..) | Sig::Rejected => None,
+        }
+    }
+
+    /// Every variadic theory operator a logic installs takes two arguments at least (#168):
+    /// `:left-assoc`, `:right-assoc`, `:chainable` and `:pairwise` alike. The one exception is `-`,
+    /// whose one-argument form is negation. `and` and `or`, which take one argument up, are no
+    /// theory symbols but core syntax, checked by the parser.
+    fn check<D: Dialect>(logic: &str) {
+        let mut context = Context::<D>::new_dialect();
+        context.set_ctx_logic(logic).unwrap();
+        let mut variadic = 0;
+        for (name, sigs) in context.stack.symbols() {
+            for (sig, _) in sigs {
+                let Some(min) = variadic_minimum(sig) else {
+                    continue;
+                };
+                variadic += 1;
+                let least = if name.inner() == "-" { 1 } else { 2 };
+                assert_eq!(
+                    min,
+                    least,
+                    "{logic}: {} takes {min} argument(s) up",
+                    name.inner()
+                );
+            }
+        }
+        assert!(
+            logic != "ALL" || variadic > 0,
+            "{logic}: no variadic operator was checked"
+        );
+    }
+
+    #[test]
+    fn variadic_theory_operators_take_two_arguments() {
+        for logic in ALL_LOGICS.iter() {
+            check::<SmtLib>(logic);
+        }
+        check::<AtsLib>("ALL");
+    }
+}
