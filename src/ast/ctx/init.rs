@@ -755,18 +755,24 @@ impl<D: Dialect> Context<D> {
         let singleton_sig = Sig::ParFunc(vec![], vars.clone(), vec![sort_x.clone()], set_x.clone());
         // (Set X) → Int
         let card_sig = Sig::ParFunc(vec![], vars.clone(), vec![set_x.clone()], int.clone());
-        let default_symbol_table = HashMap::from([
+        let mut default_symbol_table = HashMap::from([
             builtin(union, bin_set_sig.clone()),
             builtin(inter, bin_set_sig.clone()),
-            builtin(minus, bin_set_sig.clone()),
-            builtin(complement, un_set_sig),
             builtin(member, member_sig),
             builtin(subset, subset_sig),
             builtin(empty, const_set_sig.clone()),
-            builtin(universe, const_set_sig),
             builtin(singleton, singleton_sig),
-            builtin(card, card_sig),
         ]);
+        // ATSLIB's finite sets have the six operations above, and not these: they are left out,
+        // rather than reserved, as nothing standard declares them (#182)
+        if D::ALL_OPERATORS {
+            default_symbol_table.extend([
+                builtin(minus, bin_set_sig),
+                builtin(complement, un_set_sig),
+                builtin(universe, const_set_sig),
+                builtin(card, card_sig),
+            ]);
+        }
         self.touch_symbol_table();
         self.stack
             .builtins_mut()
