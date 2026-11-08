@@ -2393,3 +2393,30 @@ fn test_typed_escaped_string() {
     let t = ats.typed_constant(Constant::String(raw)).unwrap();
     assert_eq!(t.to_string(), r#""\u{48}""#);
 }
+
+/// ATSLIB's `set-logic` takes `ALL` and nothing else, spelled exactly so (#178); with no
+/// `set-logic`, the logic is `ALL`, set by the first command that needs one.
+#[test]
+fn test_atslib_set_logic() {
+    let run = |script: &str| {
+        let cs = UntypedAst.parse_script_str(script).unwrap();
+        cs.type_check(&mut Context::<AtsLib>::new_dialect())
+            .map(|_| ())
+    };
+    assert_eq!(run("(set-logic ALL)(declare-const x Int)"), Ok(()));
+    for logic in ["all", "All", "QF_LIA", "QF_BV", "LIA"] {
+        let err = run(&format!("(set-logic {logic})")).unwrap_err();
+        assert!(err.contains("ATSLIB only supports ALL"), "{logic}: {err}");
+    }
+    // no `set-logic`: `ALL`
+    let mut atslib = Context::<AtsLib>::new_dialect();
+    UntypedAst
+        .parse_script_str("(declare-const x Int)(declare-const s String)(assert (> x 0))")
+        .unwrap()
+        .type_check(&mut atslib)
+        .unwrap();
+    assert_eq!(atslib.get_logic(), "ALL");
+    // and then the logic is set
+    let err = run("(declare-const x Int)(set-logic ALL)").unwrap_err();
+    assert!(err.contains("has been set"), "{err}");
+}

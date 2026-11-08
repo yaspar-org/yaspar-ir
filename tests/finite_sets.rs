@@ -185,3 +185,53 @@ fn test_set_combined() {
 ",
     );
 }
+
+/// ATSLIB's finite sets, in `ALL`, have six operations (#182). The other four are left out: they
+/// are not declared, so a script may declare them itself.
+#[test]
+fn test_atslib_finite_set_operations() {
+    let run = |script: &str| {
+        let cs = UntypedAst.parse_script_str(script).unwrap();
+        cs.type_check(&mut Context::<AtsLib>::new_dialect())
+            .map(|_| ())
+    };
+    let decls = "(set-logic ALL)(declare-const a (Set Int))(declare-const b (Set Int))\
+        (declare-const x Int)";
+    for t in [
+        "(= (set.union a b) a)",
+        "(= (set.inter a b) a)",
+        "(set.member x a)",
+        "(set.subset a b)",
+        "(= (as set.empty (Set Int)) a)",
+        "(= (set.singleton x) a)",
+    ] {
+        let script = format!("{decls}(assert {t})");
+        assert_eq!(run(&script), Ok(()), "{t}");
+    }
+    for t in [
+        "(= (set.minus a b) a)",
+        "(= (set.complement a) a)",
+        "(= (as set.universe (Set Int)) a)",
+        "(= (set.card a) 0)",
+    ] {
+        let script = format!("{decls}(assert {t})");
+        let err = run(&script).unwrap_err();
+        assert!(
+            err.contains("not declared") || err.contains("does not exist"),
+            "{t}: {err}"
+        );
+    }
+    let declared =
+        format!("{decls}(declare-fun set.card ((Set Int)) Int)(assert (= (set.card a) 0))");
+    assert_eq!(run(&declared), Ok(()));
+}
+
+/// SMT-LIB keeps all ten operations.
+#[test]
+fn test_smtlib_finite_set_operations() {
+    let script = "(set-logic ALL)(declare-const a (Set Int))(declare-const b (Set Int))\
+        (assert (= (set.minus a b) (set.complement a)))\
+        (assert (= (set.card a) 0))(assert (= (as set.universe (Set Int)) a))";
+    let cs = UntypedAst.parse_script_str(script).unwrap();
+    assert!(cs.type_check(&mut Context::<SmtLib>::new_dialect()).is_ok());
+}
