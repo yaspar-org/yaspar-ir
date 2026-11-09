@@ -56,6 +56,7 @@ use yaspar_macros::stack_safe;
 
 mod app;
 pub(crate) mod matching;
+pub(crate) mod unicode;
 pub(crate) mod unif;
 
 /// Type-checking monad
@@ -866,7 +867,13 @@ where
     So: for<'a, 'b> Typecheck<TCEnv<'a, 'b, (), D>, Out = Sort>,
     T: Display + MetaData,
 {
-    let c = constant_conv(constant, env);
+    let c = match constant {
+        alg::Constant::String(s) if D::STRING_UNICODE_ESCAPES => {
+            let decoded = unicode::decode_unicode_escapes(s.inner());
+            Constant::String(env.arena.allocate_str(&decoded))
+        }
+        _ => constant_conv(constant, env),
+    };
     let t = typed_constant(env, c)
         .map_err(|e| format!("{e} for {current}{}", current.display_meta_data()))?;
     if let Some(sort) = sort {

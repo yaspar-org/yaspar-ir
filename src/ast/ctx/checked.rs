@@ -59,7 +59,7 @@ use crate::ast::ctx::matching::MatchContext;
 use crate::ast::ctx::named::{no_named, top_labels};
 use crate::ast::ctx::quantifier::QuantifierContext;
 use crate::ast::ctx::recs::RecFunsContext;
-use crate::ast::ctx::{DefaultDialect, Dialect};
+use crate::ast::ctx::{DefaultDialect, Dialect, IsAtsLib};
 use crate::ast::fv::is_closed;
 use crate::ast::utils::{is_quantifier_free, is_term_bool, is_term_bool_alt};
 use crate::ast::{
@@ -70,6 +70,7 @@ use crate::meta::WithMeta;
 use crate::raw::instance::{
     Command, Constant, Identifier, QualifiedIdentifier, Sig, Sort, Str, Term,
 };
+use crate::raw::tc::unicode::decode_unicode_escapes;
 use crate::raw::tc::{
     TC, TCEnv, Typecheck, sort_mismatch, tc_sort, typed_app, typed_app_sig, typed_constant,
     typed_distinct, typed_eq, typed_not, typed_qualified_identifier,
@@ -153,6 +154,23 @@ pub trait CheckedApi<D: Dialect = DefaultDialect>: HasArena {
     /// Build a typed [`Term`] from a [`Constant`] value.
     fn typed_constant(&mut self, c: Constant) -> TC<Term> {
         typed_constant(&mut self.get_tcenv(), c)
+    }
+
+    /// Build a string literal [`Term`] from its content as written in ATSLIB, whose `\u{…}`
+    /// escapes are decoded: `"\u{48}I"` is `"HI"`.
+    ///
+    /// `literal` is what is between the quotes, with `""` already read as `"`. Only the braced
+    /// forms `\u{d}` … `\u{ddddd}` are escapes; anything else, `\u0041` included, stays as written.
+    ///
+    /// c.f. [`Self::typed_constant`], whose [`Constant::String`] holds the characters themselves,
+    /// with no escape decoded.
+    fn typed_escaped_string(&mut self, literal: &str) -> TC<Term>
+    where
+        D: IsAtsLib,
+    {
+        let decoded = decode_unicode_escapes(literal);
+        let s = self.arena().allocate_str(&decoded);
+        self.typed_constant(Constant::String(s))
     }
 
     /// Build a numeral literal [`Term`] from a [`UBig`].
@@ -363,13 +381,18 @@ pub trait CheckedApi<D: Dialect = DefaultDialect>: HasArena {
         typed_not(&mut self.get_tcenv(), t, "")
     }
 
-    /// Checked API for building `(=> p1 p2 ... concl)`. All arguments must be `Bool`-sorted [`Term`]s.
+    /// Checked API for building `(=> p1 p2 ... concl)`. All arguments must be `Bool`-sorted [`Term`]s,
+    /// and there must be at least one premise: like every `:right-assoc` symbol, `=>` takes two
+    /// arguments at least.
     fn typed_implies<T>(&mut self, premises: T, concl: Term) -> TC<Term>
     where
         T: IntoIterator<Item = Term>,
     {
         let mut env = self.get_tcenv();
         let premises = check_all_bool_terms(premises, &mut env)?;
+        if premises.is_empty() {
+            return Err("TC: '=>' requires at least two arguments!".into());
+        }
         is_term_bool_alt(&mut env, &concl, "")?;
         Ok(env.arena_alt().implies(premises, concl))
     }
