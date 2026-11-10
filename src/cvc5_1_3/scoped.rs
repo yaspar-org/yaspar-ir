@@ -99,11 +99,6 @@ where
         self.map.insert(left, right);
     }
 
-    pub(super) fn remove_by_right(&mut self, right: &R) {
-        // a stale key in `added` is harmless: evicting it later finds nothing
-        self.map.remove_by_right(right);
-    }
-
     pub(super) fn right_values(&self) -> impl Iterator<Item = &R> {
         self.map.right_values()
     }
