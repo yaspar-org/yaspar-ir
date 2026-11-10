@@ -39,8 +39,8 @@ pub mod utils;
 use crate::ast::implicant::{ImplicantEnumerator, ImplicantIterator};
 use crate::containers::{LocEnv, sanitize_bindings, valid_symbol_char};
 pub use crate::raw::alg::{
-    Command as ACommand, Constant as AConstant, Index as AIndex, SortDef as ASortDef, StrQuote,
-    SymbolQuote, Term as ATerm,
+    Command as ACommand, Constant as AConstant, Index as AIndex, Sort as ASort,
+    SortDef as ASortDef, StrQuote, SymbolQuote, Term as ATerm,
 };
 pub use crate::raw::instance::*;
 use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};

@@ -18,8 +18,10 @@ use crate::ast::{
     SymbolQuote, Typecheck, alg,
 };
 use crate::containers::{LocEnv, Mapping};
+use crate::raw::alg::Sort as ASort;
 use crate::raw::instance::HasArena;
 use crate::statics::{IS, IS_DASH};
+use crate::traits::Repr;
 use crate::traits::{AllocatableString, Contains, HasMutRef};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
@@ -452,19 +454,24 @@ pub(crate) fn wf_sort<D: Dialect>(
     env: &mut TCEnv<'_, '_, (), D>,
     top: bool,
 ) -> bool {
-    if env.local.lookup(sort.sort_name()).is_some() {
+    let ASort::App(id, _) = sort.repr() else {
+        // a sort parameter, a bit-vector sort, or RegLan mentions no other sort
+        return true;
+    };
+    let name = &id.symbol;
+    if env.local.lookup(name).is_some() {
         // if the sort is a locally bound sort variable, then it's well-formed.
         true
     } else {
         // otherwise, we know sort name is globally bound.
-        if names.contains(sort.sort_name()) && !top {
+        if names.contains(name) && !top {
             // now we are checking a sort that is being defined
             // a datatype can only appear as a top symbol
             false
         } else {
             // the current sort is a top symbol; it could be an existing symbol or a datatype
             // we must check the well-formedness of all sub-symbols
-            for sub in &sort.1 {
+            for sub in sort.args() {
                 if !wf_sort(names, sub, env, false) {
                     return false;
                 }
@@ -491,12 +498,14 @@ pub(crate) fn check_dt_emptiness<D: Borrow<DatatypeDef>>(def_map: &HashMap<Str, 
                 continue;
             }
             let def = d.borrow();
-            let params = &def.dec.params;
             let has_base = def.dec.constructors.iter().any(|ctor| {
-                ctor.args.iter().all(|x| {
-                    let arg = x.2.sort_name();
-                    // sort parameter, or external/built-in sort, or already-proven datatype
-                    params.contains(arg) || !def_map.contains_key(arg) || nonempty.contains(arg)
+                ctor.args.iter().all(|x| match x.2.repr() {
+                    // external/built-in sort, or already-proven datatype
+                    ASort::App(id, _) => {
+                        !def_map.contains_key(&id.symbol) || nonempty.contains(&id.symbol)
+                    }
+                    // a sort parameter, or a built-in sort
+                    ASort::Var(..) | ASort::BitVec(_) | ASort::RegLan => true,
                 })
             });
             if has_base {

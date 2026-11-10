@@ -368,11 +368,71 @@ pub enum Attribute<Str, T> {
 
 /// Represent sorts in SMTLib
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Sort<Str, So>(pub Identifier<Str>, pub Vec<So>);
+pub enum Sort<Str, So> {
+    /// A sort parameter, bound by `par` or by a signature
+    Var(Str),
+    /// `(_ BitVec n)`
+    BitVec(UBig),
+    /// `RegLan`, the sort of regular expressions
+    RegLan,
+    /// A sort symbol applied to zero or more sorts.
+    ///
+    /// Any other indexed sort, e.g. `(_ Foo 3)`, is one too; the type checker rejects it.
+    App(Identifier<Str>, Vec<So>),
+}
+
+impl<Str, So> Sort<Str, So>
+where
+    Str: Contains<T = String>,
+{
+    /// The sort `id` applied to `args`; `(_ BitVec n)` is [Sort::BitVec], and `RegLan`
+    /// [Sort::RegLan].
+    pub fn app(id: Identifier<Str>, args: Vec<So>) -> Self {
+        if args.is_empty() {
+            if id.symbol.inner() == BITVEC
+                && let [Index::Numeral(n)] = id.indices.as_slice()
+            {
+                return Sort::BitVec(n.clone());
+            }
+            if id.is_simple(REGLAN) {
+                return Sort::RegLan;
+            }
+        }
+        Sort::App(id, args)
+    }
+}
+
+impl<Str, So> Sort<Str, So>
+where
+    Str: Contains<T = String>,
+{
+    /// The name of the sort: `BitVec`, `RegLan`, or the symbol of a sort parameter or an applied
+    /// sort.
+    pub fn sort_name(&self) -> &str {
+        match self {
+            Sort::Var(name) => name.inner(),
+            Sort::BitVec(_) => BITVEC,
+            Sort::RegLan => REGLAN,
+            Sort::App(id, _) => id.symbol.inner(),
+        }
+    }
+}
 
 impl<Str, So> Sort<Str, So> {
-    pub fn sort_name(&self) -> &Str {
-        &self.0.symbol
+    /// The arguments of an applied sort, and none otherwise.
+    pub fn args(&self) -> &[So] {
+        match self {
+            Sort::App(_, args) => args,
+            Sort::Var(_) | Sort::BitVec(_) | Sort::RegLan => &[],
+        }
+    }
+
+    /// Return the name if the current sort is a sort parameter
+    pub fn is_var(&self) -> Option<&Str> {
+        match self {
+            Sort::Var(name) => Some(name),
+            _ => None,
+        }
     }
 }
 
@@ -383,7 +443,7 @@ where
 {
     /// Check whether self is a nullary sort with the given name
     pub fn is_sort0(&self, name: &str) -> bool {
-        self.0.is_simple(name) && self.1.is_empty()
+        matches!(self, Sort::App(id, args) if id.is_simple(name) && args.is_empty())
     }
 
     /// Check whether it's Bool
@@ -408,25 +468,23 @@ where
 
     /// Check whether it's RegLan
     pub fn is_reglan(&self) -> bool {
-        self.is_sort0(REGLAN)
+        matches!(self, Sort::RegLan)
     }
 
     /// Return `(in sort, out sort)` if the current sort is an `Array`
     pub fn is_array(&self) -> Option<(So, So)> {
-        if self.0.is_simple(ARRAY) && self.1.len() == 2 {
-            Some((self.1[0].clone(), self.1[1].clone()))
-        } else {
-            None
+        match self {
+            Sort::App(id, args) if id.is_simple(ARRAY) && args.len() == 2 => {
+                Some((args[0].clone(), args[1].clone()))
+            }
+            _ => None,
         }
     }
 
     /// Return the size if the current sort is a `BitVec`
     pub fn is_bv(&self) -> Option<UBig> {
-        if !self.1.is_empty() || self.0.symbol.inner() != BITVEC || self.0.indices.len() != 1 {
-            return None;
-        }
-        match &self.0.indices[0] {
-            Index::Numeral(n) => Some(n.clone()),
+        match self {
+            Sort::BitVec(n) => Some(n.clone()),
             _ => None,
         }
     }
@@ -434,10 +492,9 @@ where
     /// Return the element sort if the current sort is a `Set`
     #[cfg(feature = "finite-set")]
     pub fn is_fset(&self) -> Option<So> {
-        if self.0.is_simple(SET) && self.1.len() == 1 {
-            Some(self.1[0].clone())
-        } else {
-            None
+        match self {
+            Sort::App(id, args) if id.is_simple(SET) && args.len() == 1 => Some(args[0].clone()),
+            _ => None,
         }
     }
 }
@@ -1390,7 +1447,9 @@ impl<Str, So> DrainChildren for Sort<Str, So> {
 
     fn drain_children(&mut self, sink: &mut Vec<So>) {
         // the parameters are the only children
-        sink.append(&mut self.1)
+        if let Sort::App(_, args) = self {
+            sink.append(args)
+        }
     }
 }
 

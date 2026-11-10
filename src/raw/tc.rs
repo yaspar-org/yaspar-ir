@@ -40,7 +40,7 @@ use crate::ast::{
 };
 use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::meta::WithMeta;
-use crate::statics::{BITVEC, BOOL, INT, REAL, STRING};
+use crate::statics::{BITVEC, BOOL, INT, REAL, REGLAN, STRING};
 use crate::traits::{AllocatableString, Contains};
 use crate::traits::{MetaData, Repr};
 pub(crate) use app::{
@@ -366,7 +366,7 @@ where
                 "TC: local sort {id}{meta} does not support indices!"
             ))
         } else {
-            Ok(env.arena.sort0(id.symbol))
+            Ok(env.arena.sort_var(id.symbol))
         }
     } else if let Some(d) = env.stack.get_sort(&id.symbol) {
         // a global sort
@@ -440,14 +440,47 @@ where
     So: Contains<T: Repr<T = alg::Sort<St, So>>> + Display,
     L: Mapping<Key = Str, Value = (LocalId, ())>,
 {
-    let args = &this.inner().repr().1;
-    let mut sorts: Vec<Sort> = Vec::with_capacity(args.len());
-    let mut i = 0usize;
-    while i < args.len() {
-        sorts.push(tc_sort_rec(&args[i], env)?);
-        i += 1;
+    match this.inner().repr() {
+        alg::Sort::Var(name) => tc_sort_var(env, name),
+        alg::Sort::BitVec(sz) => tc_bv_sort(env, sz),
+        alg::Sort::RegLan if env.meta.theories.contains(&Theory::Strings) => {
+            Ok(env.arena.reglan_sort())
+        }
+        alg::Sort::RegLan => Err(format!("TC: sort {REGLAN} is not declared!")),
+        alg::Sort::App(id, args) => {
+            let mut sorts: Vec<Sort> = Vec::with_capacity(args.len());
+            let mut i = 0usize;
+            while i < args.len() {
+                sorts.push(tc_sort_rec(&args[i], env)?);
+                i += 1;
+            }
+            tc_sort(env, id, sorts)
+        }
     }
-    tc_sort(env, &this.inner().repr().0, sorts)
+}
+
+/// Type-check a sort parameter, which must be in scope.
+fn tc_sort_var<S, L, D: Dialect>(env: &mut TCEnvGen<L, D>, name: &S) -> TC<Sort>
+where
+    L: Mapping<Key = Str>,
+    S: AllocatableString<Arena>,
+{
+    let meta = name.display_meta_data();
+    let sym = name.allocate(env.arena);
+    if env.local.lookup(&sym).is_some() {
+        Ok(env.arena.sort_var(sym))
+    } else {
+        Err(format!("TC: sort {sym}{meta} is not declared!"))
+    }
+}
+
+/// Type-check `(_ BitVec sz)`, which needs the theory of bit vectors.
+fn tc_bv_sort<L, D: Dialect>(env: &mut TCEnvGen<L, D>, sz: &UBig) -> TC<Sort> {
+    if env.meta.theories.contains(&Theory::Bitvectors) {
+        valid_bv_sort(env, sz.clone())
+    } else {
+        Err(format!("TC: sort (_ {BITVEC} {sz}) is not declared!"))
+    }
 }
 
 /// Build a typed [`Term`] from a [`Constant`], inferring its sort.
@@ -506,12 +539,13 @@ pub(crate) fn tc_determine_datatype_sort_map<L, D: Dialect>(
     meta: &str,
 ) -> TC<HashMap<Str, Vec<Sort>>> {
     let so = t.get_sort(env);
-    let dt = env.get_datatype_dec(so.sort_name()).map_err(|_| {
-        format!(
-            "TC: sort {} of the given term{meta} is not a datatype!",
-            so.sort_name()
-        )
-    })?;
+    let not_a_datatype = || format!("TC: sort {so} of the given term{meta} is not a datatype!");
+    let alg::Sort::App(id, _) = so.repr() else {
+        return Err(not_a_datatype());
+    };
+    let dt = env
+        .get_datatype_dec(&id.symbol)
+        .map_err(|_| not_a_datatype())?;
     // monomorphization instantiates the sort variables, if exist.
     let dt = dt.monomorphize(&so, env).map_err(|e| format!("TC: {e}"))?;
 

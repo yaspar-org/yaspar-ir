@@ -519,7 +519,6 @@ mod csort_forward {
         env: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<CSort<'tm>> {
         let s = sort.repr();
-        let name = s.sort_name();
         if let Some(n) = s.is_bv() {
             let w: u32 = n
                 .clone()
@@ -527,18 +526,30 @@ mod csort_forward {
                 .map_err(|_| format!("bv width too large: {n}"))?;
             return Ok(env.tm.mk_bv_sort(w));
         }
-        if !s.0.indices.is_empty() {
+        if sort.is_reglan() {
+            return Ok(env.tm.regexp_sort());
+        }
+        if let alg::Sort::App(id, _) = s
+            && !id.indices.is_empty()
+        {
             return Err(format!("unknown sort with indices: {s}"));
         }
+        let name = match s {
+            alg::Sort::Var(name) => name,
+            alg::Sort::App(id, _) => &id.symbol,
+            alg::Sort::BitVec(_) | alg::Sort::RegLan => {
+                return Err(format!("unsupported sort: {sort}"));
+            }
+        };
         if let Some(cs) = env.dt_sorts.get(name).cloned() {
-            if s.1.is_empty() {
+            if s.args().is_empty() {
                 return Ok(cs);
             }
             let params: Vec<CSort> = params_to_cvc5(sort, env)?;
             return Ok(cs.instantiate(&params));
         }
         if let Some(cs) = env.sort.get(name).cloned() {
-            if s.1.is_empty() {
+            if s.args().is_empty() {
                 return Ok(cs);
             }
             // Parametric sort: instantiate with translated parameters
@@ -557,19 +568,16 @@ mod csort_forward {
         if sort.is_string() {
             return Ok(env.tm.string_sort());
         }
-        if sort.is_reglan() {
-            return Ok(env.tm.regexp_sort());
-        }
         if sort.is_array().is_some() {
             // Through `repr()` rather than the `(Sort, Sort)` `is_array` clones, so that each
             // argument is a place in the arena and travels as a plain borrow.
-            let ci = sort_to_cvc5(&sort.repr().1[0], env)?;
-            let ce = sort_to_cvc5(&sort.repr().1[1], env)?;
+            let ci = sort_to_cvc5(&sort.repr().args()[0], env)?;
+            let ce = sort_to_cvc5(&sort.repr().args()[1], env)?;
             return Ok(env.tm.mk_array_sort(ci, ce));
         }
         #[cfg(feature = "finite-set")]
         if sort.is_fset().is_some() {
-            let ce = sort_to_cvc5(&sort.repr().1[0], env)?;
+            let ce = sort_to_cvc5(&sort.repr().args()[0], env)?;
             return Ok(env.tm.mk_set_sort(ce));
         }
 
@@ -581,11 +589,11 @@ mod csort_forward {
         sort: &Sort,
         env: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<Vec<CSort<'tm>>> {
-        let count: usize = sort.repr().1.len();
+        let count: usize = sort.repr().args().len();
         let mut out: Vec<CSort<'tm>> = Vec::with_capacity(count);
         let mut i = 0usize;
         while i < count {
-            out.push(sort_to_cvc5(&sort.repr().1[i], env)?);
+            out.push(sort_to_cvc5(&sort.repr().args()[i], env)?);
             i += 1;
         }
         Ok(out)
@@ -2288,8 +2296,9 @@ impl<'tm, Ctx, D: Dialect> Cvc5Env<'tm, Ctx, D> {
     /// instantiated term if the datatype is parametric. Returns `None` when the sort
     /// is not in the sort table, the datatype is not parametric, or no constructor matches.
     fn resolve_parametric_ctor(&mut self, name: &str, sort: &Sort) -> Res<Option<CTerm<'tm>>> {
-        let sort_name = sort.sort_name();
-        if let Some(base_sort) = self.sort.get(sort_name).cloned() {
+        if let alg::Sort::App(id, _) = sort.repr()
+            && let Some(base_sort) = self.sort.get(&id.symbol).cloned()
+        {
             let dt = base_sort.datatype();
             if dt.is_parametric() {
                 let crs = sort.to_cvc5(self)?;

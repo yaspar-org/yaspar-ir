@@ -100,10 +100,10 @@ where
 
 /// Compute the substitution for [Sort] based on a [DatatypeDec]
 pub fn find_sort_subst_from_datatype_dec(dec: &DatatypeDec, input: &Sort) -> TC<SortSubst> {
-    if dec.params.len() != input.1.len() {
+    if dec.params.len() != input.args().len() {
         return Err(format!(
             "Sort {input} has {} sub-sorts, but {} are required!",
-            input.1.len(),
+            input.args().len(),
             dec.params.len()
         ));
     }
@@ -111,7 +111,7 @@ pub fn find_sort_subst_from_datatype_dec(dec: &DatatypeDec, input: &Sort) -> TC<
     Ok(dec
         .params
         .iter()
-        .zip(input.1.iter())
+        .zip(input.args().iter())
         .map(|(a, b)| (a.clone(), Some(b.clone())))
         .collect())
 }
@@ -492,7 +492,7 @@ mod tests {
             .unwrap();
 
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
         let list_sym = ctx.allocate_symbol("List");
         let list_x = ctx.sort_n(list_sym, vec![x_sort]);
         let nil_sym = ctx.allocate_symbol("nil");
@@ -531,7 +531,7 @@ mod tests {
             .unwrap();
 
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
         let list_sym = ctx.allocate_symbol("List");
         let list_x = ctx.sort_n(list_sym, vec![x_sort.clone()]);
 
@@ -574,7 +574,7 @@ mod tests {
             .unwrap();
 
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
         let list_sym = ctx.allocate_symbol("List");
         let list_x = ctx.sort_n(list_sym, vec![x_sort]);
 
@@ -609,7 +609,7 @@ mod tests {
         ctx.ensure_logic();
 
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
 
         let var_sym = ctx.allocate_symbol("x");
         let var_id = ctx.new_local();
@@ -637,7 +637,7 @@ mod tests {
         ctx.ensure_logic();
 
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
 
         let var_sym = ctx.allocate_symbol("x");
         let var_id = ctx.new_local();
@@ -663,7 +663,7 @@ mod tests {
         ctx.ensure_logic();
 
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
 
         let var_sym = ctx.allocate_symbol("a");
         let var_id = ctx.new_local();
@@ -705,7 +705,7 @@ mod tests {
         ctx.ensure_logic();
 
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
 
         let a_sym = ctx.allocate_symbol("a");
         let a_id = ctx.new_local();
@@ -763,7 +763,7 @@ mod tests {
         // Build: (match (as nil (List X)) ((nil 0) ((cons h t) 1)))
         // using unchecked APIs with sort variable X
         let x_sym = ctx.allocate_symbol("X");
-        let x_sort = ctx.sort0(x_sym.clone());
+        let x_sort = ctx.sort_var(x_sym.clone());
         let list_sym = ctx.allocate_symbol("List");
         let list_x = ctx.sort_n(list_sym, vec![x_sort]);
 
