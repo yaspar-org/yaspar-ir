@@ -2998,3 +2998,67 @@ fn test_dialect_round_trip() {
     let back = ct.conv_from_cvc5(&mut env).unwrap();
     assert_eq!(&back, t);
 }
+
+// ── Shadowing of sorts in datatype declarations ──────────────
+
+/// A `par` parameter shadows a datatype of its name declared in the same group, which the other
+/// datatypes of the group still see.
+#[test]
+fn shadowing_param_shadows_datatype_in_group() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatypes ((X 0) (L 1) (Y 0))
+           (((mkx (vx Int)))
+            (par (X) ((nil) (cons (hd X) (tl (L X)))))
+            ((mky (vy X)))))
+         (declare-const l (L Bool))
+         (declare-const y Y)
+         (assert (hd l))
+         (assert (= (vx (vy y)) 1))
+         (check-sat)",
+    ));
+}
+
+/// A `par` parameter shadows a declared sort of its name, which is visible again afterwards.
+#[test]
+fn shadowing_param_shadows_declared_sort() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-sort X 0)
+         (declare-datatype L (par (X) ((nil) (cons (hd X) (tl (L X))))))
+         (declare-const l (L Int))
+         (declare-const x X)
+         (assert (= (hd l) 1))
+         (assert (= x x))
+         (check-sat)",
+    ));
+}
+
+/// Parameters of the same name in two declarations are two parameters.
+#[test]
+fn shadowing_params_of_two_declarations() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatype L (par (X) ((nil) (cons (hd X) (tl (L X))))))
+         (declare-datatype M (par (X) ((mk (m X)))))
+         (declare-const l (L Bool))
+         (declare-const v (M Int))
+         (assert (hd l))
+         (assert (= (m v) 1))
+         (check-sat)",
+    ));
+}
+
+/// A sort declared after a datatype whose parameter has its name is not shadowed.
+#[test]
+fn shadowing_param_out_of_scope() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-datatype L (par (X) ((nil) (cons (hd X) (tl (L X))))))
+         (declare-sort X 0)
+         (declare-const x X)
+         (declare-const l (L X))
+         (assert (= (hd l) x))
+         (check-sat)",
+    ));
+}

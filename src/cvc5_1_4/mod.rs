@@ -291,12 +291,12 @@ pub struct Cvc5Env<'tm, Ctx, D: Dialect = DefaultDialect> {
     named_assertions: ScopedMap<CTerm, Str>,
 
     // ── Forward direction (yaspar-ir → cvc5) ─────────────────────────────
-    /// Named sorts registered by `declare-sort` or datatype declarations.
+    /// Named sorts registered by `declare-sort` or datatype declarations. While a datatype
+    /// declaration is translated, an inner scope holds the datatypes being declared, and one more the
+    /// `par` parameters of the datatype at hand, which shadow them.
     sort: ScopedMap<Str, CSort>,
     /// Global symbols (constants, functions, constructors, selectors, testers).
     globals: ScopedMap<Str, CTerm>,
-    /// Datatype sorts mapping from names to their corresponding potentially polymorphic representations.
-    dt_sorts: HashMap<Str, CSort>,
     /// Forward-direction local (bound) variables, keyed by their yaspar-ir local id.
     locals: HashMap<LocalId, WithPattern>,
     /// Stack of bound-variable lists for scope management in quantifiers and match arms (forward direction).
@@ -329,7 +329,6 @@ where
             named_assertions: ScopedMap::new(),
             sort: ScopedMap::new(),
             globals: ScopedMap::new(),
-            dt_sorts: HashMap::new(),
             locals: HashMap::new(),
             scope_stack: vec![],
             sort_subst_map: ScopedMap::new(),
@@ -429,7 +428,6 @@ impl<'tm, Ctx, D: Dialect> Cvc5Env<'tm, Ctx, D> {
     /// continue with a fresh [`Solver`].
     pub fn reset_env(&mut self) {
         self.reset_assertion_stack();
-        self.dt_sorts.clear();
         self.locals.clear();
         self.scope_stack.clear();
         self.locals_from.clear();
@@ -536,35 +534,21 @@ mod csort_forward {
         env: &mut Cvc5Env<'tm, Ctx, D>,
     ) -> Res<CSort> {
         let s = sort.repr();
-        if let Some(n) = s.is_bv() {
-            let w: u32 = n
-                .clone()
-                .try_into()
-                .map_err(|_| format!("bv width too large: {n}"))?;
-            return Ok(env.tm.mk_bv_sort(w).res()?);
-        }
-        if sort.is_reglan() {
-            return Ok(env.tm.regexp_sort());
-        }
-        if let alg::Sort::App(id, _) = s
-            && !id.indices.is_empty()
-        {
-            return Err(format!("unknown sort with indices: {s}"));
-        }
         let name = match s {
+            alg::Sort::BitVec(n) => {
+                let w: u32 = n
+                    .clone()
+                    .try_into()
+                    .map_err(|_| format!("bv width too large: {n}"))?;
+                return Ok(env.tm.mk_bv_sort(w).res()?);
+            }
+            alg::Sort::RegLan => return Ok(env.tm.regexp_sort()),
             alg::Sort::Var(name) => name,
+            alg::Sort::App(id, _) if !id.indices.is_empty() => {
+                return Err(format!("unknown sort with indices: {s}"));
+            }
             alg::Sort::App(id, _) => &id.symbol,
-            alg::Sort::BitVec(_) | alg::Sort::RegLan => {
-                return Err(format!("unsupported sort: {sort}"));
-            }
         };
-        if let Some(cs) = env.dt_sorts.get(name).cloned() {
-            if s.args().is_empty() {
-                return Ok(cs);
-            }
-            let params: Vec<CSort> = params_to_cvc5(sort, env)?;
-            return Ok(cs.instantiate(&params).res()?);
-        }
         if let Some(cs) = env.sort.get(name).cloned() {
             if s.args().is_empty() {
                 return Ok(cs);
@@ -2869,22 +2853,20 @@ where
         defs: &[alg::DatatypeDef<Str, Sort>],
     ) -> Res<CommandResult> {
         let env = &mut *self.env;
-        // Pre-register unresolved sorts so self/mutual references resolve
+        // the datatypes being declared, as placeholders so that they can refer to themselves and to
+        // each other; the cache entries translated against them are evicted with them
+        let level = env.sort.level();
+        env.sort.push(1);
+        env.sort_cache.push(1);
         for def in defs {
             let arity = def.dec.params.len();
             let us = env.tm.mk_unresolved_dt_sort(&def.name, arity);
-            env.dt_sorts.insert(def.name.clone(), us);
+            env.sort.insert(def.name.clone(), us);
         }
         let result = Self::build_dt_decls(env, defs);
-        // Evict stale sort_cache entries that were cached against unresolved
-        // placeholder sorts during datatype construction. Without this,
-        // later sort lookups hit the cache and return the unresolved sort
-        // object instead of the resolved one, causing sort identity mismatches.
-        let stale: Vec<CSort> = env.dt_sorts.values().cloned().collect();
-        env.dt_sorts.clear();
-        for cs in stale {
-            env.sort_cache.remove_by_right(&cs);
-        }
+        env.sort_cache.pop(1);
+        // and a parameter scope an error left behind
+        env.sort.pop(env.sort.level() - level);
         let decls = result?;
         if decls.len() == 1 {
             let cs = env.tm.mk_dt_sort(&decls[0]).res()?;
@@ -2908,8 +2890,9 @@ where
         for def in defs {
             let params = &def.dec.params;
             let cvc5_params: Vec<CSort> = params.iter().map(|p| env.tm.mk_param_sort(p)).collect();
+            env.sort.push(1);
             for (p, cs) in params.iter().zip(&cvc5_params) {
-                env.dt_sorts.insert(p.clone(), cs.clone());
+                env.sort.insert(p.clone(), cs.clone());
             }
             let mut dt_decl = if cvc5_params.is_empty() {
                 env.tm.mk_dt_decl(&def.name, false)
@@ -2926,9 +2909,7 @@ where
                 }
                 dt_decl.add_constructor(&ctor_decl).res()?;
             }
-            for p in params {
-                env.dt_sorts.remove(p);
-            }
+            env.sort.pop(1);
             decls.push(dt_decl);
         }
         Ok(decls)
