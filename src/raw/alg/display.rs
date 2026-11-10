@@ -38,7 +38,9 @@
 //! round, so a term that mentions a sort costs one nested driver, not one per level.
 
 use crate::raw::alg::{self, StrQuote, SymbolQuote};
-use crate::statics::{ADD, AND, BITVEC, DISTINCT, EQ, IMPLIES, ITE, MUL, NOT, OR, SUB, XOR};
+use crate::statics::{
+    ADD, AND, BITVEC, DISTINCT, EQ, IMPLIES, ITE, MUL, NOT, OR, REGLAN, SUB, XOR,
+};
 use crate::traits::{Contains, Repr};
 use dashu::base::Sign;
 use num_traits::Signed;
@@ -715,18 +717,26 @@ where
     St: SymbolQuote<String>,
     So: Contains<T: Repr<T = alg::Sort<St, So>>>,
 {
-    if node.1.is_empty() {
-        write_identifier(&node.0, w)
-    } else {
-        w.open();
-        write_identifier(&node.0, w)?;
-        let mut i = 0usize;
-        while i < node.1.len() {
-            write_sort(node.1[i].inner().repr(), w)?;
-            i += 1;
+    match node {
+        alg::Sort::Var(name) => w.leaf(name.sym_quote()),
+        alg::Sort::BitVec(n) => w.group(|w| {
+            w.leaf(Token::Underscore.to_string())?;
+            w.leaf(BITVEC)?;
+            w.leaf(n.to_string())
+        }),
+        alg::Sort::RegLan => w.leaf(REGLAN),
+        alg::Sort::App(id, args) if args.is_empty() => write_identifier(id, w),
+        alg::Sort::App(id, _) => {
+            w.open();
+            write_identifier(id, w)?;
+            let mut i = 0usize;
+            while i < node.args().len() {
+                write_sort(node.args()[i].inner().repr(), w)?;
+                i += 1;
+            }
+            w.close();
+            Some(())
         }
-        w.close();
-        Some(())
     }
 }
 

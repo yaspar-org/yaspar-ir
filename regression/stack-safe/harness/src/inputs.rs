@@ -309,7 +309,7 @@ pub fn wide_sort(ctx: &mut Context, width: usize, leaf: Sort) -> Sort {
 /// A sort variable `X`, for unification.
 pub fn sort_var(ctx: &mut Context) -> (Str, Sort) {
     let x = ctx.allocate_symbol("X");
-    let s = ctx.sort_n(x.clone(), vec![]);
+    let s = ctx.sort_var(x.clone());
     (x, s)
 }
 

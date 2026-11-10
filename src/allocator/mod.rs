@@ -16,7 +16,8 @@
 //! constructions (e.g. `int_sort()`, `bool_sort()`, `bv_sort(len)`, `array_sort(idx, elem)`).
 
 use crate::raw::alg::*;
-use crate::statics::{ARRAY, BITVEC, BOOL, INT, REAL, REGLAN, SET, STRING};
+use crate::statics::{ARRAY, BOOL, INT, REAL, SET, STRING};
+use crate::traits::Contains;
 use dashu::integer::UBig;
 use paste::paste;
 use yaspar::ast::Keyword;
@@ -89,8 +90,17 @@ pub trait StrAllocator {
 pub trait SortAllocator<Str, So> {
     fn allocate_sort(&mut self, s: Sort<Str, So>) -> So;
 
-    fn sort(&mut self, id: Identifier<Str>, ss: Vec<So>) -> So {
-        self.allocate_sort(Sort(id, ss))
+    /// The sort `id` applied to `ss`; `(_ BitVec n)` is a bit-vector sort.
+    fn sort(&mut self, id: Identifier<Str>, ss: Vec<So>) -> So
+    where
+        Str: Contains<T = String>,
+    {
+        self.allocate_sort(Sort::app(id, ss))
+    }
+
+    /// The sort parameter `s`
+    fn sort_var(&mut self, s: Str) -> So {
+        self.allocate_sort(Sort::Var(s))
     }
 
     fn sort0(&mut self, s: Str) -> So {
@@ -98,11 +108,12 @@ pub trait SortAllocator<Str, So> {
     }
 
     fn sort_n(&mut self, s: Str, ss: Vec<So>) -> So {
-        self.allocate_sort(Sort(Identifier::simple(s), ss))
+        self.allocate_sort(Sort::App(Identifier::simple(s), ss))
     }
 
+    /// The sort `s` applied to its sort parameters `ss`
     fn sort_n_params(&mut self, s: Str, ss: Vec<Str>) -> So {
-        let params = ss.into_iter().map(|s| self.sort0(s)).collect();
+        let params = ss.into_iter().map(|s| self.sort_var(s)).collect();
         self.sort_n(s, params)
     }
 }
@@ -205,27 +216,22 @@ pub trait ObjectAllocatorExt<So, T>:
     }
 
     fn reglan_sort(&mut self) -> So {
-        self.simple_sort(REGLAN)
+        self.allocate_sort(Sort::RegLan)
     }
 
     fn array_sort(&mut self, from: So, to: So) -> So {
         let arr = self.allocate_symbol(ARRAY);
-        self.allocate_sort(Sort(Identifier::simple(arr), vec![from, to]))
+        self.allocate_sort(Sort::App(Identifier::simple(arr), vec![from, to]))
     }
 
     fn bv_sort(&mut self, len: UBig) -> So {
-        let symbol = self.allocate_symbol(BITVEC);
-        let id = Identifier {
-            symbol,
-            indices: vec![Index::Numeral(len)],
-        };
-        self.sort(id, vec![])
+        self.allocate_sort(Sort::BitVec(len))
     }
 
     /// Return the sort of a finite set given the element sort.
     fn fset_sort(&mut self, elem: So) -> So {
         let sym = self.allocate_symbol(SET);
-        self.allocate_sort(Sort(Identifier::simple(sym), vec![elem]))
+        self.allocate_sort(Sort::App(Identifier::simple(sym), vec![elem]))
     }
 
     /// Return a symbol of sort Bool

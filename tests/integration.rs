@@ -2420,3 +2420,67 @@ fn test_atslib_set_logic() {
     let err = run("(declare-const x Int)(set-logic ALL)").unwrap_err();
     assert!(err.contains("has been set"), "{err}");
 }
+
+/// Sorts have cases: a sort parameter is a `Var` with the id of its binder, `(_ BitVec n)` is
+/// `BitVec`, `RegLan` is `RegLan`, and any other sort is an `App`.
+#[test]
+fn test_sort_cases() {
+    let mut context = Context::new();
+    context.ensure_logic();
+    let parse =
+        |context: &mut Context, s: &str| UntypedAst.parse_sort_str(s).unwrap().type_check(context);
+    let bv = parse(&mut context, "(_ BitVec 4)").unwrap();
+    assert!(matches!(bv.repr(), ASort::BitVec(n) if *n == UBig::from(4u8)));
+    assert_eq!(bv.to_string(), "(_ BitVec 4)");
+    let reglan = parse(&mut context, "RegLan").unwrap();
+    assert!(matches!(reglan.repr(), ASort::RegLan) && reglan.is_reglan());
+    let array = parse(&mut context, "(Array Int (_ BitVec 8))").unwrap();
+    assert!(
+        matches!(array.repr(), ASort::App(id, args) if id.symbol.inner() == "Array" && args.len() == 2)
+    );
+    // other indexed sorts are applications, which the type checker rejects
+    assert!(parse(&mut context, "(_ Foo 3)").is_err());
+    assert!(parse(&mut context, "(_ BitVec foo)").is_err());
+    assert!(parse(&mut context, "(_ BitVec 4 4)").is_err());
+
+    // parameters: a field of a parameter's sort is that parameter's `Var`
+    UntypedAst
+        .parse_script_str(
+            "(declare-datatype L (par (X) ((nil) (cons (hd X) (tl (L X))))))\
+             (declare-datatype P (par (X Y) ((pair (fst X) (snd Y)))))\
+             (define-sort M (X) (Array X X))\
+             (declare-const m (M Int))",
+        )
+        .unwrap()
+        .type_check(&mut context)
+        .unwrap();
+    for (dt, field, param) in [("L", 0, "X"), ("P", 0, "X"), ("P", 1, "Y")] {
+        let dt_sym = context.allocate_symbol(dt);
+        let ASortDef::Datatype(dec) = context.get_sort_def(&dt_sym).unwrap() else {
+            panic!("{dt} is not a datatype")
+        };
+        let ctor = dec.constructors.last().unwrap();
+        let name = ctor.args[field].2.is_var().expect("a sort parameter");
+        assert_eq!(name.inner(), param, "{dt}");
+        assert!(dec.params.contains(name), "{dt}");
+    }
+    // `(L X)` is an application to the `Var`
+    let dt_sym = context.allocate_symbol("L");
+    let ASortDef::Datatype(dec) = context.get_sort_def(&dt_sym).unwrap() else {
+        panic!("L is not a datatype")
+    };
+    let tl = &dec.constructors.last().unwrap().args[1].2;
+    assert!(matches!(tl.repr(), ASort::App(_, args) if args[0].is_var().is_some()));
+    // the alias's parameters are substituted away
+    let m = context.typed_symbol("m").unwrap();
+    assert_eq!(m.get_sort(&mut context).to_string(), "(Array Int Int)");
+}
+
+/// `RegLan` needs the theory of strings.
+#[test]
+fn test_reglan_needs_strings() {
+    let cs = UntypedAst
+        .parse_script_str("(set-logic QF_LIA)(declare-fun f (RegLan) Int)")
+        .unwrap();
+    assert!(cs.type_check(&mut Context::new()).is_err());
+}

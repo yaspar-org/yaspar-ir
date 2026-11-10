@@ -3,6 +3,7 @@
 
 use crate::allocator::SortAllocator;
 use crate::ast::{HasArenaAlt, Sort, Str, TC};
+use crate::raw::alg::Sort as ASort;
 use crate::traits::Repr;
 use std::collections::HashMap;
 use yaspar_macros::stack_safe;
@@ -17,15 +18,17 @@ pub type SortSubst = HashMap<Str, Option<Sort>>;
 #[stack_safe]
 pub fn sort_unification(subst: &mut SortSubst, expected: &Sort, ground: &Sort) -> TC<bool> {
     // 1. if [expected] has arity > 0, then it's not possible for [expected] itself to be parametric
-    if expected.1.is_empty() {
+    let (es, gs) = (expected.args(), ground.args());
+    if es.is_empty() {
         // 2. in this case, it is possible for expected to be a variable, so we must check it
-        let esymb = &expected.repr().0.symbol;
-        if let Some(v) = subst.get(esymb) {
+        if let Some(name) = expected.is_var()
+            && let Some(v) = subst.get_mut(name)
+        {
             // 3. then it is a variable,
             match v {
                 None => {
                     // 3.1. but this variable is not unified, so we unify it with a ground type
-                    subst.insert(esymb.clone(), Some(ground.clone()));
+                    *v = Some(ground.clone());
                     Ok(true)
                 }
                 Some(v) => Ok(*v == *ground), // otherwise, we must make sure the unified sort matches with [ground]
@@ -34,7 +37,7 @@ pub fn sort_unification(subst: &mut SortSubst, expected: &Sort, ground: &Sort) -
             // 3. then expected and ground must be equal
             Ok(*expected == *ground)
         }
-    } else if expected.1.len() != ground.1.len() {
+    } else if es.len() != gs.len() {
         Err(format!(
             "TC: sort mismatch: {} and {} cannot be unified!",
             ground, expected,
@@ -42,8 +45,8 @@ pub fn sort_unification(subst: &mut SortSubst, expected: &Sort, ground: &Sort) -
     } else {
         // 2. [expected] and [ground]'s sort parameters are recursively unified
         let mut i = 0usize;
-        while i < expected.1.len() {
-            if !sort_unification(subst, &expected.1[i], &ground.1[i])? {
+        while i < es.len() {
+            if !sort_unification(subst, &expected.args()[i], &ground.args()[i])? {
                 return Ok(false);
             }
             i += 1;
@@ -67,21 +70,21 @@ pub fn subst_missed_vars(subst: &SortSubst) -> Vec<Str> {
 
 #[stack_safe]
 pub(crate) fn apply_subst<A: HasArenaAlt>(arena: &mut A, subst: &SortSubst, s: &Sort) -> Sort {
-    if s.1.is_empty() {
-        let sym = &s.repr().0.symbol;
-        if let Some(Some(v)) = subst.get(sym) {
-            v.clone()
-        } else {
-            s.clone()
+    match s.repr() {
+        ASort::Var(name) => match subst.get(name) {
+            Some(Some(v)) => v.clone(),
+            _ => s.clone(),
+        },
+        ASort::BitVec(_) | ASort::RegLan => s.clone(),
+        ASort::App(id, args) => {
+            let mut ss: Vec<Sort> = Vec::with_capacity(args.len());
+            let mut i = 0usize;
+            while i < s.args().len() {
+                ss.push(apply_subst(arena, subst, &s.args()[i]));
+                i += 1;
+            }
+            arena.arena_alt().sort(id.clone(), ss)
         }
-    } else {
-        let mut ss: Vec<Sort> = Vec::with_capacity(s.1.len());
-        let mut i = 0usize;
-        while i < s.1.len() {
-            ss.push(apply_subst(arena, subst, &s.1[i]));
-            i += 1;
-        }
-        arena.arena_alt().sort(s.repr().0.clone(), ss)
     }
 }
 

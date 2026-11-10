@@ -278,7 +278,7 @@ impl ActionOnSort for UntypedAst {
         identifier: Self::Identifier,
         args: Vec<Self::Sort>,
     ) -> ParsingResult<Self::Sort> {
-        Ok(wrap(alg::Sort(identifier, args).into(), range))
+        Ok(wrap(alg::Sort::app(identifier, args).into(), range))
     }
 }
 

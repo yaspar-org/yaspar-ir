@@ -511,7 +511,7 @@ fn expand_app<D: Dialect>(
         let sort_params: Vec<Sort> = def
             .sort_params
             .iter()
-            .map(|s| env.sort0(s.clone()))
+            .map(|s| env.arena.sort_var(s.clone()))
             .collect();
         instantiate_subst(
             &mut sort_subst,

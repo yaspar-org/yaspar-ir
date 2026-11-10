@@ -4,6 +4,7 @@
 //! This module is responsible for initializing the [Context] with theories. Modify this module
 //! for other extensions.
 
+use crate::allocator::SortAllocator;
 use crate::allocator::{CommandAllocator, ObjectAllocatorExt, StrAllocator};
 use crate::ast::FunctionMeta;
 use crate::ast::alg::BvLenExpr;
@@ -15,7 +16,6 @@ use crate::ast::ctx::dialect::{ATSLIB_LOGIC, Dialect};
 use crate::ast::ctx::{Arena, BvInSort, BvOutSort, EMP_SET, Sig, SigIndex, SortDef, Str, Theory};
 use crate::ast::ctx::{Command, Context, ContextFrame, ContextMeta, ContextStack, LOGICS};
 use crate::statics::*;
-use crate::traits::Repr;
 use dashu::integer::UBig;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -117,10 +117,10 @@ impl<D: Dialect> Context<D> {
 
     fn extend_theory_ints(&mut self) {
         let int = self.int_sort();
-        self.stack
-            .builtins_mut()
-            .sorts
-            .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
+        self.stack.builtins_mut().sorts.insert(
+            self.arena.allocate_symbol(int.sort_name()),
+            SortDef::Opaque(0),
+        );
 
         let minus = self.allocate_symbol(SUB);
         let plus = self.allocate_symbol(ADD);
@@ -158,10 +158,10 @@ impl<D: Dialect> Context<D> {
 
     fn extend_theory_reals(&mut self) {
         let real = self.real_sort();
-        self.stack
-            .builtins_mut()
-            .sorts
-            .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
+        self.stack.builtins_mut().sorts.insert(
+            self.arena.allocate_symbol(real.sort_name()),
+            SortDef::Opaque(0),
+        );
         let minus = self.allocate_symbol(SUB);
         let plus = self.allocate_symbol(ADD);
         let times = self.allocate_symbol(MUL);
@@ -193,14 +193,14 @@ impl<D: Dialect> Context<D> {
     fn extend_theory_real_ints(&mut self) {
         let int = self.int_sort();
         let real = self.real_sort();
-        self.stack
-            .builtins_mut()
-            .sorts
-            .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.stack
-            .builtins_mut()
-            .sorts
-            .insert(real.repr().0.symbol.clone(), SortDef::Opaque(0));
+        self.stack.builtins_mut().sorts.insert(
+            self.arena.allocate_symbol(int.sort_name()),
+            SortDef::Opaque(0),
+        );
+        self.stack.builtins_mut().sorts.insert(
+            self.arena.allocate_symbol(real.sort_name()),
+            SortDef::Opaque(0),
+        );
 
         let minus = self.allocate_symbol(SUB);
         let plus = self.allocate_symbol(ADD);
@@ -261,18 +261,19 @@ impl<D: Dialect> Context<D> {
         let int = self.int_sort();
         let bool = self.bool_sort();
 
+        self.stack.builtins_mut().sorts.insert(
+            self.arena.allocate_symbol(string.sort_name()),
+            SortDef::Opaque(0),
+        );
+        self.stack.builtins_mut().sorts.insert(
+            self.arena.allocate_symbol(int.sort_name()),
+            SortDef::Opaque(0),
+        );
+        let reglan_sym = self.allocate_symbol(REGLAN);
         self.stack
             .builtins_mut()
             .sorts
-            .insert(string.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.stack
-            .builtins_mut()
-            .sorts
-            .insert(int.repr().0.symbol.clone(), SortDef::Opaque(0));
-        self.stack
-            .builtins_mut()
-            .sorts
-            .insert(reglan.repr().0.symbol.clone(), SortDef::Opaque(0));
+            .insert(reglan_sym, SortDef::Opaque(0));
 
         let str_unary_sig = Sig::func(vec![string.clone()], int.clone());
         let str_binary_sig = Sig::VarLenFunc(string.clone(), 2, string.clone());
@@ -440,8 +441,8 @@ impl<D: Dialect> Context<D> {
         let x = self.allocate_symbol("X");
         let y = self.allocate_symbol("Y");
         let vars = vec![x.clone(), y.clone()];
-        let sort_x = self.simple_sort("X");
-        let sort_y = self.simple_sort("Y");
+        let sort_x = self.arena.sort_var(x);
+        let sort_y = self.arena.sort_var(y);
         let array_xy = self.array_sort(sort_x.clone(), sort_y.clone());
         #[cfg(feature = "const-array")]
         let vars_const = vars.clone();
@@ -712,7 +713,7 @@ impl<D: Dialect> Context<D> {
 
         let x = self.allocate_symbol("X");
         let vars = vec![x.clone()];
-        let sort_x = self.simple_sort("X");
+        let sort_x = self.arena.sort_var(x);
         let set_x = self.fset_sort(sort_x.clone());
 
         let union = self.allocate_symbol(SET_UNION);
