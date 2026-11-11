@@ -40,7 +40,7 @@ use crate::ast::{
 };
 use crate::containers::{LocEnv, Mapping, sanitize_bindings};
 use crate::meta::WithMeta;
-use crate::statics::{BITVEC, BOOL, INT, REAL, REGLAN, STRING};
+use crate::statics::{BITVEC, BOOL, BV_MAX_WIDTH, INT, REAL, REGLAN, STRING};
 use crate::traits::{AllocatableString, Contains};
 use crate::traits::{MetaData, Repr};
 pub(crate) use app::{
@@ -215,11 +215,10 @@ where
     T: HasArenaAlt,
 {
     match sz.to_usize() {
-        None | Some(0) => Err(format!(
-            "TC: BitVec has size {sz} but it should be > 0 and small enough to fit in the memory (<= {})!",
-            usize::MAX
+        Some(n) if (1..=BV_MAX_WIDTH).contains(&n) => Ok(env.arena_alt().bv_sort(sz)),
+        _ => Err(format!(
+            "TC: BitVec has size {sz} but it should be > 0 and <= {BV_MAX_WIDTH}!"
         )),
-        Some(_) => Ok(env.arena_alt().bv_sort(sz)),
     }
 }
 

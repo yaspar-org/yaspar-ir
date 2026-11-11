@@ -24,6 +24,8 @@ pub const STRING: &str = "String";
 pub const REGLAN: &str = "RegLan";
 pub const ARRAY: &str = "Array";
 pub const BITVEC: &str = "BitVec";
+/// The largest width of a bit vector, `2^31 - 1`: a width must fit in an `i32`.
+pub const BV_MAX_WIDTH: usize = i32::MAX as usize;
 pub const SET: &str = "Set";
 
 // Core logic operators
