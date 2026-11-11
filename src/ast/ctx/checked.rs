@@ -693,6 +693,16 @@ impl<D: Dialect> Context<D> {
             },
             _ => {}
         }
+        if let Attribute::Constant(Keyword::GlobalDeclarations, alg::Constant::Bool(global)) = &opt
+        {
+            // like the other start-mode options, it must be set before the logic is
+            if let Some(logic) = &self.meta.logic {
+                return Err(format!(
+                    "TC: :global-declarations must be set before the logic, but the logic is {logic}!"
+                ));
+            }
+            self.stack.set_global(*global);
+        }
         Ok(self.set_option(opt))
     }
 

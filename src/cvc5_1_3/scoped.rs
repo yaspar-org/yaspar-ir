@@ -39,6 +39,16 @@ impl<K: Eq + Hash, V> ScopedMap<K, V> {
         self.frames.last_mut().unwrap().insert(key, value);
     }
 
+    /// Add an entry to the first assertion level, which `pop` never removes
+    pub(super) fn insert_first(&mut self, key: K, value: V) {
+        self.frames[0].insert(key, value);
+    }
+
+    /// Drop every level but the first
+    pub(super) fn pop_all(&mut self) {
+        self.frames.truncate(1);
+    }
+
     /// Iterate the visible values, i.e. those not shadowed by a higher level
     pub(super) fn values(&self) -> impl Iterator<Item = &V> {
         self.frames.iter().enumerate().flat_map(move |(i, f)| {

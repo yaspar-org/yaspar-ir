@@ -7,7 +7,8 @@
 //! most recent levels together with all sorts and symbols declared in them. Each
 //! [`ContextFrame`] only holds the declarations made at its own level, so popping simply drops
 //! frames; lookups walk the stack from the top down. `reset-assertions` pops all levels and
-//! empties the first one.
+//! empties the first one. Under `:global-declarations`, declarations go into the frame below the
+//! assertion levels instead, which neither removes (§4.1.5).
 
 use crate::ast::ctx::FunctionMeta;
 use crate::raw::instance::{Sig, SortDef, Str};
@@ -24,22 +25,30 @@ pub(crate) struct ContextFrame {
 
 /// The stack of assertion levels.
 ///
-/// The bottom frame holds the builtin sorts and symbols of the current logic; it is not an
-/// assertion level, so neither `pop` nor `reset-assertions` can remove it. The frame above it is
-/// the first assertion level, so there are always at least two frames.
+/// The bottom frame holds the builtin sorts and symbols of the current logic, and the global
+/// declarations; it is not an assertion level, so neither `pop` nor `reset-assertions` can remove
+/// it. The frame above it is the first assertion level, so there are always at least two frames.
 ///
 /// Invariant: the topmost frame containing a symbol holds *all* of its visible overloads, so a
 /// lookup can stop at the first hit. Overloading a symbol from a lower level therefore copies its
 /// overloads to the top frame first (see [`Self::push_symbol`]).
 pub(crate) struct ContextStack {
     frames: Vec<ContextFrame>,
+    /// Whether declarations go into the bottom frame (`:global-declarations`)
+    global: bool,
 }
 
 impl ContextStack {
-    pub(crate) fn new(builtins: ContextFrame) -> Self {
+    pub(crate) fn new(builtins: ContextFrame, global: bool) -> Self {
         Self {
             frames: vec![builtins, ContextFrame::default()],
+            global,
         }
+    }
+
+    /// Set `:global-declarations`
+    pub(crate) fn set_global(&mut self, global: bool) {
+        self.global = global;
     }
 
     /// The number of assertion levels pushed on top of the first one
@@ -67,8 +76,18 @@ impl ContextStack {
         levels
     }
 
-    fn top_mut(&mut self) -> &mut ContextFrame {
-        self.frames.last_mut().unwrap()
+    /// The index of the frame declarations go into
+    fn decl_index(&self) -> usize {
+        if self.global {
+            0
+        } else {
+            self.frames.len() - 1
+        }
+    }
+
+    fn decl_frame_mut(&mut self) -> &mut ContextFrame {
+        let i = self.decl_index();
+        &mut self.frames[i]
     }
 
     /// The frame below the assertion levels, where theories place their builtins
@@ -84,9 +103,9 @@ impl ContextStack {
         self.get_sort(name).is_some()
     }
 
-    /// Declare a sort in the current assertion level
+    /// Declare a sort in the current assertion level, or globally
     pub(crate) fn insert_sort(&mut self, name: Str, def: SortDef) {
-        self.top_mut().sorts.insert(name, def);
+        self.decl_frame_mut().sorts.insert(name, def);
     }
 
     /// Remove a sort from all assertion levels
@@ -107,15 +126,17 @@ impl ContextStack {
         self.get_symbol(name).is_some()
     }
 
-    /// Bind a symbol in the current assertion level, replacing its overloads there
+    /// Bind a symbol in the current assertion level, or globally, replacing its overloads there
     pub(crate) fn insert_symbol(&mut self, name: Str, sigs: Vec<(Sig, FunctionMeta)>) {
-        self.top_mut().symbol_table.insert(name, sigs);
+        self.decl_frame_mut().symbol_table.insert(name, sigs);
     }
 
-    /// Add an overload of a symbol in the current assertion level
+    /// Add an overload of a symbol in the current assertion level, or globally
     pub(crate) fn push_symbol(&mut self, name: Str, sig: (Sig, FunctionMeta)) {
-        let (top, lower) = self.frames.split_last_mut().unwrap();
-        top.symbol_table
+        let i = self.decl_index();
+        let (lower, rest) = self.frames.split_at_mut(i);
+        rest[0]
+            .symbol_table
             .entry(name)
             .or_insert_with_key(|name| {
                 // maintain the invariant: bring along the overloads visible from below

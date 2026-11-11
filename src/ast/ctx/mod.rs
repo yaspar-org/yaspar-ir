@@ -601,12 +601,12 @@ impl<D: Dialect> Context<D> {
         Ok(())
     }
 
-    /// Pop all assertion levels and empty the first one, i.e. drop all user declarations and
-    /// definitions, while the logic and its builtins stay; return the
-    /// [`reset-assertions`](Command) command.
+    /// Pop all assertion levels and empty the first one, i.e. drop the declarations and
+    /// definitions made in them, while the logic, its builtins and the global declarations stay;
+    /// return the [`reset-assertions`](Command) command.
     ///
-    /// This is the effect of `reset-assertions`; `:global-declarations` is not supported, so
-    /// declarations are never kept.
+    /// This is the effect of `reset-assertions`; declarations made under `:global-declarations`
+    /// are kept.
     pub fn reset_assertion_stack(&mut self) -> Command {
         let levels = self.stack.reset_assertions();
         self.forget_levels(levels);

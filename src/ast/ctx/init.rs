@@ -70,10 +70,13 @@ impl<D: Dialect> Context<D> {
     }
 
     fn default_stack(arena: &mut Arena) -> ContextStack {
-        ContextStack::new(ContextFrame {
-            sorts: Self::default_sorts(arena),
-            symbol_table: Default::default(),
-        })
+        ContextStack::new(
+            ContextFrame {
+                sorts: Self::default_sorts(arena),
+                symbol_table: Default::default(),
+            },
+            D::GLOBAL_DECLARATIONS,
+        )
     }
 
     #[cfg(feature = "cache")]
