@@ -3064,3 +3064,33 @@ fn shadowing_param_out_of_scope() {
          (check-sat)",
     ));
 }
+
+// ── :global-declarations ─────────────────────────────────────
+
+/// Under `:global-declarations`, declarations survive `pop` and `reset-assertions` in the
+/// translation too.
+#[test]
+fn global_declarations_survive_pop_and_reset() {
+    assert!(check_sat(
+        "(set-option :global-declarations true)
+         (set-logic ALL)
+         (push 1)
+         (declare-const x Int)
+         (declare-datatype D ((c (f Int))))
+         (pop 1)
+         (assert (> x 0))
+         (assert (= (f (c 1)) 1))
+         (check-sat)",
+    ));
+    assert!(check_sat(
+        "(set-option :global-declarations true)
+         (set-logic ALL)
+         (declare-sort S 0)
+         (declare-const s S)
+         (declare-fun g (Int) Int)
+         (reset-assertions)
+         (assert (= s s))
+         (assert (= (g 1) 2))
+         (check-sat)",
+    ));
+}

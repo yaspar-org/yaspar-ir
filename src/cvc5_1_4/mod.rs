@@ -311,6 +311,9 @@ pub struct Cvc5Env<'tm, Ctx, D: Dialect = DefaultDialect> {
     scope_stack_from: Vec<Vec<u64>>,
     /// Allocated symbols for uninterpreted sort values encountered during reverse translation.
     uninterpreted_values: HashSet<Str>,
+    /// Whether declarations go into the first assertion level, which `pop` and
+    /// `reset-assertions` keep (`:global-declarations`)
+    global_declarations: bool,
     /// The dialect of the context, which is only a type: nothing of it is stored.
     dialect: PhantomData<D>,
 }
@@ -335,6 +338,7 @@ where
             locals_from: HashMap::new(),
             scope_stack_from: Vec::new(),
             uninterpreted_values: HashSet::new(),
+            global_declarations: D::GLOBAL_DECLARATIONS,
             dialect: PhantomData,
         }
     }
@@ -410,15 +414,49 @@ impl<'tm, Ctx, D: Dialect> Cvc5Env<'tm, Ctx, D> {
     }
 
     /// Pop all assertion levels and empty the first one, mirroring `reset-assertions` on the
-    /// solver: all sorts, globals and `:named` labels are discarded.
+    /// solver: all sorts, globals and `:named` labels are discarded, but those declared under
+    /// `:global-declarations`.
     pub fn reset_assertion_stack(&mut self) {
         // the caches do not track the first level, so everything is evicted
         self.sort_cache = ScopedBiCache::new();
         self.term_cache = ScopedBiCache::new();
-        self.named_assertions = ScopedMap::new();
-        self.sort = ScopedMap::new();
-        self.globals = ScopedMap::new();
         self.sort_subst_map = ScopedMap::new();
+        if self.global_declarations {
+            self.named_assertions.pop_all();
+            self.sort.pop_all();
+            self.globals.pop_all();
+        } else {
+            self.named_assertions = ScopedMap::new();
+            self.sort = ScopedMap::new();
+            self.globals = ScopedMap::new();
+        }
+    }
+
+    /// Declare a global symbol at the current assertion level, or globally.
+    fn declare_global(&mut self, name: Str, ct: CTerm) {
+        if self.global_declarations {
+            self.globals.insert_first(name, ct);
+        } else {
+            self.globals.insert(name, ct);
+        }
+    }
+
+    /// Declare a sort at the current assertion level, or globally.
+    fn declare_sort(&mut self, name: Str, cs: CSort) {
+        if self.global_declarations {
+            self.sort.insert_first(name, cs);
+        } else {
+            self.sort.insert(name, cs);
+        }
+    }
+
+    /// Record a `:named` label at the current assertion level, or globally.
+    fn declare_label(&mut self, ct: CTerm, name: Str) {
+        if self.global_declarations {
+            self.named_assertions.insert_first(ct, name);
+        } else {
+            self.named_assertions.insert(ct, name);
+        }
     }
 
     /// Drop all translation state, as if the environment were newly created.
@@ -427,6 +465,7 @@ impl<'tm, Ctx, D: Dialect> Cvc5Env<'tm, Ctx, D> {
     /// [`Command::to_cvc5`](ConvertToCvc5::to_cvc5); to follow a `reset`, call this method and
     /// continue with a fresh [`Solver`].
     pub fn reset_env(&mut self) {
+        self.global_declarations = D::GLOBAL_DECLARATIONS;
         self.reset_assertion_stack();
         self.locals.clear();
         self.scope_stack.clear();
@@ -2611,6 +2650,11 @@ where
                 Ok(CommandResult::None)
             }
             AC::SetOption(attr) => {
+                if let Attribute::Constant(Keyword::GlobalDeclarations, Constant::Bool(global)) =
+                    attr
+                {
+                    env.global_declarations = *global;
+                }
                 if let Attribute::Symbol(kw, val) = attr {
                     solver.set_option(kw.symbol_of(), val).res()?;
                 } else if let Attribute::Constant(kw, c) = attr {
@@ -2621,19 +2665,19 @@ where
             AC::DeclareConst(name, sort) => {
                 let cs = sort.to_cvc5(env)?;
                 let ct = env.tm.mk_const(cs, name).res()?;
-                env.globals.insert(name.clone(), ct);
+                env.declare_global(name.clone(), ct);
                 Ok(CommandResult::None)
             }
             AC::DeclareFun(name, inp, out) => {
                 let co = out.to_cvc5(env)?;
                 if inp.is_empty() {
                     let ct = env.tm.mk_const(co, name).res()?;
-                    env.globals.insert(name.clone(), ct);
+                    env.declare_global(name.clone(), ct);
                 } else {
                     let ci = inp.to_cvc5(env)?;
                     let fs = env.tm.mk_fun_sort(&ci, co).res()?;
                     let ct = env.tm.mk_const(fs, name).res()?;
-                    env.globals.insert(name.clone(), ct);
+                    env.declare_global(name.clone(), ct);
                 }
                 Ok(CommandResult::None)
             }
@@ -2645,7 +2689,7 @@ where
                         .mk_uninterpreted_sort_constructor_sort(*arity, name)
                         .res()?
                 };
-                env.sort.insert(name.clone(), cs);
+                env.declare_sort(name.clone(), cs);
                 Ok(CommandResult::None)
             }
             AC::DefineSort(..) => {
@@ -2654,7 +2698,7 @@ where
             }
             AC::DefineConst(name, _sort, body) => {
                 let cbody = body.to_cvc5(env)?;
-                env.globals.insert(name.clone(), cbody);
+                env.declare_global(name.clone(), cbody);
                 Ok(CommandResult::None)
             }
             AC::DefineFun(fd) => es.translate_define_fun(fd, false),
@@ -2679,8 +2723,8 @@ where
                 }
                 let ct = cur.to_cvc5(env)?;
                 for name in names {
-                    env.globals.insert(name.clone(), ct.clone());
-                    env.named_assertions.insert(ct.clone(), name);
+                    env.declare_global(name.clone(), ct.clone());
+                    env.declare_label(ct.clone(), name);
                 }
                 solver.assert_formula(ct).res()?;
                 Ok(CommandResult::None)
@@ -2803,7 +2847,7 @@ where
                 .define_fun(&fd.name, &vars, out, body, true)
                 .res()?
         };
-        self.env.globals.insert(fd.name.clone(), ct);
+        self.env.declare_global(fd.name.clone(), ct);
         Ok(CommandResult::None)
     }
 
@@ -2828,7 +2872,7 @@ where
                 env.tm.mk_fun_sort(&inp, out).res()?
             };
             let ct = env.tm.mk_const(fs, &fd.name).res()?;
-            env.globals.insert(fd.name.clone(), ct.clone());
+            env.declare_global(fd.name.clone(), ct.clone());
             funs.push(ct);
         }
         // Second pass: translate bodies
@@ -2870,12 +2914,12 @@ where
         let decls = result?;
         if decls.len() == 1 {
             let cs = env.tm.mk_dt_sort(&decls[0]).res()?;
-            env.sort.insert(defs[0].name.clone(), cs.clone());
+            env.declare_sort(defs[0].name.clone(), cs.clone());
             Self::register_dt_functions(env, cs, &defs[0].dec)?;
         } else {
             let sorts = env.tm.mk_dt_sorts(&decls).res()?;
             for (def, cs) in defs.iter().zip(sorts) {
-                env.sort.insert(def.name.clone(), cs.clone());
+                env.declare_sort(def.name.clone(), cs.clone());
                 Self::register_dt_functions(env, cs, &def.dec)?;
             }
         }
@@ -2921,16 +2965,18 @@ where
         dec: &DatatypeDec,
     ) -> Res<()> {
         let dt = sort.datatype().res()?;
-        let mut rf = env.ctx.ref_mut();
         for (i, ctor_dec) in dec.constructors.iter().enumerate() {
             let ctor = dt.constructor(i).res()?;
-            env.globals.insert(ctor_dec.ctor.clone(), ctor.term());
+            env.declare_global(ctor_dec.ctor.clone(), ctor.term());
             let tester = ctor.tester_term();
-            let sym = rf.allocate_symbol(&format!("is-{}", ctor.name()));
-            env.globals.insert(sym, tester);
+            let sym = env
+                .ctx
+                .ref_mut()
+                .allocate_symbol(&format!("is-{}", ctor.name()));
+            env.declare_global(sym, tester);
             for (j, sel_dec) in ctor_dec.args.iter().enumerate() {
                 let sel = ctor.selector(j).res()?;
-                env.globals.insert(sel_dec.0.clone(), sel.term());
+                env.declare_global(sel_dec.0.clone(), sel.term());
             }
         }
         Ok(())

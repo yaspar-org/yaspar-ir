@@ -45,6 +45,9 @@ pub trait Dialect: sealed::Sealed + Sized + 'static {
     /// they do not (§3.1); ATSLIB reads them, as the Unicode Strings theory does.
     const STRING_UNICODE_ESCAPES: bool;
 
+    /// Whether `:global-declarations` starts out set.
+    const GLOBAL_DECLARATIONS: bool;
+
     /// Start checking a `match` on `scrutinee`, which `meta` locates, or reject it if the dialect
     /// has no `match` terms.
     #[doc(hidden)]
@@ -66,6 +69,7 @@ impl Dialect for SmtLib {
     const ONLY_LOGIC: Option<&'static str> = None;
     const ALL_OPERATORS: bool = true;
     const STRING_UNICODE_ESCAPES: bool = false;
+    const GLOBAL_DECLARATIONS: bool = false;
 
     fn start_match<L>(
         env: &mut TCEnvGen<'_, L, Self>,
@@ -81,6 +85,7 @@ impl Dialect for AtsLib {
     const ONLY_LOGIC: Option<&'static str> = Some(ATSLIB_LOGIC);
     const ALL_OPERATORS: bool = false;
     const STRING_UNICODE_ESCAPES: bool = true;
+    const GLOBAL_DECLARATIONS: bool = true;
 
     fn start_match<L>(
         _env: &mut TCEnvGen<'_, L, Self>,

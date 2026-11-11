@@ -2560,3 +2560,57 @@ fn test_z3_bv_funs() {
         assert_eq!(run(false, "(declare-fun bv2nat () Int)"), Ok(()));
     }
 }
+
+/// Under `:global-declarations`, declarations survive `pop` and `reset-assertions`, and stay
+/// declared (#160). It is set before the logic is, and ATSLIB starts with it set.
+#[test]
+fn test_global_declarations() {
+    let run = |atslib: bool, script: &str| {
+        let cs = UntypedAst.parse_script_str(script).unwrap();
+        if atslib {
+            cs.type_check(&mut Context::<AtsLib>::new_dialect())
+                .map(|_| ())
+        } else {
+            cs.type_check(&mut Context::<SmtLib>::new_dialect())
+                .map(|_| ())
+        }
+    };
+    let global = "(set-option :global-declarations true)(set-logic ALL)";
+    let popped = "(push 1)(declare-const x Int)(pop 1)";
+    let reset = "(declare-const x Int)(declare-datatype D ((c (f Int))))(reset-assertions)";
+    let uses = "(assert (> x 0))";
+    let uses_dt = "(assert (> x 0))(assert (= (f (c 1)) 1))";
+
+    // SMT-LIB with the option
+    assert_eq!(run(false, &format!("{global}{popped}{uses}")), Ok(()));
+    assert_eq!(run(false, &format!("{global}{reset}{uses_dt}")), Ok(()));
+    let err = run(false, &format!("{global}{popped}(declare-const x Int)")).unwrap_err();
+    assert!(err.contains("x"), "{err}");
+    // and without it, the standard behaviour
+    assert!(run(false, &format!("(set-logic ALL){popped}{uses}")).is_err());
+    assert!(run(false, &format!("(set-logic ALL){reset}{uses}")).is_err());
+    assert_eq!(
+        run(
+            false,
+            &format!("(set-logic ALL){popped}(declare-const x Int)")
+        ),
+        Ok(())
+    );
+    // only before the logic, which a declaration sets too
+    for script in [
+        "(set-logic ALL)(set-option :global-declarations true)",
+        "(declare-const y Int)(set-option :global-declarations true)",
+    ] {
+        let err = run(false, script).unwrap_err();
+        assert!(err.contains(":global-declarations"), "{script}: {err}");
+    }
+
+    // ATSLIB starts with it set
+    assert_eq!(run(true, &format!("(set-logic ALL){popped}{uses}")), Ok(()));
+    assert_eq!(
+        run(true, &format!("(set-logic ALL){reset}{uses_dt}")),
+        Ok(())
+    );
+    let unset = "(set-option :global-declarations false)(set-logic ALL)";
+    assert!(run(true, &format!("{unset}{popped}{uses}")).is_err());
+}
