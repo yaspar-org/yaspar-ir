@@ -15,7 +15,7 @@ use crate::raw::instance::{
     BvInSort, BvOutSort, FetchSort, HasArenaAlt, Index, QualifiedIdentifier, Sig, SigIndex, Sort,
     Str, Term, Theory,
 };
-use crate::statics::{BV_RE, TO_REAL};
+use crate::statics::{BV_MAX_WIDTH, BV_RE, TO_REAL};
 use crate::traits::Contains;
 use dashu::base::BitTest;
 use dashu::integer::UBig;
@@ -104,9 +104,16 @@ where
     }
     let n = match &qid.0.indices[0] {
         alg::Index::Numeral(n) => match n.to_usize() {
+            // checked before the constant is built, which takes `n` bits
             None | Some(0) => {
                 return Err(format!(
                     "TC: {qid}{meta_string} specifies a bit vector of an inappropriate length!"
+                ));
+            }
+            Some(n) if n > BV_MAX_WIDTH => {
+                return Err(format!(
+                    "TC: {qid}{meta_string} specifies a bit vector of length {n}, but it should be <= {}!",
+                    BV_MAX_WIDTH
                 ));
             }
             Some(n) => n,
@@ -703,7 +710,7 @@ where
 
             // 3.2.2 we obtain the output sort
             let total = lengths.iter().sum();
-            let out_sort = env.arena_alt().bv_sort(total);
+            let out_sort = super::valid_bv_sort(env, total)?;
 
             // 3.3 if sorts of the overall application is ascribed, then this sort must also match.
             if let Some(fs) = &f.1

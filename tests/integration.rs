@@ -2484,3 +2484,39 @@ fn test_reglan_needs_strings() {
         .unwrap();
     assert!(cs.type_check(&mut Context::new()).is_err());
 }
+
+/// A bit vector is at most `2^31 - 1` bits wide (#183): declared, written as a literal, or
+/// computed by an operator.
+#[test]
+fn test_bv_max_width() {
+    let check = |body: &str| {
+        let script = format!("(set-logic ALL){body}");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        (
+            cs.type_check(&mut Context::<SmtLib>::new_dialect())
+                .map(|_| ()),
+            cs.type_check(&mut Context::<AtsLib>::new_dialect())
+                .map(|_| ()),
+        )
+    };
+    for body in [
+        "(declare-const b (_ BitVec 2147483647))",
+        "(declare-const b (_ BitVec 1073741823))(assert (= (concat b b (_ bv0 1)) (concat b b #b0)))",
+        "(declare-const b (_ BitVec 1))(assert (= ((_ zero_extend 2147483646) b) ((_ zero_extend 2147483646) b)))",
+    ] {
+        let (smt, ats) = check(body);
+        assert!(smt.is_ok() && ats.is_ok(), "{body}: {smt:?} {ats:?}");
+    }
+    for body in [
+        "(declare-const b (_ BitVec 2147483648))",
+        "(declare-fun f ((_ BitVec 4294967296)) Bool)",
+        "(assert (= (_ bv0 2147483648) (_ bv0 2147483648)))",
+        "(declare-const b (_ BitVec 1073741824))(assert (= (concat b b) (concat b b)))",
+        "(declare-const b (_ BitVec 1))(assert (= ((_ zero_extend 2147483647) b) ((_ zero_extend 2147483647) b)))",
+        "(declare-const b (_ BitVec 1073741824))(assert (= ((_ repeat 2) b) ((_ repeat 2) b)))",
+    ] {
+        let (smt, ats) = check(body);
+        assert!(smt.is_err(), "{body} is accepted by SMT-LIB");
+        assert!(ats.is_err(), "{body} is accepted by ATSLIB");
+    }
+}
