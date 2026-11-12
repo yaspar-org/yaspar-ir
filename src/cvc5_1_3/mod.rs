@@ -1097,7 +1097,7 @@ mod cterm_cycle {
                 let sort = conv_csort(&ct.sort(), fenv)?;
 
                 let mut rf = fenv.ctx.ref_mut();
-                let sym = rf.allocate_symbol(BV2NAT);
+                let sym = rf.allocate_symbol(UBV_TO_INT);
                 let qid = QualifiedIdentifier::simple(sym);
                 return Ok(rf.app(qid, vec![child], Some(sort)));
             }
@@ -1414,7 +1414,7 @@ mod cterm_cycle {
             }
             Kind::IntToBitvector => {
                 let i0 = idx_ubig(0)?;
-                (INT2BV, vec![Index::Numeral(i0)])
+                (INT_TO_BV, vec![Index::Numeral(i0)])
             }
             Kind::RegexpRepeat => {
                 let i0 = idx_ubig(0)?;

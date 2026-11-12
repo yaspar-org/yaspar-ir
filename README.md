@@ -828,6 +828,7 @@ The crate gates optional functionality behind the following Cargo features:
 | `cvc5-1.3.x`, `cvc5-dynamic-1.3.x`, `cvc5-parser-1.3.x` | The same for cvc5 1.3.x, through cvc5-rs 0.5, with the `cvc5` module's API as it was before cvc5 1.4.x support. |
 | `finite-set` | Theory of finite sets (`Set` sort and `set.*` operators) and the logics that include it. |
 | `const-array` | The non-standard constant arrays of z3 and cvc5, `((as const (Array X Y)) v)`, which ArraysEx does not have. |
+| `z3-bv-funs` | z3's names `bv2nat`, `nat2bv` and `int2bv` for `ubv_to_int` and `int_to_bv`. |
 | `all` | Convenience feature enabling `cnf`, `implicant-generation`, `finite-set`, `no-pattern`, and `const-array`. |
 
 `cvc5` and `cvc5-dynamic` are mutually exclusive ways of linking the same cvc5 support — enable exactly one. The
@@ -883,10 +884,10 @@ This crate supports the following non-standard extensions commonly found in z3 a
    whose body is `(_ is X)`, so the two forms are interchangeable. This is a de facto standard
    supported by both z3 and cvc5.
 2. **Non-standard bitvector/integer conversion operators:**
-   - `bv2nat` — convert a bitvector to a natural number (non-negative integer). 
+   - `bv2nat` — convert a bitvector to a natural number (non-negative integer); with the `z3-bv-funs` feature.
    - `bv2int` — convert a bitvector to an integer (signed interpretation).
-   - `(_ nat2bv N)` — convert a natural number to a bitvector of width `N`.
-   - `(_ int_to_bv N)` — synonym of `(_ int2bv N)`.
+   - `(_ nat2bv N)` — convert a natural number to a bitvector of width `N`; with the `z3-bv-funs` feature.
+   - `(_ int2bv N)` — synonym of `(_ int_to_bv N)`; with the `z3-bv-funs` feature.
 
    The standard equivalents are `ubv_to_int`,  `sbv_to_int` and `int_to_bv`, which are also supported.
 3. **Constant array construction:** `const` function constructs a constant array of a given value. In SMTLib script,

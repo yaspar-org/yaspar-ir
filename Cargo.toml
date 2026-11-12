@@ -35,6 +35,8 @@ cvc5-dynamic = ["cvc5-dynamic-1.4.x"]
 finite-set = []
 # The non-standard constant arrays of z3 and cvc5, `((as const (Array X Y)) v)`: not in ArraysEx.
 const-array = []
+# z3's names `bv2nat`, `nat2bv` and `int2bv` for `ubv_to_int` and `int_to_bv`.
+z3-bv-funs = []
 atslib = ["finite-set"]
 cache = []
 none = []

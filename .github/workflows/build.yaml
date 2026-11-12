@@ -88,7 +88,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run cvc5 tests
-        run: cargo test --features cvc5,finite-set,no-pattern,const-array
+        run: cargo test --features cvc5,finite-set,no-pattern,const-array,z3-bv-funs
         env:
           CVC5_DIR: ${{ steps.cvc5.outputs.cvc5-dir }}
 
