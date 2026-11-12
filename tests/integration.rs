@@ -2520,3 +2520,43 @@ fn test_bv_max_width() {
         assert!(ats.is_err(), "{body} is accepted by ATSLIB");
     }
 }
+
+/// z3's `bv2nat`, `nat2bv` and `int2bv` are there with `z3-bv-funs` only (#172); ATSLIB reserves
+/// them regardless.
+#[test]
+fn test_z3_bv_funs() {
+    let run = |atslib: bool, body: &str| {
+        let script =
+            format!("(set-logic ALL)(declare-const b (_ BitVec 4))(declare-const x Int){body}");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        if atslib {
+            cs.type_check(&mut Context::<AtsLib>::new_dialect())
+                .map(|_| ())
+        } else {
+            cs.type_check(&mut Context::<SmtLib>::new_dialect())
+                .map(|_| ())
+        }
+    };
+    let uses = [
+        "(assert (= (bv2nat b) x))",
+        "(assert (= ((_ nat2bv 4) x) b))",
+        "(assert (= ((_ int2bv 4) x) b))",
+    ];
+    for t in uses {
+        assert_eq!(run(false, t).is_ok(), cfg!(feature = "z3-bv-funs"), "{t}");
+        let err = run(true, t).unwrap_err();
+        assert!(err.contains("rejected"), "{t}: {err}");
+    }
+    // the standard names are always there
+    assert_eq!(
+        run(
+            false,
+            "(assert (= (ubv_to_int b) x))(assert (= ((_ int_to_bv 4) x) b))"
+        ),
+        Ok(())
+    );
+    // without the feature, SMT-LIB lets a script declare them
+    if !cfg!(feature = "z3-bv-funs") {
+        assert_eq!(run(false, "(declare-fun bv2nat () Int)"), Ok(()));
+    }
+}

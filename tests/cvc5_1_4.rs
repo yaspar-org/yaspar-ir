@@ -1984,6 +1984,7 @@ fn from_cvc5_term_bv_repeat() {
 }
 
 #[test]
+#[cfg(feature = "z3-bv-funs")]
 fn from_cvc5_term_int2bv() {
     term_round_trip("(set-logic ALL) (declare-const x Int)", "((_ int2bv 8) x)");
 }

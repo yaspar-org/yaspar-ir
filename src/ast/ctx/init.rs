@@ -686,15 +686,26 @@ impl<D: Dialect> Context<D> {
             .extend(default_symbol_table);
 
         if self.get_theories().iter().any(|t| t.has_int()) {
-            let more_symbols = HashMap::from([
+            let mut more_symbols = HashMap::from([
                 builtin(ubv_to_int, to_int_sig.clone()),
                 builtin(sbv_to_int, to_int_sig.clone()),
                 builtin(bv2int, Self::unless_atslib(|| to_int_sig.clone())),
-                builtin(bv2nat, Self::unless_atslib(|| to_int_sig.clone())),
                 builtin(int_to_bv, to_bv_sig.clone()),
-                builtin(nat2bv, Self::unless_atslib(|| to_bv_sig.clone())),
-                builtin(int2bv, Self::unless_atslib(|| to_bv_sig.clone())),
             ]);
+            // z3's names, only with `z3-bv-funs`; ATSLIB reserves them regardless
+            for (name, sig) in [
+                (bv2nat, to_int_sig.clone()),
+                (nat2bv, to_bv_sig.clone()),
+                (int2bv, to_bv_sig.clone()),
+            ] {
+                if cfg!(feature = "z3-bv-funs") {
+                    let (k, v) = builtin(name, Self::unless_atslib(|| sig));
+                    more_symbols.insert(k, v);
+                } else if !D::ALL_OPERATORS {
+                    let (k, v) = builtin(name, Sig::Rejected);
+                    more_symbols.insert(k, v);
+                }
+            }
 
             self.touch_symbol_table();
             self.stack.builtins_mut().symbol_table.extend(more_symbols);

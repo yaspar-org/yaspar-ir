@@ -64,6 +64,8 @@
 //!   logics that include it.
 //! - `const-array` — enables the non-standard constant arrays of z3 and cvc5,
 //!   `((as const (Array X Y)) v)`, which ArraysEx does not have.
+//! - `z3-bv-funs` — enables z3's names `bv2nat`, `nat2bv` and `int2bv` for `ubv_to_int` and
+//!   `int_to_bv`.
 //!
 //! # Modules
 //!
