@@ -20,6 +20,7 @@ use crate::ast::{
 use crate::containers::{LocEnv, Mapping};
 use crate::raw::alg::Sort as ASort;
 use crate::raw::instance::HasArena;
+use crate::raw::tc::no_reglan;
 use crate::statics::{IS, IS_DASH};
 use crate::traits::Repr;
 use crate::traits::{AllocatableString, Contains, HasMutRef};
@@ -329,6 +330,7 @@ impl<'a, 'b, D: Dialect> DtDeclContext<'a, 'b, D> {
                     self.current.sym_quote(),
                 ));
             }
+            no_reglan(&sort, format!("selector {}", name.sym_quote()))?;
             new_args.push(VarBinding(name, 0, sort));
         }
         self.ctors.push(ConstructorDec {
