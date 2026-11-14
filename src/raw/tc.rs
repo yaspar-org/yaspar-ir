@@ -49,7 +49,7 @@ pub(crate) use app::{
 use dashu::integer::UBig;
 use matching::{ArmScope, MatchChecker};
 use num_traits::cast::ToPrimitive;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use unif::SortSubst;
 use yaspar_macros::stack_safe;
@@ -471,6 +471,26 @@ where
     } else {
         Err(format!("TC: sort {sym}{meta} is not declared!"))
     }
+}
+
+/// Check that `RegLan` does not occur in `sort`, which `what` is to have: by decision, a regular
+/// expression is not what a variable ranges over, nor what a declared or parameterized symbol
+/// stands for; only a `let`, a `define-const` or a `define-fun` without inputs may name one (#180).
+pub(crate) fn no_reglan(sort: &Sort, what: impl Display) -> TC<()> {
+    let mut todo = vec![sort];
+    let mut seen = HashSet::new();
+    while let Some(s) = todo.pop() {
+        if !seen.insert(s) {
+            continue;
+        }
+        if s.is_reglan() {
+            return Err(format!(
+                "TC: {what} cannot have sort {sort}: {REGLAN} cannot be bound to a variable or a symbol!"
+            ));
+        }
+        todo.extend(s.args());
+    }
+    Ok(())
 }
 
 /// Type-check `(_ BitVec sz)`, which needs the theory of bit vectors.
@@ -1042,6 +1062,10 @@ where
             let sym = v.0.allocate(env.arena);
             check_binder(env, &sym, &v.0.display_meta_data())?;
             let sort = v.2.type_check(&mut env.with_empty_local())?;
+            no_reglan(
+                &sort,
+                format!("variable {}{}", sym.sym_quote(), v.0.display_meta_data()),
+            )?;
             Ok(VarBinding(sym, env.arena.new_local(), sort))
         })
         .collect::<TC<Vec<_>>>()?;

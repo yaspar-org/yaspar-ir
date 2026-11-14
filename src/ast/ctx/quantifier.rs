@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::allocator::TermAllocator;
+use crate::ast::SymbolQuote;
 use crate::ast::alg::VarBinding;
 use crate::ast::ctx::bindings::LetContext;
 use crate::ast::ctx::local::LocalContext;
@@ -13,6 +14,7 @@ use crate::ast::{Attribute, MatchContext, Theory};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::TC;
+use crate::raw::tc::no_reglan;
 use crate::traits::{AllocatableString, HasMutRef};
 
 /// A builder context for constructing quantified terms (`forall` and `exists`).
@@ -60,6 +62,11 @@ impl<'a, 'b, D: Dialect> QuantifierContext<'a, 'b, D> {
     where
         S: AllocatableString<Arena>,
     {
+        let shown = name.allocate(self.arena()).sym_quote();
+        no_reglan(
+            &sort,
+            format!("variable {shown}{}", name.display_meta_data()),
+        )?;
         self.0.extend(name, sort)?;
         Ok(self)
     }
@@ -70,6 +77,14 @@ impl<'a, 'b, D: Dialect> QuantifierContext<'a, 'b, D> {
         T: IntoIterator<Item = (S, Sort)>,
         S: AllocatableString<Arena>,
     {
+        let tups: Vec<(S, Sort)> = tups.into_iter().collect();
+        for (name, sort) in &tups {
+            let shown = name.allocate(self.arena()).sym_quote();
+            no_reglan(
+                sort,
+                format!("variable {shown}{}", name.display_meta_data()),
+            )?;
+        }
         self.0.extend_many(tups)?;
         Ok(self)
     }
