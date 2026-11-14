@@ -2614,3 +2614,77 @@ fn test_global_declarations() {
     let unset = "(set-option :global-declarations false)(set-logic ALL)";
     assert!(run(true, &format!("{unset}{popped}{uses}")).is_err());
 }
+
+/// No variable or declared symbol can have a sort that mentions `RegLan` (#180): a regular
+/// expression is a term, built by the operators of regular expressions, which only a `let`, a
+/// `define-const` or a `define-fun` without inputs may name.
+#[test]
+fn test_reglan_not_bound() {
+    let run = |atslib: bool, body: &str| {
+        let script = format!("(set-logic ALL){body}");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        if atslib {
+            cs.type_check(&mut Context::<AtsLib>::new_dialect())
+                .map(|_| ())
+        } else {
+            cs.type_check(&mut Context::<SmtLib>::new_dialect())
+                .map(|_| ())
+        }
+    };
+    for atslib in [false, true] {
+        for body in [
+            "(declare-const s RegLan)",
+            "(declare-const a (Array Int RegLan))",
+            "(declare-fun f (RegLan) Bool)",
+            "(declare-fun g () RegLan)",
+            "(define-fun h ((x Int)) RegLan (str.to_re \"a\"))",
+            "(define-fun k ((r RegLan)) Bool (str.in_re \"a\" r))",
+            // an alias is expanded where it is used
+            "(define-sort R () (Array Int RegLan))(declare-const a R)",
+            "(define-sort R2 () RegLan)(assert (forall ((x R2)) true))",
+            "(declare-datatype D ((c (s RegLan))))",
+            "(declare-datatype E ((e (s (Array Int RegLan)))))",
+            "(assert (forall ((s RegLan)) true))",
+            "(assert (exists ((s (Array Int RegLan))) true))",
+            "(define-fun-rec q ((x Int)) RegLan (str.to_re \"a\"))",
+            "(define-funs-rec ((q ((r RegLan)) Bool)) ((str.in_re \"a\" r)))",
+        ] {
+            let err = run(atslib, body).unwrap_err();
+            assert!(err.contains("RegLan"), "{body}: {err}");
+        }
+        // a regular expression as a term is fine, and so is naming one
+        for body in [
+            "(assert (str.in_re \"a\" (re.* (str.to_re \"a\"))))",
+            "(assert (let ((r (str.to_re \"a\"))) (str.in_re \"a\" r)))",
+            "(define-const c RegLan (str.to_re \"a\"))(assert (str.in_re \"a\" c))",
+            "(define-fun l () RegLan (str.to_re \"a\"))(assert (str.in_re \"a\" l))",
+            "(define-sort R () RegLan)(define-const c R (str.to_re \"a\"))",
+            "(declare-const s String)(assert (str.in_re s (re.union (str.to_re s) re.none)))",
+        ] {
+            assert_eq!(run(atslib, body), Ok(()), "{body}");
+        }
+    }
+}
+
+/// The checked API agrees.
+#[test]
+fn test_reglan_not_bound_checked_api() {
+    let mut context = Context::new();
+    context.ensure_logic();
+    let reglan = context.reglan_sort();
+    let int = context.int_sort();
+    let array = context.array_sort(int, reglan.clone());
+    assert!(context.add_symbol("s", Sig::sort(reglan.clone())).is_err());
+    assert!(context.add_symbol("a", Sig::sort(array)).is_err());
+    assert!(
+        context
+            .build_quantifier_with_domain([("r", reglan.clone())])
+            .is_err()
+    );
+    assert!(context.build_fun("f", [("r", reglan)]).is_err());
+    let a = context.allocate_str("a");
+    let a = context.typed_constant(Constant::String(a)).unwrap();
+    let re = context.typed_simp_app("str.to_re", [a]).unwrap();
+    assert!(context.build_let([("r", re.clone())]).is_ok());
+    assert!(context.typed_define_const("c", re).is_ok());
+}

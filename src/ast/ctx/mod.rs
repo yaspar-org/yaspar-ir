@@ -35,7 +35,6 @@ mod recs;
 mod stack;
 pub mod utils;
 
-#[cfg(feature = "implicant-generation")]
 use crate::ast::implicant::{ImplicantEnumerator, ImplicantIterator};
 use crate::containers::{LocEnv, sanitize_bindings, valid_symbol_char};
 pub use crate::raw::alg::{
@@ -43,6 +42,8 @@ pub use crate::raw::alg::{
     SortDef as ASortDef, StrQuote, SymbolQuote, Term as ATerm,
 };
 pub use crate::raw::instance::*;
+#[cfg(feature = "implicant-generation")]
+use crate::raw::tc::no_reglan;
 use crate::raw::tc::{TC, TCEnv, TCEnvGen, TCLocal};
 pub(crate) use checked::TermContext;
 pub use checked::{CheckedApi, ScopedSortApi};
@@ -515,6 +516,11 @@ impl<D: Dialect> Context<D> {
     {
         let symbol = symbol.allocate(self.arena());
         self.can_add_symbol(&symbol)?;
+        if let Sig::ParFunc(_, _, inputs, output) = &sig {
+            for s in inputs.iter().chain([output]) {
+                no_reglan(s, format!("symbol {}", symbol.sym_quote()))?;
+            }
+        }
         self.insert_symbol(symbol, sig, FunctionMeta::OpaqueDeclared);
         Ok(())
     }
@@ -522,6 +528,12 @@ impl<D: Dialect> Context<D> {
     /// Add a symbol with its definition to the symbol table and reject duplicated definitions.
     pub fn def_symbol(&mut self, def: FunctionDef) -> Result<()> {
         self.can_add_symbol(&def.name)?;
+        // a definition without inputs may name a regular expression
+        if !def.vars.is_empty() {
+            for s in def.vars.iter().map(|v| &v.2).chain([&def.out_sort]) {
+                no_reglan(s, format!("symbol {}", def.name.sym_quote()))?;
+            }
+        }
         self.insert_symbol_with_def(HashSet::new(), def);
         Ok(())
     }
