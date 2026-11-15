@@ -474,8 +474,8 @@ where
 }
 
 /// Check that `RegLan` does not occur in `sort`, which `what` is to have: by decision, a regular
-/// expression is not what a variable ranges over, nor what a declared or parameterized symbol
-/// stands for; only a `let`, a `define-const` or a `define-fun` without inputs may name one (#180).
+/// expression is not what a quantified variable ranges over, nor what a declared symbol stands for;
+/// `let`, `define-const` and `define-fun`, which are expanded, may take and name one (#180).
 pub(crate) fn no_reglan(sort: &Sort, what: impl Display) -> TC<()> {
     let mut todo = vec![sort];
     let mut seen = HashSet::new();

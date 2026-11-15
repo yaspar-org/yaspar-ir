@@ -2221,7 +2221,8 @@ fn test_named_annotation_chain_defines_each_label() {
 #[test]
 fn test_unary_variadic_operators() {
     let decls = "(set-logic ALL)(declare-const p Bool)(declare-const x Int)(declare-const r Real)\
-        (declare-const b (_ BitVec 4))(declare-const s String)(declare-const re RegLan)";
+        (declare-const b (_ BitVec 4))(declare-const s String)\
+        (define-const re RegLan (str.to_re \"a\"))";
     let check = |atslib: bool, t: &str| {
         let script = format!("{decls}(assert {t})");
         let cs = UntypedAst
@@ -2616,8 +2617,8 @@ fn test_global_declarations() {
 }
 
 /// No variable or declared symbol can have a sort that mentions `RegLan` (#180): a regular
-/// expression is a term, built by the operators of regular expressions, which only a `let`, a
-/// `define-const` or a `define-fun` without inputs may name.
+/// expression is a term, built by the operators of regular expressions, which `let`, `define-const`
+/// and `define-fun`, all expanded, may take and name.
 #[test]
 fn test_reglan_not_bound() {
     let run = |atslib: bool, body: &str| {
@@ -2637,8 +2638,6 @@ fn test_reglan_not_bound() {
             "(declare-const a (Array Int RegLan))",
             "(declare-fun f (RegLan) Bool)",
             "(declare-fun g () RegLan)",
-            "(define-fun h ((x Int)) RegLan (str.to_re \"a\"))",
-            "(define-fun k ((r RegLan)) Bool (str.in_re \"a\" r))",
             // an alias is expanded where it is used
             "(define-sort R () (Array Int RegLan))(declare-const a R)",
             "(define-sort R2 () RegLan)(assert (forall ((x R2)) true))",
@@ -2658,6 +2657,8 @@ fn test_reglan_not_bound() {
             "(assert (let ((r (str.to_re \"a\"))) (str.in_re \"a\" r)))",
             "(define-const c RegLan (str.to_re \"a\"))(assert (str.in_re \"a\" c))",
             "(define-fun l () RegLan (str.to_re \"a\"))(assert (str.in_re \"a\" l))",
+            "(define-fun h ((x String)) RegLan (str.to_re x))(assert (str.in_re \"a\" (h \"a\")))",
+            "(define-fun k ((r RegLan)) Bool (str.in_re \"a\" r))(assert (k (str.to_re \"a\")))",
             "(define-sort R () RegLan)(define-const c R (str.to_re \"a\"))",
             "(declare-const s String)(assert (str.in_re s (re.union (str.to_re s) re.none)))",
         ] {
@@ -2681,7 +2682,7 @@ fn test_reglan_not_bound_checked_api() {
             .build_quantifier_with_domain([("r", reglan.clone())])
             .is_err()
     );
-    assert!(context.build_fun("f", [("r", reglan)]).is_err());
+    assert!(context.build_fun("f", [("r", reglan)]).is_ok());
     let a = context.allocate_str("a");
     let a = context.typed_constant(Constant::String(a)).unwrap();
     let re = context.typed_simp_app("str.to_re", [a]).unwrap();
