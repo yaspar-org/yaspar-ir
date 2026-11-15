@@ -46,8 +46,9 @@ impl Context {
 
 impl<D: Dialect> Context<D> {
     /// The signature to install for an operator that ATSLIB leaves out: the one `sig` builds, or
-    /// [`Sig::Rejected`] in a dialect without all the operators ([`AtsLib`]), which keeps the name
-    /// reserved but rejects every use. `sig` is only called when it is needed.
+    /// [`Sig::Rejected`] in a dialect without all the operators
+    /// ([`AtsLib`](crate::ast::AtsLib)), which keeps the name reserved but rejects every use. `sig`
+    /// is only called when it is needed.
     fn unless_atslib(sig: impl FnOnce() -> Sig) -> Sig {
         if D::ALL_OPERATORS {
             sig()

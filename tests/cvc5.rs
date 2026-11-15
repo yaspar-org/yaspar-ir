@@ -3093,3 +3093,18 @@ fn global_declarations_survive_pop_and_reset() {
          (check-sat)",
     ));
 }
+
+/// A `define-fun` may take and return regular expressions (#180).
+#[test]
+fn define_fun_over_reglan() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-const s String)
+         (define-fun k ((r RegLan)) Bool (str.in_re s r))
+         (define-fun h ((x String)) RegLan (re.* (str.to_re x)))
+         (define-const c RegLan (str.to_re \"a\"))
+         (assert (k (h \"a\")))
+         (assert (k c))
+         (check-sat)",
+    ));
+}

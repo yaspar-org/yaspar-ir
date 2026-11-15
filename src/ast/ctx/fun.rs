@@ -15,7 +15,6 @@ use crate::ast::ctx::{DefaultDialect, Dialect};
 use crate::ast::ctx::{HasDialect, TermContext};
 use crate::containers::LocEnv;
 use crate::raw::instance::HasArena;
-use crate::raw::tc::no_reglan;
 use crate::traits::{AllocatableString, HasMutRef};
 use std::collections::HashSet;
 
@@ -75,17 +74,10 @@ impl<'a, D: Dialect> FunctionContext<'a, D> {
             .into_iter()
             .map(|(s, so)| {
                 let s = s.allocate(context.arena());
-                no_reglan(&so, format!("variable {}", s.sym_quote()))?;
                 let id = context.new_local();
-                Ok(VarBinding(s, id, so))
+                VarBinding(s, id, so)
             })
-            .collect::<TC<Vec<_>>>()?;
-        // a definition without inputs may name a regular expression
-        if let Some(o) = &output
-            && !inputs.is_empty()
-        {
-            no_reglan(o, format!("symbol {}", symbol.sym_quote()))?;
-        }
+            .collect::<Vec<_>>();
         context.meta.check_bindings(&inputs, |v| v.0.clone())?;
         Ok(Self {
             context,
@@ -99,9 +91,6 @@ impl<'a, D: Dialect> FunctionContext<'a, D> {
     pub fn typed_define_fun(self, body: Term) -> TC<Command> {
         no_named(&body)?;
         let sort = body.get_sort(self.context);
-        if !self.inputs.is_empty() {
-            no_reglan(&sort, format!("symbol {}", self.name.sym_quote()))?;
-        }
         if let Some(s) = self.output.as_ref()
             && sort != *s
         {
