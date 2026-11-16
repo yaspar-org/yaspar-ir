@@ -2689,3 +2689,57 @@ fn test_reglan_not_bound_checked_api() {
     assert!(context.build_let([("r", re.clone())]).is_ok());
     assert!(context.typed_define_const("c", re).is_ok());
 }
+
+/// A datatype under declaration may only appear at the top of a field's sort, and, without
+/// `full-datatypes`, applied to sort parameters or closed sorts declared before (#205).
+#[test]
+fn test_datatype_recursive_uses() {
+    let run = |body: &str| {
+        let script = format!(
+            "(set-logic ALL)(declare-datatypes ((Lst 1)) ((par (T) ((nil) (cons (hd T) (tl (Lst T)))))))\
+             {body}"
+        );
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        cs.type_check(&mut Context::new()).map(|_| ())
+    };
+    // always accepted
+    for body in [
+        "(declare-datatypes ((L 1)) ((par (X) ((ln) (lc (t (L X)))))))",
+        "(declare-datatypes ((L 1)) ((par (X) ((ln) (lc (t (L Int)))))))",
+        "(declare-datatypes ((L 1)) ((par (X) ((ln) (lc (t (L (Lst Int))))))))",
+        "(declare-datatypes ((P 2)) ((par (X Y) ((pn) (pc (t (P Y X)))))))",
+        "(declare-datatypes ((E 0) (O 0)) (((ez) (es (pe O))) ((os (po E)))))",
+        "(declare-datatype F ((f0) (f1 (g (Lst Int)) (h (Array Int Bool)))))",
+    ] {
+        assert_eq!(run(body), Ok(()), "{body}");
+    }
+    // always rejected: nested, or a member in an argument, or ill-founded
+    for body in [
+        "(declare-datatype Rose ((leaf) (rose (kids (Lst Rose)))))",
+        "(declare-datatype A ((a0) (a1 (f (Array Int A)))))",
+        "(declare-datatypes ((L 1)) ((par (X) ((ln) (lc (t (L (L X))))))))",
+        "(declare-datatype B ((b (f B))))",
+    ] {
+        assert!(run(body).is_err(), "{body}");
+    }
+    // a recursive use with an argument that is neither a parameter nor closed
+    for body in [
+        "(declare-datatypes ((L 1)) ((par (X) ((ln) (lc (t (L (Lst X))))))))",
+        "(declare-datatypes ((L 1)) ((par (X) ((ln) (lc (t (L (Array X Int))))))))",
+    ] {
+        assert_eq!(
+            run(body).is_ok(),
+            cfg!(feature = "full-datatypes"),
+            "{body}"
+        );
+    }
+    // non-uniform recursion: `Nest` used at `(List X)` in its own declaration
+    let nest = "(set-logic ALL)\
+        (declare-datatypes ((List 1)) ((par (X) ((lnil) (lcons (lhd X) (ltl (List X)))))))\
+        (declare-datatypes ((Nest 1)) ((par (X) ((nil) (cons (hd X) (tl (Nest (List X))))))))";
+    let r = UntypedAst
+        .parse_script_str(nest)
+        .unwrap()
+        .type_check(&mut Context::new());
+    assert_eq!(r.is_ok(), cfg!(feature = "full-datatypes"), "{r:?}");
+}

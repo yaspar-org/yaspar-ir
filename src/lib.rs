@@ -64,6 +64,9 @@
 //!   logics that include it.
 //! - `const-array` — enables the non-standard constant arrays of z3 and cvc5,
 //!   `((as const (Array X Y)) v)`, which ArraysEx does not have.
+//! - `full-datatypes` — admits recursive uses of a datatype with any arguments, e.g. `(L (Lst X))`
+//!   in the declaration of `L`; without it, each argument of a recursive use is a sort parameter or a
+//!   closed sort declared before.
 //! - `z3-bv-funs` — enables z3's names `bv2nat`, `nat2bv` and `int2bv` for `ubv_to_int` and
 //!   `int_to_bv`.
 //!

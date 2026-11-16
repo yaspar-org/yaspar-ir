@@ -17,7 +17,9 @@ use crate::ast::{
     DatatypeFunction, FunctionDef, FunctionMeta, FunctionMetaDefined, Identifier, Index, Local,
     SymbolQuote, Typecheck, alg,
 };
-use crate::containers::{LocEnv, Mapping};
+use crate::containers::LocEnv;
+#[cfg(feature = "full-datatypes")]
+use crate::containers::Mapping;
 use crate::raw::alg::Sort as ASort;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::no_reglan;
@@ -26,6 +28,7 @@ use crate::traits::Repr;
 use crate::traits::{AllocatableString, Contains, HasMutRef};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "full-datatypes")]
 use yaspar_macros::stack_safe;
 
 struct DatatypeDefs {
@@ -443,12 +446,51 @@ impl<D: Dialect> ScopedSortApi<D> for DtDeclContext<'_, '_, D> {
     }
 }
 
-/// Check whether a given sort is well-formed in a data type definition
+/// Check whether a given sort is well-formed in a data type definition, without `full-datatypes`
+///
+/// Sorts in `names` can only appear as the top symbol, applied to sort parameters or to closed
+/// sorts that mention none of them (#205).
+#[cfg(not(feature = "full-datatypes"))]
+pub(crate) fn wf_sort<D: Dialect>(
+    names: &[Str],
+    sort: &Sort,
+    _env: &mut TCEnv<'_, '_, (), D>,
+    _top: bool,
+) -> bool {
+    match sort.repr() {
+        ASort::App(id, args) if names.contains(&id.symbol) => args
+            .iter()
+            .all(|a| a.is_var().is_some() || free_of(names, a, true)),
+        _ => free_of(names, sort, false),
+    }
+}
+
+/// Whether `sort` mentions none of `names`, nor, if `closed`, a sort parameter. A work list, so
+/// that a deep sort takes no stack.
+#[cfg(not(feature = "full-datatypes"))]
+fn free_of(names: &[Str], sort: &Sort, closed: bool) -> bool {
+    let mut todo = vec![sort];
+    let mut seen = HashSet::new();
+    while let Some(s) = todo.pop() {
+        if !seen.insert(s) {
+            continue;
+        }
+        match s.repr() {
+            ASort::Var(_) if closed => return false,
+            ASort::App(id, _) if names.contains(&id.symbol) => return false,
+            _ => todo.extend(s.args()),
+        }
+    }
+    true
+}
+
+/// Check whether a given sort is well-formed in a data type definition, with `full-datatypes`
 ///
 /// Well-formedness condition requires that sorts in `names` can only appear as `top` symbols.
 ///
 /// * names: the names of the datatypes being defined.
 /// * top: whether the given sort is a top symbol
+#[cfg(feature = "full-datatypes")]
 #[stack_safe]
 pub(crate) fn wf_sort<D: Dialect>(
     names: &[Str],
