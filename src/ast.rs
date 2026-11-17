@@ -141,6 +141,7 @@ where
 }
 
 fn type_check_command<D: Dialect>(command: &u::Command, env: &mut Context<D>) -> TC<Command> {
+    env.check_command(command.repr().name())?;
     match command.repr() {
         ACommand::Assert(t) => {
             env.ensure_logic();

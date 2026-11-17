@@ -30,6 +30,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Mul, Sub};
 pub use yaspar::ast::Keyword;
+use yaspar::tokens::Command as CommandName;
 use yaspar::tokens::SPECIAL_SYMBOLS;
 use yaspar_macros::stack_safe;
 
@@ -1117,6 +1118,45 @@ pub enum Command<Str, So, T> {
     SetInfo(Attribute<Str, T>),
     SetLogic(Str),
     SetOption(Attribute<Str, T>),
+}
+
+impl<Str, So, T> Command<Str, So, T> {
+    /// The keyword of the command
+    pub fn name(&self) -> CommandName {
+        match self {
+            Command::Assert(..) => CommandName::Assert,
+            Command::CheckSat => CommandName::CheckSat,
+            Command::CheckSatAssuming(..) => CommandName::CheckSatAssuming,
+            Command::DeclareConst(..) => CommandName::DeclareConst,
+            Command::DeclareDatatype(..) => CommandName::DeclareDatatype,
+            Command::DeclareDatatypes(..) => CommandName::DeclareDatatypes,
+            Command::DeclareFun(..) => CommandName::DeclareFun,
+            Command::DeclareSort(..) => CommandName::DeclareSort,
+            Command::DefineConst(..) => CommandName::DefineConst,
+            Command::DefineFun(..) => CommandName::DefineFun,
+            Command::DefineFunRec(..) => CommandName::DefineFunRec,
+            Command::DefineFunsRec(..) => CommandName::DefineFunsRec,
+            Command::DefineSort(..) => CommandName::DefineSort,
+            Command::Echo(..) => CommandName::Echo,
+            Command::Exit => CommandName::Exit,
+            Command::GetAssertions => CommandName::GetAssertions,
+            Command::GetAssignment => CommandName::GetAssignment,
+            Command::GetInfo(..) => CommandName::GetInfo,
+            Command::GetModel => CommandName::GetModel,
+            Command::GetOption(..) => CommandName::GetOption,
+            Command::GetProof => CommandName::GetProof,
+            Command::GetUnsatAssumptions => CommandName::GetUnsatAssumptions,
+            Command::GetUnsatCore => CommandName::GetUnsatCore,
+            Command::GetValue(..) => CommandName::GetValue,
+            Command::Pop(..) => CommandName::Pop,
+            Command::Push(..) => CommandName::Push,
+            Command::Reset => CommandName::Reset,
+            Command::ResetAssertions => CommandName::ResetAssertions,
+            Command::SetInfo(..) => CommandName::SetInfo,
+            Command::SetLogic(..) => CommandName::SetLogic,
+            Command::SetOption(..) => CommandName::SetOption,
+        }
+    }
 }
 
 /// Implement this trait to specify how to quote a string representation

@@ -20,6 +20,7 @@
 use crate::raw::instance::Term;
 use crate::raw::tc::matching::MatchChecker;
 use crate::raw::tc::{TC, TCEnvGen};
+use yaspar::tokens::Command as CommandName;
 
 /// A dialect of SMT-LIB, implemented by [`SmtLib`] and [`AtsLib`].
 ///
@@ -48,6 +49,9 @@ pub trait Dialect: sealed::Sealed + Sized + 'static {
     /// Whether `:global-declarations` starts out set.
     const GLOBAL_DECLARATIONS: bool;
 
+    /// The commands the dialect does not have.
+    const REJECTED_COMMANDS: &'static [CommandName];
+
     /// Start checking a `match` on `scrutinee`, which `meta` locates, or reject it if the dialect
     /// has no `match` terms.
     #[doc(hidden)]
@@ -70,6 +74,7 @@ impl Dialect for SmtLib {
     const ALL_OPERATORS: bool = true;
     const STRING_UNICODE_ESCAPES: bool = false;
     const GLOBAL_DECLARATIONS: bool = false;
+    const REJECTED_COMMANDS: &'static [CommandName] = &[];
 
     fn start_match<L>(
         env: &mut TCEnvGen<'_, L, Self>,
@@ -86,6 +91,21 @@ impl Dialect for AtsLib {
     const ALL_OPERATORS: bool = false;
     const STRING_UNICODE_ESCAPES: bool = true;
     const GLOBAL_DECLARATIONS: bool = true;
+    const REJECTED_COMMANDS: &'static [CommandName] = &[
+        CommandName::Push,
+        CommandName::Pop,
+        CommandName::Reset,
+        CommandName::SetOption,
+        CommandName::Echo,
+        CommandName::Exit,
+        CommandName::DefineFunRec,
+        CommandName::DefineFunsRec,
+        CommandName::GetAssertions,
+        CommandName::GetAssignment,
+        CommandName::GetInfo,
+        CommandName::GetModel,
+        CommandName::GetOption,
+    ];
 
     fn start_match<L>(
         _env: &mut TCEnvGen<'_, L, Self>,

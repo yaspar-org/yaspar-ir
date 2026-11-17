@@ -2370,16 +2370,15 @@ fn test_string_unicode_escape_is_one_character() {
 #[test]
 fn test_string_unicode_escapes_only_in_terms() {
     let mut ats = Context::<AtsLib>::new_dialect();
-    let script = r#"(set-logic ALL) (echo "\u{48}") (set-info :source "\u{48}")
+    let script = r#"(set-logic ALL) (set-info :source "\u{48}")
         (declare-const p Bool) (assert (! p :note "\u{48}"))"#;
     let cs = UntypedAst
         .parse_script_str(script)
         .unwrap()
         .type_check(&mut ats)
         .unwrap();
-    assert_eq!(cs[1].to_string(), r#"(echo "\u{48}")"#);
-    assert_eq!(cs[2].to_string(), r#"(set-info :source "\u{48}")"#);
-    assert_eq!(cs[4].to_string(), r#"(assert (! p :note "\u{48}"))"#);
+    assert_eq!(cs[1].to_string(), r#"(set-info :source "\u{48}")"#);
+    assert_eq!(cs[3].to_string(), r#"(assert (! p :note "\u{48}"))"#);
 }
 
 /// The checked API: `typed_escaped_string` decodes, for ATSLIB only; `typed_constant` takes the
@@ -2606,8 +2605,7 @@ fn test_global_declarations() {
         assert!(err.contains(":global-declarations"), "{script}: {err}");
     }
 
-    // ATSLIB starts with it set
-    assert_eq!(run(true, &format!("(set-logic ALL){popped}{uses}")), Ok(()));
+    // ATSLIB starts with it set; it has no `push` and `pop` (#177)
     assert_eq!(
         run(true, &format!("(set-logic ALL){reset}{uses_dt}")),
         Ok(())
@@ -2645,11 +2643,19 @@ fn test_reglan_not_bound() {
             "(declare-datatype E ((e (s (Array Int RegLan)))))",
             "(assert (forall ((s RegLan)) true))",
             "(assert (exists ((s (Array Int RegLan))) true))",
-            "(define-fun-rec q ((x Int)) RegLan (str.to_re \"a\"))",
-            "(define-funs-rec ((q ((r RegLan)) Bool)) ((str.in_re \"a\" r)))",
         ] {
             let err = run(atslib, body).unwrap_err();
             assert!(err.contains("RegLan"), "{body}: {err}");
+        }
+        // ATSLIB has no recursive definitions at all
+        if !atslib {
+            for body in [
+                "(define-fun-rec q ((x Int)) RegLan (str.to_re \"a\"))",
+                "(define-funs-rec ((q ((r RegLan)) Bool)) ((str.in_re \"a\" r)))",
+            ] {
+                let err = run(atslib, body).unwrap_err();
+                assert!(err.contains("RegLan"), "{body}: {err}");
+            }
         }
         // a regular expression as a term is fine, and so is naming one
         for body in [
@@ -2742,4 +2748,60 @@ fn test_datatype_recursive_uses() {
         .unwrap()
         .type_check(&mut Context::new());
     assert_eq!(r.is_ok(), cfg!(feature = "full-datatypes"), "{r:?}");
+}
+
+/// ATSLIB does not have `push`, `pop`, `reset`, `set-option`, `echo`, `exit`, `define-fun-rec`,
+/// `define-funs-rec`, `get-assertions`, `get-assignment`, `get-info`, `get-model` and `get-option`
+/// (#177); SMT-LIB has them all.
+#[test]
+fn test_atslib_rejected_commands() {
+    let run = |atslib: bool, body: &str| {
+        let script = format!("(set-logic ALL){body}");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        if atslib {
+            cs.type_check(&mut Context::<AtsLib>::new_dialect())
+                .map(|_| ())
+        } else {
+            cs.type_check(&mut Context::<SmtLib>::new_dialect())
+                .map(|_| ())
+        }
+    };
+    for body in [
+        "(push 1)",
+        "(push 1)(pop 1)",
+        "(reset)",
+        "(set-option :print-success true)",
+        "(echo \"hi\")",
+        "(exit)",
+        "(define-fun-rec f ((x Int)) Int (f x))",
+        "(define-funs-rec ((g ((x Int)) Int)) ((g x)))",
+        "(get-assertions)",
+        "(get-assignment)",
+        "(get-info :name)",
+        "(get-model)",
+        "(get-option :produce-models)",
+    ] {
+        let err = run(true, body).unwrap_err();
+        assert!(err.contains("not supported"), "{body}: {err}");
+        assert_eq!(run(false, body), Ok(()), "{body}");
+    }
+    // the commands it has
+    for body in [
+        "(reset-assertions)",
+        "(declare-const x Int)(assert (> x 0))(check-sat)(get-value (x))",
+        "(check-sat-assuming (true))(get-unsat-assumptions)",
+        "(set-info :source |s|)",
+    ] {
+        assert_eq!(run(true, body), Ok(()), "{body}");
+    }
+    // the checked API agrees
+    let mut atslib = Context::<AtsLib>::new_dialect();
+    atslib.ensure_logic();
+    assert!(
+        atslib
+            .build_rec_funs(Vec::<RecFunc<&str, Sort>>::new())
+            .is_err()
+    );
+    assert!(atslib.typed_push(1u8.into()).is_err());
+    assert!(atslib.typed_pop(1u8.into()).is_err());
 }
