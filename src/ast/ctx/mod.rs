@@ -53,6 +53,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use yaspar::tokens::Command as CommandName;
 
 #[cfg(feature = "cnf")]
 use crate::ast::cnf::{CNFCache, CNFEnv};
@@ -572,6 +573,15 @@ impl<D: Dialect> Context<D> {
     /// Return the number of symbols in the symbol table without considering overloading
     pub fn symbol_count_no_dup(&self) -> usize {
         self.stack.symbols().count()
+    }
+
+    /// Check that the dialect has the command `name`.
+    pub(crate) fn check_command(&self, name: CommandName) -> Result<()> {
+        if D::REJECTED_COMMANDS.contains(&name) {
+            Err(format!("TC: {name} is not supported in this dialect!"))
+        } else {
+            Ok(())
+        }
     }
 
     /// Return the number of defined sorts

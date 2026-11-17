@@ -80,6 +80,7 @@ use crate::traits::{AllocatableString, Repr};
 use dashu::integer::{IBig, Sign, UBig};
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
+use yaspar::tokens::Command as CommandName;
 
 /// The trait that represents checked APIs to construct terms.
 ///
@@ -553,6 +554,8 @@ impl<D: Dialect> Context<D> {
         T: IntoIterator<Item = RecFunc<S, Sort>>,
         S: AllocatableString<Arena>,
     {
+        self.check_command(CommandName::DefineFunsRec)?;
+        self.check_command(CommandName::DefineFunRec)?;
         RecFunsContext::new(self, funs)
     }
 
@@ -643,6 +646,7 @@ impl<D: Dialect> Context<D> {
 
     /// Checked API for building a [`push`](Command) command; pushes `n` assertion levels.
     pub fn typed_push(&mut self, n: UBig) -> TC<Command> {
+        self.check_command(CommandName::Push)?;
         let lvl = usize::try_from(&n).map_err(|_| format!("TC: cannot push {n} levels!"))?;
         self.push_levels(lvl);
         Ok(self.push(n))
@@ -652,6 +656,7 @@ impl<D: Dialect> Context<D> {
     ///
     /// Sorts and symbols declared within the popped levels go out of scope.
     pub fn typed_pop(&mut self, n: UBig) -> TC<Command> {
+        self.check_command(CommandName::Pop)?;
         let lvl = usize::try_from(&n).map_err(|_| format!("TC: cannot pop {n} levels!"))?;
         self.pop_levels(lvl).map_err(|e| format!("TC: {e}"))?;
         Ok(self.pop(n))
@@ -662,6 +667,7 @@ impl<D: Dialect> Context<D> {
     where
         alg::Attribute<S, T>: Typecheck<Self, Out = Attribute>,
     {
+        self.check_command(CommandName::SetOption)?;
         let opt = opt.type_check(self)?;
         match &opt {
             Attribute::Keyword(_) => {}
