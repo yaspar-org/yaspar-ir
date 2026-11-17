@@ -433,6 +433,7 @@ fn test_gsubst_nested_shadowing() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_gsubst_datatype_tester() {
     let mut ctx = Context::new();
     UntypedAst
@@ -456,6 +457,7 @@ fn test_gsubst_datatype_tester() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_gsubst_datatype_tester_in_formula() {
     let mut ctx = Context::new();
     UntypedAst
@@ -484,6 +486,7 @@ fn test_gsubst_datatype_tester_in_formula() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_gsubst_datatype_tester_with_quantifier() {
     let mut ctx = Context::new();
     UntypedAst
@@ -517,6 +520,7 @@ fn test_gsubst_datatype_tester_with_quantifier() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_gsubst_multiple_datatype_testers() {
     let mut ctx = Context::new();
     UntypedAst

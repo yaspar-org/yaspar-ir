@@ -2968,12 +2968,16 @@ where
         for (i, ctor_dec) in dec.constructors.iter().enumerate() {
             let ctor = dt.constructor(i).res()?;
             env.declare_global(ctor_dec.ctor.clone(), ctor.term());
-            let tester = ctor.tester_term();
-            let sym = env
-                .ctx
-                .ref_mut()
-                .allocate_symbol(&format!("is-{}", ctor.name()));
-            env.declare_global(sym, tester);
+            // `is-X`, with `is-x-tester`
+            #[cfg(feature = "is-x-tester")]
+            {
+                let tester = ctor.tester_term();
+                let sym = env
+                    .ctx
+                    .ref_mut()
+                    .allocate_symbol(&format!("is-{}", ctor.name()));
+                env.declare_global(sym, tester);
+            }
             for (j, sel_dec) in ctor_dec.args.iter().enumerate() {
                 let sel = ctor.selector(j).res()?;
                 env.declare_global(sel_dec.0.clone(), sel.term());

@@ -509,6 +509,7 @@ fn parametric_datatype_constructor_selector_tester() {
 
 /// Parametric datatype: is-X style tester.
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn parametric_datatype_is_dash_tester() {
     assert!(check_sat(
         "(set-logic ALL)

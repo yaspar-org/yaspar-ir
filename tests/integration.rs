@@ -465,6 +465,7 @@ fn test_datatype1() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_datatype2() {
     let mut context = Context::new();
     context.ensure_logic();
@@ -477,6 +478,7 @@ fn test_datatype2() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_datatype3() {
     let mut context = Context::new();
     context.ensure_logic();
@@ -523,6 +525,7 @@ fn test_datatype6() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_datatype7() {
     let mut context = Context::new();
     context.ensure_logic();
@@ -549,6 +552,7 @@ fn test_datatype7() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_datatype8() {
     let mut context = Context::new();
     context.ensure_logic();
@@ -2804,4 +2808,27 @@ fn test_atslib_rejected_commands() {
     );
     assert!(atslib.typed_push(1u8.into()).is_err());
     assert!(atslib.typed_pop(1u8.into()).is_err());
+}
+
+/// `is-X` testers are there with `is-x-tester` only (#199); `(_ is X)` always is. Without the
+/// feature, `is-X` is a name a script may declare.
+#[test]
+fn test_is_x_tester() {
+    let run = |body: &str| {
+        let script = format!(
+            "(set-logic ALL)(declare-datatype L ((nil) (cons (hd Int) (tl L))))\
+             (declare-const l L){body}"
+        );
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        cs.type_check(&mut Context::new()).map(|_| ())
+    };
+    assert_eq!(run("(assert ((_ is cons) l))"), Ok(()));
+    assert_eq!(
+        run("(assert (is-cons l))").is_ok(),
+        cfg!(feature = "is-x-tester")
+    );
+    assert_eq!(
+        run("(declare-fun is-cons (L) Bool)").is_ok(),
+        !cfg!(feature = "is-x-tester")
+    );
 }

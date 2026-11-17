@@ -509,6 +509,7 @@ fn test_typed_commands() {
 }
 
 #[test]
+#[cfg(feature = "is-x-tester")]
 fn test_typed_datatypes() {
     let mut context = Context::new();
     context.ensure_logic();

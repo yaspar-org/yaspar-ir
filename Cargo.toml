@@ -14,7 +14,7 @@ exclude = ["tests/resources", "tests/regression.rs", ".github", "regression"]
 
 [features]
 default = ["none"]
-all = ["cnf", "cache", "implicant-generation", "finite-set", "no-pattern", "const-array", "full-datatypes"]
+all = ["cnf", "cache", "implicant-generation", "finite-set", "no-pattern", "const-array", "full-datatypes", "is-x-tester"]
 cnf = ["dep:sat-interface", "cache"]
 implicant-generation = ["cnf"]
 # cvc5 1.3.x through cvc5-rs 0.5 (the `cvc5` dependency)
@@ -38,6 +38,8 @@ const-array = []
 # Recursive uses of a datatype with any arguments, e.g. `(L (Lst X))` in `L`; without it, only
 # sort parameters and sorts declared before the group.
 full-datatypes = []
+# `is-X` testers for the constructors `X` of a datatype, besides the standard `(_ is X)`.
+is-x-tester = []
 # z3's names `bv2nat`, `nat2bv` and `int2bv` for `ubv_to_int` and `int_to_bv`.
 z3-bv-funs = []
 atslib = ["finite-set"]
