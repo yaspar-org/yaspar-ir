@@ -67,6 +67,8 @@
 //! - `full-datatypes` — admits recursive uses of a datatype with any arguments, e.g. `(L (Lst X))`
 //!   in the declaration of `L`; without it, each argument of a recursive use is a sort parameter or a
 //!   closed sort declared before.
+//! - `is-x-tester` — enables `is-X` testers for the constructors `X` of a datatype, besides the
+//!   standard `(_ is X)`.
 //! - `z3-bv-funs` — enables z3's names `bv2nat`, `nat2bv` and `int2bv` for `ubv_to_int` and
 //!   `int_to_bv`.
 //!

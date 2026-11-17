@@ -1,10 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::allocator::{
-    CommandAllocator, LocalVarAllocator, ObjectAllocatorExt, SortAllocator, StrAllocator,
-    TermAllocator,
-};
+use crate::allocator::{CommandAllocator, ObjectAllocatorExt, SortAllocator, StrAllocator};
 use crate::ast::alg::{SigIndex, VarBinding};
 use crate::ast::ctx::HasDialect;
 use crate::ast::ctx::checked::ScopedSortApi;
@@ -13,19 +10,16 @@ use crate::ast::ctx::{
     Theory,
 };
 use crate::ast::ctx::{DefaultDialect, Dialect};
-use crate::ast::{
-    DatatypeFunction, FunctionDef, FunctionMeta, FunctionMetaDefined, Identifier, Index, Local,
-    SymbolQuote, Typecheck, alg,
-};
+use crate::ast::{DatatypeFunction, FunctionMeta, SymbolQuote, Typecheck, alg};
 use crate::containers::LocEnv;
 #[cfg(feature = "full-datatypes")]
 use crate::containers::Mapping;
 use crate::raw::alg::Sort as ASort;
 use crate::raw::instance::HasArena;
 use crate::raw::tc::no_reglan;
-use crate::statics::{IS, IS_DASH};
+use crate::statics::IS;
 use crate::traits::Repr;
-use crate::traits::{AllocatableString, Contains, HasMutRef};
+use crate::traits::{AllocatableString, HasMutRef};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "full-datatypes")]
@@ -307,10 +301,11 @@ impl<'a, 'b, D: Dialect> DtDeclContext<'a, 'b, D> {
     {
         let mut added_names = HashSet::new();
         let ctor = self.check_name(ctor, &mut added_names)?;
-        let mut is_sym = IS_DASH.to_string();
-        is_sym.push_str(ctor.inner());
-        let is_sym = self.allocate_symbol(&is_sym);
-        self.check_name(is_sym, &mut added_names)?;
+        #[cfg(feature = "is-x-tester")]
+        {
+            let is_sym = is_x::tester_name(self, &ctor);
+            self.check_name(is_sym, &mut added_names)?;
+        }
         let mut new_args = vec![];
         for (name, sort) in args {
             let name = self.check_name(name, &mut added_names)?;
@@ -576,7 +571,6 @@ pub(crate) fn extend_symbols_about_datatypes<D: Dialect>(
 ) {
     let bool_sort = env.bool_sort();
     let is_symb = env.allocate_symbol(IS);
-    let x_var = env.allocate_symbol("x");
     for def in defs {
         let current_sort = env.sort_n_params(def.name.clone(), def.dec.params.clone());
 
@@ -640,46 +634,76 @@ pub(crate) fn extend_symbols_about_datatypes<D: Dialect>(
             }
 
             // 3. insert is-X testers
-            //    we expand is-X to (_ is X) by defining the former in terms of the latter
-            let mut is_sym = IS_DASH.to_string();
-            is_sym.push_str(ctor.ctor.inner());
-            let is_sym = env.allocate_symbol(&is_sym);
-            let sig = Sig::ParFunc(
-                vec![],
-                def.dec.params.clone(),
-                vec![current_sort.clone()],
-                bool_sort.clone(),
-            );
-            let qid = Identifier {
-                symbol: is_symb.clone(),
-                indices: vec![Index::Symbol(ctor.ctor.clone())],
-            }
-            .into();
-            let id = env.new_local();
-            let x_loc = env.local(Local {
-                id,
-                symbol: x_var.clone(),
-                sort: current_sort.clone(),
-            });
-            let body = env.app(qid, vec![x_loc], Some(bool_sort.clone()));
-            env.insert_symbol(
-                is_sym.clone(),
-                sig,
-                FunctionMeta::Datatype {
-                    dt_name: def.name.clone(),
-                    kind: DatatypeFunction::TesterDefined(FunctionMetaDefined {
-                        rec_deps: Default::default(),
-                        def: FunctionDef {
-                            name: is_sym.clone(),
-                            sort_params: def.dec.params.clone(),
-                            vars: vec![VarBinding(x_var.clone(), id, current_sort.clone())],
-                            out_sort: bool_sort.clone(),
-                            body,
-                        },
-                    }),
-                },
-            );
+            #[cfg(feature = "is-x-tester")]
+            is_x::insert_tester(env, def, ctor, &current_sort, &bool_sort, &is_symb);
         }
+    }
+}
+
+/// `is-X` testers, a common extension: `(is-X t)` is defined as `((_ is X) t)`.
+#[cfg(feature = "is-x-tester")]
+mod is_x {
+    use super::*;
+    use crate::allocator::{LocalVarAllocator, TermAllocator};
+    use crate::ast::{FunctionDef, FunctionMetaDefined, Identifier, Index, Local};
+    use crate::statics::IS_DASH;
+    use crate::traits::Contains;
+
+    /// `is-X`, the name of the tester of the constructor `ctor`
+    pub(super) fn tester_name(arena: &mut impl HasArena, ctor: &Str) -> Str {
+        arena
+            .arena()
+            .allocate_symbol(&format!("{IS_DASH}{}", ctor.inner()))
+    }
+
+    /// Define the tester `is-X` of the constructor `ctor` of `def`, whose sort is `current_sort`,
+    /// in terms of `(_ is X)`.
+    pub(super) fn insert_tester<D: Dialect>(
+        env: &mut Context<D>,
+        def: &DatatypeDef,
+        ctor: &ConstructorDec,
+        current_sort: &Sort,
+        bool_sort: &Sort,
+        is_symb: &Str,
+    ) {
+        let x_var = env.allocate_symbol("x");
+
+        let is_sym = tester_name(env, &ctor.ctor);
+        let sig = Sig::ParFunc(
+            vec![],
+            def.dec.params.clone(),
+            vec![current_sort.clone()],
+            bool_sort.clone(),
+        );
+        let qid = Identifier {
+            symbol: is_symb.clone(),
+            indices: vec![Index::Symbol(ctor.ctor.clone())],
+        }
+        .into();
+        let id = env.new_local();
+        let x_loc = env.local(Local {
+            id,
+            symbol: x_var.clone(),
+            sort: current_sort.clone(),
+        });
+        let body = env.app(qid, vec![x_loc], Some(bool_sort.clone()));
+        env.insert_symbol(
+            is_sym.clone(),
+            sig,
+            FunctionMeta::Datatype {
+                dt_name: def.name.clone(),
+                kind: DatatypeFunction::TesterDefined(FunctionMetaDefined {
+                    rec_deps: Default::default(),
+                    def: FunctionDef {
+                        name: is_sym.clone(),
+                        sort_params: def.dec.params.clone(),
+                        vars: vec![VarBinding(x_var.clone(), id, current_sort.clone())],
+                        out_sort: bool_sort.clone(),
+                        body,
+                    },
+                }),
+            },
+        );
     }
 }
 

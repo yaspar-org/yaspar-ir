@@ -829,8 +829,9 @@ The crate gates optional functionality behind the following Cargo features:
 | `finite-set` | Theory of finite sets (`Set` sort and `set.*` operators) and the logics that include it. |
 | `const-array` | The non-standard constant arrays of z3 and cvc5, `((as const (Array X Y)) v)`, which ArraysEx does not have. |
 | `full-datatypes` | Recursive uses of a datatype with any arguments, e.g. `(L (Lst X))` in the declaration of `L`; without it, each argument of a recursive use is a sort parameter or a closed sort declared before. |
+| `is-x-tester` | `is-X` testers for the constructors `X` of a datatype, besides the standard `(_ is X)`. |
 | `z3-bv-funs` | z3's names `bv2nat`, `nat2bv` and `int2bv` for `ubv_to_int` and `int_to_bv`. |
-| `all` | Convenience feature enabling `cnf`, `implicant-generation`, `finite-set`, `no-pattern`, `const-array`, and `full-datatypes`. |
+| `all` | Convenience feature enabling `cnf`, `implicant-generation`, `finite-set`, `no-pattern`, `const-array`, `full-datatypes`, and `is-x-tester`. |
 
 `cvc5` and `cvc5-dynamic` are mutually exclusive ways of linking the same cvc5 support — enable exactly one. The
 cvc5 1.3.x and 1.4.x features are mutually exclusive too, since both link a cvc5 library; enabling both is a compile
@@ -860,7 +861,7 @@ This crate fully supports features of datatypes as described by the SMTLib stand
 1. Polymorphic, mutually recursive datatype declarations,
 2. Well-formedness and non-emptiness checking, as described by the SMTLib standard,
 3. Constructors, selectors and testers generation; In particular, this crate supports both `(_ is X)` tester (standard),
-   and `is-X` tester (common extension and de facto standard). `is-X` is defined in terms of `(_ is X)` as a definition.
+   and, with the `is-x-tester` feature, `is-X` tester (common extension and de facto standard). `is-X` is defined in terms of `(_ is X)` as a definition.
 4. Match expressions.
 
 #### `is` is not a permitted symbol
@@ -881,7 +882,7 @@ of an indexed identifier, and reserving it prevents confusion with user-defined 
 This crate supports the following non-standard extensions commonly found in z3 and cvc5:
 
 1. **`is-X` testers (datatypes):** In addition to the standard `(_ is X)` tester syntax, this crate
-   recognizes `is-X` as a tester for constructor `X`. Internally, `is-X` is defined as a function
+   recognizes, with the `is-x-tester` feature, `is-X` as a tester for constructor `X`. Internally, `is-X` is defined as a function
    whose body is `(_ is X)`, so the two forms are interchangeable. This is a de facto standard
    supported by both z3 and cvc5.
 2. **Non-standard bitvector/integer conversion operators:**
