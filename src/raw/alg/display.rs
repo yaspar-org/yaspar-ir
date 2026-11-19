@@ -522,7 +522,10 @@ where
 {
     match i {
         alg::SigIndex::Numeral => w.leaf(reserved(Token::RWNumeral)),
-        alg::SigIndex::Hexadecimal => w.leaf(reserved(Token::RWHexadecimal)),
+        alg::SigIndex::Positive => w.leaf(reserved(Token::RWNumeral)),
+        alg::SigIndex::Hexadecimal | alg::SigIndex::CodePoint => {
+            w.leaf(reserved(Token::RWHexadecimal))
+        }
         // a single admissible symbol is printed bare; a genuine choice is braced, and braces are not
         // the document's parentheses, so the choice is one token
         alg::SigIndex::Symbol(ss) => {

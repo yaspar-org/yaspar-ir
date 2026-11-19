@@ -126,6 +126,7 @@ impl<D: Dialect> Context<D> {
             SortDef::Opaque(0),
         );
 
+        let divisible = self.allocate_symbol(DIVISIBLE);
         let minus = self.allocate_symbol(SUB);
         let plus = self.allocate_symbol(ADD);
         let times = self.allocate_symbol(MUL);
@@ -152,6 +153,15 @@ impl<D: Dialect> Context<D> {
             builtin(lt, bin_pred_sig.clone()),
             builtin(ge, bin_pred_sig.clone()),
             builtin(gt, bin_pred_sig.clone()),
+            builtin(
+                divisible,
+                Sig::ParFunc(
+                    vec![SigIndex::Positive],
+                    vec![],
+                    vec![int.clone()],
+                    self.bool_sort(),
+                ),
+            ),
         ]);
         self.touch_symbol_table();
         self.stack
@@ -206,6 +216,7 @@ impl<D: Dialect> Context<D> {
             SortDef::Opaque(0),
         );
 
+        let divisible = self.allocate_symbol(DIVISIBLE);
         let minus = self.allocate_symbol(SUB);
         let plus = self.allocate_symbol(ADD);
         let times = self.allocate_symbol(MUL);
@@ -251,6 +262,15 @@ impl<D: Dialect> Context<D> {
             builtin(to_real, Sig::func(vec![int.clone()], real.clone())),
             builtin(to_int, Sig::func(vec![real.clone()], int.clone())),
             builtin(is_int, Sig::func(vec![real.clone()], self.bool_sort())),
+            builtin(
+                divisible,
+                Sig::ParFunc(
+                    vec![SigIndex::Positive],
+                    vec![],
+                    vec![int.clone()],
+                    self.bool_sort(),
+                ),
+            ),
         ]);
         self.touch_symbol_table();
         self.stack
@@ -340,7 +360,7 @@ impl<D: Dialect> Context<D> {
             builtin(
                 char,
                 Self::unless_atslib(|| {
-                    Sig::ParFunc(vec![SigIndex::Hexadecimal], vec![], vec![], string.clone())
+                    Sig::ParFunc(vec![SigIndex::CodePoint], vec![], vec![], string.clone())
                 }),
             ),
             builtin(str_pp, str_binary_sig.clone()),

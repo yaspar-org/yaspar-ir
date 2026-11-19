@@ -150,6 +150,7 @@ pub const SBV_TO_INT: &str = "sbv_to_int";
 pub const BV2NAT: &str = "bv2nat";
 pub const BV2INT: &str = "bv2int";
 pub const INT_TO_BV: &str = "int_to_bv";
+pub const DIVISIBLE: &str = "divisible";
 pub const NAT2BV: &str = "nat2bv";
 pub const INT2BV: &str = "int2bv";
 
