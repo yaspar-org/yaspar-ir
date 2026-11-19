@@ -77,7 +77,9 @@ use crate::raw::tc::{
     typed_qualified_identifier_sig,
 };
 use crate::traits::{AllocatableString, Repr};
+use dashu::float::DBig;
 use dashu::integer::{IBig, Sign, UBig};
+use num_traits::Signed;
 use std::collections::{HashMap, HashSet};
 use yaspar::ast::Keyword;
 use yaspar::tokens::Command as CommandName;
@@ -181,14 +183,35 @@ pub trait CheckedApi<D: Dialect = DefaultDialect>: HasArena {
 
     /// Returns an integer as a term.
     ///
-    /// It is possible that this function returns an [`Err`] when neither
-    /// `Int` nor `Real` is supported.
+    /// It is possible that this function returns an [`Err`] when
+    /// `Int` is supported.
     fn integer(&mut self, i: IBig) -> TC<Term> {
-        let (s, n) = i.into_parts();
+        let (s, n) = i.clone().into_parts();
         let num = self.numeral(n)?;
-        match s {
-            Sign::Negative => self.typed_simp_app("-", vec![num]),
-            _ => Ok(num),
+        let sort = num.get_sort(self.arena());
+        // since the API says integer, we should make sure to only return Int
+        if !sort.is_int() {
+            Err(format!("TC: the current theory does not support Int: {i}"))
+        } else {
+            match s {
+                Sign::Negative => self.typed_simp_app("-", vec![num]),
+                _ => Ok(num),
+            }
+        }
+    }
+
+    /// Return a decimal as a term.
+    ///
+    /// It is possible that this function returns an [`Err`] when
+    /// `Real` is supported.
+    fn decimal(&mut self, d: DBig) -> TC<Term> {
+        let sign = d.sign();
+        let d = d.abs();
+        let t = self.typed_constant(Constant::Decimal(d))?;
+        if sign == Sign::Negative {
+            self.typed_simp_app("-", vec![t])
+        } else {
+            Ok(t)
         }
     }
 

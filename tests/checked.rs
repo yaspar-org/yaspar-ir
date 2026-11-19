@@ -1,7 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use dashu::float::DBig;
 use dashu::integer::{IBig, UBig};
+use std::str::FromStr;
 use yaspar_ir::ast::alg::QualifiedIdentifier;
 use yaspar_ir::ast::{
     CheckedApi, Context, FetchSort, ObjectAllocatorExt, ScopedSortApi, SortAllocator, StrAllocator,
@@ -907,4 +909,78 @@ fn test_typed_sig_apis_bv() {
     // signature is dropped; the term itself carries the computed sort
     let bv3 = context.wf_bv_sort(UBig::from(3u8)).unwrap();
     assert_eq!(extracted.get_sort(&mut context), bv3);
+}
+
+/// A context with the given logic.
+fn context_with_logic(logic: &str) -> Context {
+    let mut context = Context::new();
+    context.set_ctx_logic(logic).unwrap();
+    context
+}
+
+/// `integer` builds an `Int` term, negated when negative; it is an error without `Int`.
+#[test]
+fn test_integer() {
+    for logic in ["ALL", "QF_LIA", "QF_NIA", "QF_LIRA"] {
+        let mut context = context_with_logic(logic);
+        for (i, shown) in [(5, "5"), (0, "0"), (-5, "(- 5)")] {
+            let t = context.integer(IBig::from(i)).unwrap();
+            assert_eq!(t.to_string(), shown, "{logic}");
+            assert!(t.get_sort(&mut context).is_int(), "{logic}: {i}");
+        }
+    }
+    // a numeral is a `Real` there
+    for logic in ["QF_LRA", "QF_NRA"] {
+        let mut context = context_with_logic(logic);
+        assert!(context.integer(IBig::from(5)).is_err(), "{logic}");
+        assert!(context.integer(IBig::from(-5)).is_err(), "{logic}");
+    }
+    // no numbers at all
+    let mut context = context_with_logic("QF_UF");
+    assert!(context.integer(IBig::from(5)).is_err());
+}
+
+/// `decimal` builds a `Real` term, negated when negative; it is an error without `Real`.
+#[test]
+fn test_decimal() {
+    for logic in ["ALL", "QF_LRA", "QF_NRA", "QF_LIRA"] {
+        let mut context = context_with_logic(logic);
+        for (d, shown) in [
+            ("1.5", "1.5"),
+            ("0.0", "0.0"),
+            ("-1.5", "(- 1.5)"),
+            ("2.25", "2.25"),
+        ] {
+            let t = context.decimal(DBig::from_str(d).unwrap()).unwrap();
+            assert_eq!(t.to_string(), shown, "{logic}");
+            assert!(t.get_sort(&mut context).is_real(), "{logic}: {d}");
+        }
+    }
+    for logic in ["QF_LIA", "QF_UF"] {
+        let mut context = context_with_logic(logic);
+        assert!(
+            context.decimal(DBig::from_str("1.5").unwrap()).is_err(),
+            "{logic}"
+        );
+    }
+}
+
+/// The terms `integer` and `decimal` build are those the parser builds from the same literals.
+#[test]
+fn test_integer_and_decimal_as_parsed() {
+    let mut context = context_with_logic("ALL");
+    for (built, source) in [
+        (context.integer(IBig::from(-7)).unwrap(), "(- 7)"),
+        (
+            context.decimal(DBig::from_str("-0.5").unwrap()).unwrap(),
+            "(- 0.5)",
+        ),
+    ] {
+        let parsed = UntypedAst
+            .parse_term_str(source)
+            .unwrap()
+            .type_check(&mut context)
+            .unwrap();
+        assert_eq!(built, parsed, "{source}");
+    }
 }
