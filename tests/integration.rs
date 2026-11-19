@@ -2832,3 +2832,39 @@ fn test_is_x_tester() {
         !cfg!(feature = "is-x-tester")
     );
 }
+
+/// `(_ char #x…)` takes a code point of at most five hexadecimal digits and at most `#x2FFFF`
+/// (#167); `(_ divisible n)` is there for positive `n` (#170).
+#[test]
+fn test_char_and_divisible_indices() {
+    let run = |body: &str| {
+        let script = format!("(set-logic ALL)(declare-const w Int){body}");
+        let cs = UntypedAst.parse_script_str(&script).unwrap();
+        cs.type_check(&mut Context::<SmtLib>::new_dialect())
+            .map(|_| ())
+    };
+    for body in [
+        "(assert (= (_ char #x41) \"A\"))",
+        "(assert (= (_ char #x2FFFF) \"a\"))",
+        "(assert (= (_ char #x0002F) \"/\"))",
+        "(assert ((_ divisible 3) w))",
+        "(assert ((_ divisible 1) w))",
+    ] {
+        assert_eq!(run(body), Ok(()), "{body}");
+    }
+    for (body, msg) in [
+        ("(assert (= (_ char #x30000) \"a\"))", "code point"),
+        ("(assert (= (_ char #x000041) \"A\"))", "code point"),
+        ("(assert ((_ divisible 0) w))", "positive"),
+        ("(assert ((_ divisible #x3) w))", "positive"),
+        ("(assert ((_ divisible 3) true))", "Int"),
+    ] {
+        let err = run(body).unwrap_err();
+        assert!(err.contains(msg), "{body}: {err}");
+    }
+    // only where integers are
+    let cs = UntypedAst
+        .parse_script_str("(set-logic QF_LRA)(declare-const r Real)(assert ((_ divisible 3) r))")
+        .unwrap();
+    assert!(cs.type_check(&mut Context::new()).is_err());
+}

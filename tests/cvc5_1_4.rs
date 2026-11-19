@@ -3110,3 +3110,26 @@ fn define_fun_over_reglan() {
          (check-sat)",
     ));
 }
+
+/// `(_ divisible n)` translates to cvc5 and back (#170).
+#[test]
+fn divisible_translation() {
+    assert!(check_sat(
+        "(set-logic ALL)
+         (declare-const w Int)
+         (assert ((_ divisible 3) w))
+         (assert (> w 4))
+         (check-sat)",
+    ));
+    assert!(!check_sat(
+        "(set-logic ALL)
+         (declare-const w Int)
+         (assert ((_ divisible 4) w))
+         (assert (= w 6))
+         (check-sat)",
+    ));
+    term_round_trip(
+        "(set-logic ALL) (declare-const w Int)",
+        "((_ divisible 3) w)",
+    );
+}

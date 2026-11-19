@@ -281,6 +281,7 @@ where
                 _ => None,
             },
             [Index::Numeral(n)] => match self.symbol.inner().as_str() {
+                DIVISIBLE => Some(IdentifierKind::Divisible(n.clone())),
                 RE_POWER => Some(IdentifierKind::RePower(n.clone())),
                 INT_TO_BV => Some(IdentifierKind::IntToBv(n.clone())),
                 INT2BV => Some(IdentifierKind::Int2Bv(n.clone())),
@@ -505,8 +506,13 @@ where
 #[serde(bound(deserialize = "Str: Deserialize<'de> + Ord"))]
 pub enum SigIndex<Str> {
     Numeral,
+    /// A positive numeral, e.g. the `n` of `(_ divisible n)`
+    Positive,
     Symbol(BTreeSet<Str>),
     Hexadecimal,
+    /// A Unicode code point as a hexadecimal, of at most five digits and at most `#x2FFFF`, e.g. the
+    /// `#x41` of `(_ char #x41)`
+    CodePoint,
 }
 
 impl<Str> SigIndex<Str>

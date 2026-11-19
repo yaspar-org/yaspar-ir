@@ -1497,6 +1497,10 @@ mod cterm_cycle {
                 let i0 = idx_ubig(0)?;
                 (BV_ROTATE_RIGHT, vec![Index::Numeral(i0)])
             }
+            Kind::Divisible => {
+                let i0 = idx_ubig(0)?;
+                (DIVISIBLE, vec![Index::Numeral(i0)])
+            }
             Kind::IntToBitvector => {
                 let i0 = idx_ubig(0)?;
                 (INT_TO_BV, vec![Index::Numeral(i0)])
@@ -2605,6 +2609,7 @@ impl<'tm, Ctx, D: Dialect> Cvc5Env<'tm, Ctx, D> {
             RotateLeft(n) => mk(self.tm, Kind::BitvectorRotateLeft, &[to_u32(n)?]),
             RotateRight(n) => mk(self.tm, Kind::BitvectorRotateRight, &[to_u32(n)?]),
             IntToBv(n) | Int2Bv(n) | Nat2Bv(n) => mk(self.tm, Kind::IntToBitvector, &[to_u32(n)?]),
+            Divisible(n) => mk(self.tm, Kind::Divisible, &[to_u32(n)?]),
             RePower(n) => mk(self.tm, Kind::RegexpRepeat, &[to_u32(n)?]),
             ReLoop(lo, hi) => mk(self.tm, Kind::RegexpLoop, &[to_u32(lo)?, to_u32(hi)?]),
             Is(cname) => {

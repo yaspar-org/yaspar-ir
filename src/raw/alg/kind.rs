@@ -110,6 +110,8 @@ pub enum IdentifierKind<Str> {
     Bv2Int,
     /// standard
     IntToBv(UBig),
+    /// `(_ divisible n)`
+    Divisible(UBig),
     /// non-standard
     Nat2Bv(UBig),
     /// non-standard
@@ -253,6 +255,7 @@ impl<Str> IdentifierKind<Str> {
             IdentifierKind::Bv2Nat => BV2NAT,
             IdentifierKind::Bv2Int => BV2INT,
             IdentifierKind::IntToBv(_) => INT_TO_BV,
+            IdentifierKind::Divisible(_) => DIVISIBLE,
             IdentifierKind::Nat2Bv(_) => NAT2BV,
             IdentifierKind::Int2Bv(_) => INT2BV,
             IdentifierKind::BvNand => BV_NAND,
@@ -424,6 +427,7 @@ impl<Str> IdentifierKind<Str> {
                 vec![]
             }
             IdentifierKind::RePower(n)
+            | IdentifierKind::Divisible(n)
             | IdentifierKind::IntToBv(n)
             | IdentifierKind::Nat2Bv(n)
             | IdentifierKind::Int2Bv(n)

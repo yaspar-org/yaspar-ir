@@ -48,8 +48,17 @@ fn match_sig_indices<'a>(
     for (spec, i) in sig_indices.iter().zip(&f.0.indices) {
         let ok = match (spec, i) {
             (SigIndex::Numeral, Index::Numeral(_)) => true,
+            (SigIndex::Positive, Index::Numeral(n)) => *n > UBig::ZERO,
             (SigIndex::Symbol(syms), Index::Symbol(s)) => syms.contains(s),
             (SigIndex::Hexadecimal, Index::Hexadecimal(_, _)) => true,
+            (SigIndex::CodePoint, Index::Hexadecimal(bytes, digits)) => {
+                // little-endian bytes
+                let value = bytes
+                    .iter()
+                    .rev()
+                    .fold(0u64, |v, b| (v << 8) | u64::from(*b));
+                *digits <= 5 && value <= 0x2FFFF
+            }
             _ => false,
         };
         if !ok {
@@ -77,8 +86,14 @@ fn check_sig_indices(
         Err(IndexMismatch::Spec(spec @ SigIndex::Symbol(_), i)) => Err(format!(
             "TC: function '{f}'{meta_string} expects a symbolic index {spec}, but {i} was given!",
         )),
+        Err(IndexMismatch::Spec(SigIndex::Positive, i)) => Err(format!(
+            "TC: function '{f}'{meta_string} expects a positive numeral index, but {i} was given!",
+        )),
         Err(IndexMismatch::Spec(SigIndex::Hexadecimal, i)) => Err(format!(
             "TC: function '{f}'{meta_string} expects a hexadecimal index, but {i} was given!",
+        )),
+        Err(IndexMismatch::Spec(SigIndex::CodePoint, i)) => Err(format!(
+            "TC: function '{f}'{meta_string} expects a code point of at most five hexadecimal digits and at most #x2FFFF, but {i} was given!",
         )),
     }
 }
